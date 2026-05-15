@@ -1,0 +1,4 @@
+interface:
+  display_name: "PubMed Search Builder"
+  short_description: "Build high-sensitivity PubMed strategies"
+  default_prompt: "Use $pubmed-search-builder to build a high-sensitivity PubMed strategy for an evidence synthesis."
