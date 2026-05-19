@@ -137,7 +137,7 @@ Practical implications:
 - Test short stems (`care*`, `pain*`, `cell*`, `gene*`) with the PubMed script to confirm whether expected variants are reached.
 - Use the longest concept-specific stem feasible. `neurostimulat*` is safer than `stimulat*`. `paediatric*` is safer than `pediat*`.
 - When the cap is plausibly hit, replace or supplement the wildcard with **explicit phrase variants** for the common forms you care about. The phrase variants act as a safety net when the cap silently truncates the wildcard expansion.
-- Note that PubMed's wildcard implementation (since the 2024 update, NLM Tech Bull. 2024 Mayâ€“Jun) supports wildcards in the middle of terms and multiple wildcards per term (`organi*ation*`, `colo*r`); these are useful but increase the variant-count risk.
+- Note that PubMed's wildcard implementation (since the 2024 update, NLM Tech Bull. 2024 May-Jun) supports wildcards in the middle of terms and multiple wildcards per term (`organi*ation*`, `colo*r`); these are useful but increase the variant-count risk.
 
 ## Truncation and proximity are mutually exclusive
 

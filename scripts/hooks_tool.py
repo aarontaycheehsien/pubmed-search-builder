@@ -63,6 +63,125 @@ def snippets(pattern: str, text: str, *, flags: int = re.IGNORECASE, limit: int 
     return found
 
 
+def compact_evidence(value: str, limit: int = 220) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def strip_outer_parentheses(text: str) -> str:
+    value = text.strip()
+    while value.startswith("(") and value.endswith(")"):
+        depth = 0
+        in_quote = False
+        balanced_outer = True
+        for index, char in enumerate(value):
+            if char == '"':
+                in_quote = not in_quote
+            if in_quote:
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(value) - 1:
+                    balanced_outer = False
+                    break
+        if not balanced_outer or depth != 0:
+            break
+        value = value[1:-1].strip()
+    return value
+
+
+def split_top_level_and(text: str) -> list[str]:
+    parts = []
+    start = 0
+    depth = 0
+    in_quote = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            in_quote = not in_quote
+            index += 1
+            continue
+        if not in_quote:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(depth - 1, 0)
+            elif depth == 0 and text[index : index + 3].upper() == "AND":
+                before = text[index - 1] if index > 0 else " "
+                after = text[index + 3] if index + 3 < len(text) else " "
+                if not before.isalnum() and not after.isalnum():
+                    part = text[start:index].strip()
+                    if part:
+                        parts.append(strip_outer_parentheses(part))
+                    start = index + 3
+                    index += 3
+                    continue
+        index += 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(strip_outer_parentheses(tail))
+    return parts
+
+
+def has_mesh_layer(text: str) -> bool:
+    return bool(re.search(r"\[(?:mesh|mesh terms|mh|mesh:noexp)\]", text, re.IGNORECASE))
+
+
+def has_tiab_layer(text: str) -> bool:
+    return bool(re.search(r"\[(?:tiab|title/abstract)\]", text, re.IGNORECASE))
+
+
+def likely_filter_or_limit_block(text: str) -> bool:
+    lower = text.lower()
+    if re.search(r"\[(?:pt|publication type|sb|lang|la|dp|date - publication|publication date|edat|crdt)\]", lower):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:humans?|animals?|adult|child|adolescent|aged|infant)\s*\[(?:mesh|mesh terms|mh)\]",
+            lower,
+        )
+    )
+
+
+def add_layer_balance_issues(issues: list[dict[str, str]], text: str) -> None:
+    blocks = split_top_level_and(text)
+    concept_blocks = [block for block in blocks if not likely_filter_or_limit_block(block)]
+
+    if len(concept_blocks) <= 1:
+        has_mesh = has_mesh_layer(text)
+        has_tiab = has_tiab_layer(text)
+        if has_mesh and not has_tiab:
+            add_issue(issues, "warning", "mesh_without_tiab", "A high-sensitivity concept should usually pair MeSH with title/abstract terms.")
+        if has_tiab and not has_mesh:
+            add_issue(issues, "info", "tiab_without_mesh", "Check whether an appropriate MeSH descriptor exists for each essential concept.")
+        return
+
+    for index, block in enumerate(concept_blocks, start=1):
+        has_mesh = has_mesh_layer(block)
+        has_tiab = has_tiab_layer(block)
+        if has_mesh and not has_tiab:
+            add_issue(
+                issues,
+                "warning",
+                "concept_block_mesh_without_tiab",
+                f"Concept block {index} has MeSH but no title/abstract layer.",
+                compact_evidence(block),
+            )
+        if has_tiab and not has_mesh:
+            add_issue(
+                issues,
+                "info",
+                "concept_block_tiab_without_mesh",
+                f"Concept block {index} has title/abstract terms but no MeSH layer.",
+                compact_evidence(block),
+            )
+
+
 def detect_methodological_intents(text: str) -> list[str]:
     patterns = {
         "randomized-trial": r"\b(randomi[sz]ed|random allocation|clinical trial|controlled trial|rct)\b",
@@ -131,12 +250,7 @@ def final_qa(strategy: str) -> dict[str, object]:
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):
         add_issue(issues, "error", "proximity_with_truncation", "PubMed does not allow truncation inside proximity expressions.", value)
 
-    has_mesh = bool(re.search(r"\[(?:mesh|mesh terms|mh|mesh:noexp)\]", lower))
-    has_tiab = "[tiab]" in lower or "[title/abstract]" in lower
-    if has_mesh and not has_tiab:
-        add_issue(issues, "warning", "mesh_without_tiab", "A high-sensitivity concept should usually pair MeSH with title/abstract terms.")
-    if has_tiab and not has_mesh:
-        add_issue(issues, "info", "tiab_without_mesh", "Check whether an appropriate MeSH descriptor exists for each essential concept.")
+    add_layer_balance_issues(issues, text)
 
     intents = detect_methodological_intents(text)
     filters = detect_filter_fragments(text)
@@ -145,7 +259,7 @@ def final_qa(strategy: str) -> dict[str, object]:
             issues,
             "warning",
             "methodological_filter_review_needed",
-            "Run hooks_tool.py filter-check and document validated filter source, topic-only count, and topic-plus-filter count.",
+            "Run hooks_tool.py filter-check. If a methodological filter is used, document source and count impact; if the language is topical, use --filter-decision none with a reason.",
             ", ".join(intents or filters),
         )
 
@@ -165,6 +279,8 @@ def final_qa(strategy: str) -> dict[str, object]:
 def filter_check(
     text: str,
     *,
+    filter_decision: str,
+    no_filter_reason: str | None,
     filter_source: str | None,
     topic_only_count: int | None,
     topic_plus_filter_count: int | None,
@@ -175,23 +291,45 @@ def filter_check(
     intents = detect_methodological_intents(text)
     filters = detect_filter_fragments(text)
     review_needed = bool(intents or filters)
+    no_filter_used = filter_decision == "none"
+    validated_filter_review_needed = review_needed and (not no_filter_used or bool(filters))
 
-    if review_needed and not filter_source:
+    if no_filter_used and filters:
+        add_issue(
+            issues,
+            "warning",
+            "filter_fragments_conflict_with_none",
+            "The text appears to contain methodological filter fragments, but filter decision is 'none'; verify that no filter was actually applied.",
+            ", ".join(filters),
+        )
+    if no_filter_used and review_needed and not no_filter_reason:
+        add_issue(
+            issues,
+            "warning",
+            "missing_no_filter_reason",
+            "State why no methodological filter was applied even though diagnostic, prognostic, or other evidence-type language was detected.",
+        )
+    if review_needed and not no_filter_used and not filter_source:
         add_issue(
             issues,
             "warning",
             "missing_validated_filter_source",
             "State the validated filter or hedge source, version, interface, and any adaptation.",
         )
-    if review_needed and topic_only_count is None:
+    if review_needed and not no_filter_used and topic_only_count is None:
         add_issue(issues, "warning", "missing_topic_only_count", "Test and report the topic-only PubMed count before adding the filter.")
-    if review_needed and topic_plus_filter_count is None:
+    if review_needed and not no_filter_used and topic_plus_filter_count is None:
         add_issue(issues, "warning", "missing_topic_plus_filter_count", "Test and report the topic-plus-filter PubMed count.")
-    if review_needed and seed_pmids and not seed_impact:
+    if review_needed and not no_filter_used and seed_pmids and not seed_impact:
         add_issue(issues, "warning", "missing_seed_filter_impact", "Check whether the methodological filter loses any supplied seed PMIDs.")
 
     required_actions = []
-    if review_needed:
+    if review_needed and no_filter_used:
+        required_actions = [
+            "Document that the detected evidence-type language is part of the topical concept rather than a methodological search filter.",
+            "Report that no methodological filter or hedge was applied and give the reason.",
+        ]
+    elif review_needed:
         required_actions = [
             "Read references/validated-methodological-filters-and-hedges.md before finalizing the filter.",
             "Prefer a validated PubMed/interface-appropriate filter over ad hoc construction.",
@@ -202,7 +340,10 @@ def filter_check(
 
     return {
         "hook": "methodological_filter_check",
-        "requires_validated_filter_review": review_needed,
+        "requires_methodological_filter_review": review_needed,
+        "requires_validated_filter_review": validated_filter_review_needed,
+        "filter_decision": filter_decision,
+        "no_filter_reason": no_filter_reason or "",
         "detected_intents": intents,
         "detected_filter_fragments": filters,
         "filter_source": filter_source or "",
@@ -218,7 +359,12 @@ def filter_check(
 
 
 def write_json(data: dict[str, object]) -> None:
-    json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+    encoding = (getattr(sys.stdout, "encoding", "") or "").lower()
+    json.dump(data, sys.stdout, indent=2, ensure_ascii="utf" not in encoding)
     sys.stdout.write("\n")
 
 
@@ -237,6 +383,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     filter_parser = subparsers.add_parser("filter-check", help="Check methodological filter requirements.")
     add_text_args(filter_parser, "text", "protocol/request/strategy text")
+    filter_parser.add_argument(
+        "--filter-decision",
+        choices=["undecided", "used", "none"],
+        default="undecided",
+        help="Whether a methodological filter/hedge was used, intentionally not used, or not yet decided.",
+    )
+    filter_parser.add_argument("--no-filter-reason", help="Reason no methodological filter was applied when evidence-type language is topical.")
     filter_parser.add_argument("--filter-source")
     filter_parser.add_argument("--topic-only-count", type=int)
     filter_parser.add_argument("--topic-plus-filter-count", type=int)
@@ -270,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
         write_json(
             filter_check(
                 text,
+                filter_decision=args.filter_decision,
+                no_filter_reason=args.no_filter_reason,
                 filter_source=args.filter_source,
                 topic_only_count=args.topic_only_count,
                 topic_plus_filter_count=args.topic_plus_filter_count,

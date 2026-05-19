@@ -33,6 +33,37 @@ Use:
 - Greek-letter, spelled-out, and symbol variants
 - Roman numeral and Arabic numeral variants
 
+## Pre-MeSH vocabulary/domain brainstorm
+
+Run a brief brainstorm before MeSH lookup for social-science, psychosocial, behavioral, qualitative, health-services, and weak-controlled-vocabulary concepts. This protects author-language and disciplinary vocabulary from being narrowed too early by MeSH.
+
+Consider:
+
+- construct names and near constructs
+- lived-experience language
+- disciplinary or theory language
+- adjacent theories and frameworks
+- help-seeking, access, barriers, facilitators, and service-use language
+- identity, marginalisation, minority-stress, discrimination, and inequity language
+- disclosure, concealment, privacy, and openness language
+- unmet need, perceived need, self-perceived need, and treatment need language
+- public, self, structural, enacted, anticipated, internalised, and felt forms for stigma-like concepts
+- author keywords and seed-paper wording, when available
+
+For stigma-like concepts, examples of vocabulary families to consider include:
+
+```text
+stigma OR stigmatization OR stigmatized
+public stigma OR self stigma OR structural stigma
+felt stigma OR enacted stigma OR anticipated stigma OR internalised stigma
+minority stress OR discrimination OR prejudice
+concealment OR disclosure OR openness
+help seeking OR care seeking OR service use
+unmet need OR perceived need OR treatment need
+```
+
+Use brainstormed vocabulary as candidates, not as automatic additions. Accept, reject, or defer each vocabulary family after checking scope, user/protocol intent, PubMed behavior, and recall/noise impact.
+
 ## Variant checklist
 
 For each important phrase, consider:
@@ -118,7 +149,7 @@ Do not use loose constructions that overwhelm the concept unless PubMed testing 
 
 ## Proximity searching (preferred for many phrase-loosening cases)
 
-PubMed has supported proximity searching since November 2022 (NLM Tech Bull. 2022 Novâ€“Dec). Syntax:
+PubMed has supported proximity searching since November 2022 (NLM Tech Bull. 2022 Nov-Dec). Syntax:
 
 ```text
 "word1 word2"[field:~N]
@@ -168,7 +199,19 @@ Pattern combining proximity with the rest of a concept block:
 )
 ```
 
-Test proximity expressions with the PubMed script before retaining them, in the same way as wildcards: check that they retrieve plausible records, that they capture seed PMIDs where applicable, and that the noise level is acceptable when combined with another concept block.
+## Proximity testing protocol
+
+For proximity expressions that may affect recall, use the PubMed script to compare:
+
+1. exact phrase and common phrase/hyphenation variants
+2. proximity at multiple distances, usually `~1`, `~2`, and `~3`
+3. the concept block with and without the proximity expression
+4. the full strategy with and without the proximity expression when the effect may be material
+5. whether the proximity expression retrieves seed PMIDs
+6. whether sample records are plausible
+7. whether the proximity expression causes unacceptable noise when combined with another concept block
+
+Use larger distances only with a reason. If a proximity expression broadens too far, narrow `N`, replace it with explicit phrase variants, or reject it. Document kept and rejected proximity expressions in the final output.
 
 ## Acronyms
 

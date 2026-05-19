@@ -276,7 +276,7 @@ Avoid these:
 
 ## Source notes and URLs
 
-Use these source families when checking details. URLs are included so Claude can cite or revisit the source when browsing/tool access is available.
+Use these source families when checking details. URLs are included so the agent can cite or revisit the source when browsing/tool access is available.
 
 - Cochrane Handbook, Chapter 4, Searching for and selecting studies: https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-04
 - Cochrane PubMed HSSS page with PubMed-format RCT filters: https://work.cochrane.org/pubmed
