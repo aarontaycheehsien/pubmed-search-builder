@@ -24,7 +24,7 @@ Out of scope for this skill, but flag the requirement. Most evidence syntheses r
 Note: this strategy covers PubMed only. The review protocol should specify additional databases and the strategy must be translated for each.
 ```
 
-### Items 3â€“7. Study registries, online resources and browsing, citation searching, contacts, other methods
+### Items 3-7. Study registries, online resources and browsing, citation searching, contacts, other methods
 
 Out of scope for this skill. Flag in the output that supplementary search methods are typically required for systematic reviews and similar evidence syntheses, including trial registries (ClinicalTrials.gov, ICTRP), grey literature sources, citation searching (forward and backward), reference list checking, hand-searching key journals, and contacting authors or experts. These are reported separately by the review team.
 
@@ -119,7 +119,7 @@ If peer review has occurred, name the reviewer (or state that they wish to remai
 
 ## Section 4: Managing records
 
-### Items 15â€“16. Total records and deduplication
+### Items 15-16. Total records and deduplication
 
 Out of scope for the search-construction phase. Flag that the review team will report total records retrieved per database, total after deduplication, and the deduplication method (software, manual, or both) once the search has been run.
 
@@ -143,7 +143,7 @@ Use this block in the final report, mapping each line to the PRISMA-S item numbe
 ```text
 Database (Item 1): PubMed (NLM interface).
 Multi-database searching (Item 2): [out of scope for this strategy; see protocol for full database list].
-Study registries / online resources / citation searching / contacts / other methods (Items 3â€“7): [reported separately by review team].
+Study registries / online resources / citation searching / contacts / other methods (Items 3-7): [reported separately by review team].
 Full search strategy (Item 8): [reproduced verbatim above].
 Limits and restrictions (Item 9): [list each, with justification and recall risk note].
 Search filters (Item 10): [name each filter/hedge, source, version, interface, exact syntax, adaptations, reason for use, recall risk, and seed-PMID impact; or state none used].
@@ -151,13 +151,13 @@ Prior work (Item 11): [cite source if strategy was adapted; otherwise state none
 Updates (Item 12): [planned interval, or none].
 Date of final search (Item 13): [YYYY-MM-DD].
 Peer review (Item 14): [reviewer and date, or state not yet peer reviewed].
-Total records and deduplication (Items 15â€“16): [to be reported by review team after the search is run].
+Total records and deduplication (Items 15-16): [to be reported by review team after the search is run].
 ```
 
 ## Reference
 
 Rethlefsen ML, Kirtley S, Waffenschmidt S, et al. PRISMA-S: an extension to the PRISMA Statement for Reporting Literature Searches in Systematic Reviews. Syst Rev. 2021;10(1):39. DOI: https://doi.org/10.1186/s13643-020-01542-z
 
-McGowan J, Sampson M, Salzwedel DM, Cogo E, Foerster V, Lefebvre C. PRESS Peer Review of Electronic Search Strategies: 2015 Guideline Statement. J Clin Epidemiol. 2016;75:40â€“46. DOI: https://doi.org/10.1016/j.jclinepi.2016.01.021
+McGowan J, Sampson M, Salzwedel DM, Cogo E, Foerster V, Lefebvre C. PRESS Peer Review of Electronic Search Strategies: 2015 Guideline Statement. J Clin Epidemiol. 2016;75:40-46. DOI: https://doi.org/10.1016/j.jclinepi.2016.01.021
 
 For methodological filters and hedges, see `validated-methodological-filters-and-hedges.md`.

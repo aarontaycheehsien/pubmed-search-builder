@@ -4,9 +4,13 @@ Seed PMIDs are optional but valuable.
 
 Ask once for seed PMIDs. If none are provided, proceed.
 
+When seed PMIDs are supplied before the concept gate, limited fetch/mining of those PMIDs is allowed before MeSH/PubMed exploration solely to inform concept analysis. Full seed validation still happens only after the draft strategy is built.
+
 Seed PMIDs should be used for both term discovery and validation.
 
 ## Fetch and analyse seed records
+
+Prefer `pubmed_tool.py mine --pmids ... --strategy-file strategy.txt` so the extracted terms, gap checks, and seed-record metadata are captured in reusable JSON. Export that JSON to the audit workbook when the search will be reviewed or handed off.
 
 For each seed PMID, use the PubMed script to extract:
 
