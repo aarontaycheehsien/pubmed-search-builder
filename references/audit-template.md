@@ -1,30 +1,52 @@
+````markdown
 ## Search structure
 
+- **Framework:** [framework, question type, and reason]
 - **Concept 1:** [name and scope; MeSH + tiab / tiab-only / MeSH-only]
 - **Concept 2:** [name and scope; MeSH + tiab / tiab-only / MeSH-only]
 - **Concept 3:** [name and scope, if used]
-- **Concept gate status:** [completed / skipped with reason / not applicable]
+- **Concept gate status:** [completed for completed strategy builds; not performed/not applicable only for incomplete or non-build contexts]
+- **AND-block admission summary:** [which candidates passed, failed, or were deferred, with concise reasons]
 - **Concepts kept inside existing `OR` blocks:** [list, or not applicable]
 - **Omitted or reserve concepts:** [list with sensitivity rationale]
 - **Methodological filters or limits:** [none, or name/source/version/interface/adaptation]
 
+## Stage Trace
+
+| Stage | Reference files | Action taken | Blocked actions | Decision needed | User/protocol decision |
+|---|---|---|---|---|---|
+| [stage name] | [exact reference files in force] | [work performed in this stage] | [work explicitly deferred or blocked] | [decision needed, or none] | [answer, protocol decision, or not yet resolved] |
+
 ## User decisions on optional concept blocks
 
-- **[Optional or sensitivity-dangerous concept]:** offered because [why it could narrow retrieval] -> user chose **[omit/include/test as variant/filter]**. [How handled in the strategy.]
-- **Seed PMIDs:** offered -> user chose **[provided PMIDs / no seeds - proceed without / not asked because already supplied]**. [Validation implication.]
+- **Explicit user choice:** **[Optional or sensitivity-dangerous concept]** was asked because [why it could narrow retrieval] -> user chose **[omit/include/test as variant/filter]**. [How handled in the strategy.]
+- **No user decision requested:** **[Optional or sensitivity-dangerous concept]** was not asked -> analyst decision under workflow: **[omit/include/test as variant/filter]**. [Why no explicit user question was requested and how handled.]
+- **Not applicable:** no materially plausible optional concept block or filter was identified for user decision.
+- **Seed PMIDs:** offered -> user chose **[provided PMIDs / no seeds - proceed without / not asked because already supplied]**. Pre-gate triage: [malformed PMIDs, missing/not-found PMIDs, fetched seed records, retracted seeds, likely out-of-scope seeds, and any user/protocol decision when paused]. [Validation implication.]
 - **Study-design, date, language, age, species, or publication-type limits:** [offered/required/not applicable] -> [decision and recall-risk note].
 
 ## Decision ledger
 
 | Decision point | Options considered | Evidence or test used | Decision made | Rationale / recall-risk note | Reflected in strategy/report |
 |---|---|---|---|---|---|
-| Seed PMID handling | [provided / no seeds / proceed without] | [user answer, seed fetch/mine, or not available] | [decision] | [impact on validation] | [seed validation section] |
-| Concept gate | [candidate concepts and optional blocks] | [concept-analysis ledger, seed/no-seed evidence, counts if tested] | [essential / inside OR / focused variant / omitted / deferred] | [why this protects recall or workload] | [search structure / final strategy / variants] |
+| Seed PMID handling | [provided / no seeds / proceed without; malformed/missing/retracted/out-of-scope triage] | [user answer, seed fetch/mine, found/missing PMIDs, retraction/scope check, or not available] | [decision] | [impact on validation and concept gate] | [seed validation section] |
+| Concept gate | [candidate concepts, framework slots, optional blocks, and filter ideas] | [concept-analysis ledger, AND-block admission checks, pre-gate seed/no-seed evidence, post-gate counts if tested later] | [essential / inside OR / screening-only / focused variant / omitted / deferred / filter] | [why this protects recall or workload] | [search structure / final strategy / variants] |
 | Pre-MeSH vocabulary brainstorm | [vocabulary families and domain frames considered] | [user/protocol wording, seeds, brainstorm checklist, domain-framing question if asked] | [accepted / rejected / deferred / not needed] | [recall/noise or scope rationale] | [title/abstract expansion log / rationale] |
 | MeSH/SCR choice | [accepted, rejected, deferred candidates] | [sweep, details, tree, ATM, seed indexing, counts] | [decision] | [scope, explosion/noexp, duplicate/noise/wrong-sense reason] | [MeSH descriptors considered] |
 | Text-word/proximity/wildcard choice | [terms or expressions considered] | [MeSH entry terms, seeds, samples, counts, warnings] | [decision] | [recall/noise rationale] | [title/abstract expansion log] |
 | Filter/limit/variant choice | [main, focused, precision, filter, reserve] | [counts, seeds, labelled samples if available, QA] | [chosen main design] | [sensitivity/workload rationale] | [final strategy / PubMed CLI checks] |
+| Zero-hit and duplicate terms | [zero-hit terms from `phrases_not_found`; exact duplicates from `duplicate_term`] | [per-term PubMed counts, spelling/hyphenation variant checks, `final-qa`] | [duplicates removed; each genuinely zero-hit term removed+documented by default, or kept by user choice] | [default is remove+document zero-hit terms (they match no records); reason if kept] | [final strategy / title-abstract expansion log] |
 | QA or caveat | [warning, limitation, or unresolved check] | [query translation, final-qa, filter-check, sample inspection] | [resolved / documented / not performed] | [remaining risk] | [rationale / reporting notes] |
+
+For optional-block or filter rows in the decision ledger, record whether a user question was explicitly asked, the exact question when asked, and whether the final handling came from explicit user input, protocol direction, or analyst judgment under the workflow.
+
+## Record-content evidence reviewed
+
+Use this table whenever a decision depends on `fetch`, `mine`, or `sample` record content. Receipt-only stdout cannot support relevance, scope, noise, term-discovery, seed-validity, or concept-role decisions.
+
+| Decision | Evidence file reviewed | Record content reviewed | Abstracts reviewed | Receipt-only stdout used as decision evidence | Decision supported |
+|---|---|---|---|---|---|
+| [decision] | [saved JSON path] | yes/no/not applicable | yes/no/not available/not applicable | no | yes/no |
 
 ## Final PubMed strategy (draft)
 
@@ -40,6 +62,18 @@ If a validated filter or focused variant was also tested:
 - **Topic-plus-filter count:** [count, or not applicable]
 - **Focused/precision-supporting variant count:** [count and label, or not performed]
 - **Main variant chosen:** [sensitive/main by default, or user/protocol-selected alternative with reason]
+
+## Search strategy (numbered line set)
+
+PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; line numbers (`#n`) reference earlier lines as in the PubMed Advanced Search history.
+
+| Line | Concept | Search query | Results |
+|---|---|---|---:|
+| #1 | [concept 1] | [block 1 query] | [count] |
+| #2 | [concept 2] | [block 2 query] | [count] |
+| #3 | Topic (combined) | #1 AND #2 | [final topic-only count] |
+| #4 | Methodological filter | [filter query, or omit row] | [count or not applicable] |
+| #5 | Topic + filter | #3 AND #4 | [count or not applicable] |
 
 ## NCBI CLI work performed
 
@@ -79,6 +113,36 @@ Seed PMIDs provided: **[Yes/No]**.
 
 - If yes: [seed PMID list, assigned MeSH/keywords/title-abstract terminology that informed the strategy, and retrieval validation impact].
 - If no: True seed-derived MeSH was **not available**. If sample records were fetched, label them as sample-record MeSH patterns, not seed-derived evidence: [summary, or not performed].
+- Evidence file reviewed: [saved `mine`/`fetch` JSON path, or not applicable]
+- Record content reviewed: [yes/no/not applicable]
+- Abstracts reviewed: [yes/no/not available/not applicable]
+- Receipt-only stdout used as decision evidence: no
+- Decision supported: [yes/no/not applicable]
+
+### Pre-gate seed triage
+
+- Requested seed entries: [list, or none]
+- Normalized unique numeric PMIDs: [list, or none]
+- Malformed entries excluded: [list and reason, or none]
+- Fetched seed records: [PMID, title, year/publication type summary, or not performed]
+- Evidence file reviewed: [saved `fetch` or `mine` JSON path, or not performed]
+- Record content reviewed: [yes/no/not applicable]
+- Abstracts reviewed: [yes/no/not available/not applicable]
+- Receipt-only stdout used as decision evidence: no
+- Decision supported: [yes/no/not applicable]
+- Missing/not-found PMIDs excluded: [list, or none]
+- Retracted seeds: [list and metadata signal, or none]
+- Likely out-of-scope seeds: [list and reason, or none]
+- User/protocol decision when paused: [exclude / replace / retain as special validation seed / not applicable]
+
+### Seed-set expansion (related)
+
+- Expansion run: **[Yes/No/not applicable - no usable seeds]**
+- Link types used: [similar / citedin / refs, or none]
+- Per-link candidate counts and caps: [link_counts, max-per-seed, max-total, or not performed]
+- High-overlap candidate PMIDs used for term discovery: [list, or none]
+- How related-set evidence was used: [fed to term-rank / recall heuristic / not used]
+- Labelling: related-set evidence is recorded **separately from user-confirmed seed evidence** and is **not** treated as validated recall.
 
 ### MeSH derived from PubMed query translations
 
@@ -100,6 +164,18 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 | Topic-plus-filter or focused variant | [count or not applicable] |
 | Differential/noise sample | [count and sample result, or not performed] |
 
+For every row based on `fetch`, `mine`, or `sample` record content, record the saved JSON path in the Record-content evidence reviewed table.
+
+### Relative-recall estimation
+
+- Relative-recall check run: **[Yes/No/not performed]**
+- Benchmark source: [independent gold standard (e.g. prior review included studies) / seed-expansion heuristic (related) / not applicable]
+- Benchmark size: [n, or not performed]
+- Relative recall: [percent, or not performed] (relative to the benchmark, **not** absolute sensitivity)
+- Per-block recall and bottleneck block: [block recall percents and the lowest-recall block, or not performed]
+- Misses and culprit blocks: [summary of missed PMIDs and the blocks responsible, including any and_interaction, or none]
+- Caveat: relative recall is recorded **separately from known-item seed validation**; a seed-expansion benchmark is a heuristic that can flatter recall.
+
 ## Title/abstract, proximity, and wildcard expansion log
 
 - **Pre-MeSH brainstorm required:** [yes/no and reason]
@@ -109,6 +185,11 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 - **Brainstormed vocabulary families deferred/reserved:** [list with reason, or none]
 - **MeSH-entry-derived `[tiab]` variants added:** [list, or none]
 - **Seed-derived `[tiab]` variants added:** [list, or n/a if no seeds]
+- **Record-content evidence file reviewed:** [saved `mine`/`sample` JSON path, or not applicable]
+- **Record content reviewed:** [yes/no/not applicable]
+- **Abstracts reviewed:** [yes/no/not available/not applicable]
+- **Receipt-only stdout used as decision evidence:** no
+- **Decision supported:** [yes/no/not applicable]
 - **Sample-record-derived `[tiab]` variants added:** [list, or not performed]
 - **Acronyms and abbreviations added:** [list, or none retained]
 - **Acronyms and abbreviations tested but rejected:** [list with reason, or not performed]
@@ -119,6 +200,8 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 - **Proximity expressions tested but rejected:** [list and reason, or not performed]
 - **Wildcard stems added:** [list]
 - **Wildcard stems tested but rejected:** [list and reason, or not performed]
+- **Zero-hit terms removed (documented):** [list, or none]
+- **Zero-hit terms kept after user choice (documented as intentional):** [list with reason, or none]
 
 ## Rationale
 
@@ -130,11 +213,27 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 - **Sensitivity vs precision.** [Chosen design, reserve/focused variants, count/workload evidence, seed impact if available.]
 - **QA.** `query_translation_drift`: [none/issues]; final query hygiene: [done/warnings]; `final-qa`: [none/issues]; `filter-check`: [none/not applicable/issues].
 
+## PRESS 2015 element coverage
+
+Map the audit's QA checks to the six PRESS 2015 elements ([McGowan et al. 2016](https://doi.org/10.1016/j.jclinepi.2016.01.021)). For each element, state `addressed`, `not applicable`, or `not performed` and link to the supporting section in this audit.
+
+| PRESS 2015 element | Coverage | Notes / supporting section |
+|---|---|---|
+| 1. Translation of the research question | [addressed / not performed] | [framework choice and slot mapping; see Search structure] |
+| 2. Boolean and proximity operators | [addressed / not performed] | [operator precedence, parenthesisation, proximity expressions; see Title/abstract expansion log] |
+| 3. Subject headings | [addressed / not performed] | [MeSH/SCR descriptors considered, accepted, rejected; see MeSH descriptors considered] |
+| 4. Text-word search | [addressed / not performed] | [tiab variants, synonyms, acronyms, spelling/hyphenation variants; see Title/abstract expansion log] |
+| 5. Spelling, syntax, line numbers | [addressed / not applicable] | [query parse warnings; final-qa run; see PubMed CLI checks and QA] |
+| 6. Limits and filters | [addressed / not applicable] | [methodological filter source/version/interface/adaptation; limits applied; see Methodological filters or limits] |
+
+Peer review by an information specialist is still required before the strategy is run as a final search; this self-mapping is a coverage record, not a substitute for external PRESS peer review.
+
 ## Seed PMID validation
 
 Seed PMIDs provided: **[Yes/No]**.
 
 If yes:
+- Pre-gate seed triage summary: [malformed, missing/not-found, fetched, retracted, likely out-of-scope, and special validation seed handling]
 - Seed PMIDs tested: [list]
 - Retrieved: [list]
 - Missed: [list]
@@ -167,7 +266,24 @@ Do not imply that PRESS peer review has occurred unless it actually has.
 - **Restrictions and justifications:** [none applied, or state clearly]
 - **Audit Markdown file:** [path saved]
 - **Audit workbook:** [path if exported, otherwise not exported]
+- **Run manifest:** [path saved, e.g. `run_manifest.json`, validated with `manifest_tool.py show --validate --check-files --require-ready`]
 - **Remaining caveats:** [seed validation, noisy terms, untested tree context, sample inspection limits, etc.]
 - **Other databases:** Database-specific strategies for Ovid MEDLINE, Embase, CENTRAL, CINAHL, EconLit, grey literature, or other sources were [not requested / not built / built separately]. Do not present them unless separately constructed.
 
 For PRISMA-S 2021 reporting items applicable to this skill, see `references/prisma-s-reporting.md`.
+
+## PRISMA-S appendix (PubMed)
+
+Paste-ready reporting block, rendered by `audit_markdown.py` and also emittable as a standalone file with `--emit-appendix`. Items follow PRISMA-S 2021.
+
+- **Database (Item 1):** PubMed (NLM interface, https://pubmed.ncbi.nlm.nih.gov/).
+- **Multi-database searching (Item 2):** [out of scope for this strategy; protocol should specify additional databases, each needing translation].
+- **Full search strategy (Item 8):** the numbered line set above; final combined strategy reproduced verbatim.
+- **Limits and restrictions (Item 9):** [none, or each limit with justification and recall risk].
+- **Search filters (Item 10):** [none, or name/source/version/interface/adaptation].
+- **Prior work (Item 11):** [cite adapted strategy, or not applicable].
+- **Updates (Item 12):** [planned interval, or none].
+- **Date of final search (Item 13):** [YYYY-MM-DD].
+- **Peer review (Item 14):** [reviewer and date, or not yet peer reviewed].
+- **Total records and deduplication (Items 15-16):** to be reported by the review team after the search is run.
+````

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.7 or later (3.10+ recommended)
+- Python 3.10 or later
 - Git
 - Internet connection (for NCBI and NLM APIs)
 - An NCBI email address (recommended)
@@ -13,7 +13,7 @@
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/pubmed-search-builder.git
+git clone https://github.com/aarontaycheehsien/pubmed-search-builder.git
 cd pubmed-search-builder
 ```
 
@@ -21,7 +21,7 @@ cd pubmed-search-builder
 
 ```bash
 python --version
-# Should output Python 3.7 or later, e.g. Python 3.10.2
+# Should output Python 3.10 or later, e.g. Python 3.10.2
 ```
 
 ### 3. Create Environment File
@@ -218,6 +218,8 @@ python scripts\pubmed_tool.py doctor
 # or
 python -m scripts.pubmed_tool doctor
 ```
+
+**Passing queries in PowerShell:** pass the file path, not the contents — `python scripts\pubmed_tool.py search --query-file query.txt --retmax 0`. Do not read a query into a variable and pass it inline; PowerShell re-parses the argument and breaks long Boolean strategies (`[tiab]`, parentheses, `*`). The tool reads UTF-8, UTF-8-BOM, and UTF-16 files, so query/JSON files saved by Notepad, VS Code, `Set-Content`, or `Out-File` load fine (prefer `Set-Content -Encoding utf8`). Avoid building JSON with `ConvertTo-Json` piped from files or objects.
 
 ### Mac/Linux
 

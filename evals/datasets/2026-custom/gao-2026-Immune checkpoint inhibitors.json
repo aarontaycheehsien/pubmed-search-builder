@@ -1,0 +1,31 @@
+{
+  "id": "gao-2026-Immune checkpoint inhibitors",
+  "suite": "2026-custom",
+  "question": "Immune checkpoint inhibitors plus chemotherapy for early triple-negative breast cancer",
+  "gold_relevant_pmids": [
+    39883436,
+    31095287,
+    35961599,
+    32966830,
+    36123366,
+    32053137,
+    32101663,
+    35139274,
+    39282906,
+    36585404,
+    35182721
+  ],
+  "source": "custom fixture; gold from PMIDs (CLI)",
+  "gold_source": "PMIDs (CLI)",
+  "protocol": {
+    "seeds": "none \u2014 proceed under the no-seed workflow",
+    "framework": "choose the appropriate framework yourself (PICO / PECO / PIRD / PCC / SPIDER) for this question",
+    "essential_concepts": "identify the essential concepts yourself; prefer fewer AND blocks per the skill's anti-pattern guidance",
+    "optional_blocks": "decline materially-optional secondary AND blocks (outcomes, comparators, reference standards) unless central to scope",
+    "methodological_filter": "none",
+    "limits": "none (no date, language, species, or age limits)",
+    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  },
+  "seed_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately."
+}

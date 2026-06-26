@@ -132,9 +132,11 @@ State plainly when relevant:
 - hit counts were correct on the date tested but will change over time
 - recent records may lack MeSH indexing and rely on text-word coverage
 - noisy terms were retained for sensitivity
+- zero-hit terms (no current PubMed records) were removed and documented by default (removal is recall-neutral since they match no records), or kept per an explicit user choice; exact duplicate terms were removed as recall-neutral cleanup
 - limits and filters reduce recall and were applied for the stated reasons only
 - methodological filters or hedges were validated, PubMed-appropriate, and reported with source/version/interface where used
 - adapted filters may no longer have the published performance of the original
+- any relative-recall estimate is a search-development QA aid relative to its benchmark, not a reported search sensitivity and not a substitute for PRESS peer review; a seed-expansion benchmark is a heuristic and was labelled as such
 
 ## Output template
 

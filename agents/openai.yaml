@@ -1,4 +1,4 @@
 interface:
   display_name: "PubMed Search Builder"
   short_description: "Build PubMed strategies with audit ledgers"
-  default_prompt: "Use $pubmed-search-builder to build a high-sensitivity PubMed strategy for an evidence synthesis. Ask for optional seed PMIDs first, then save a decision-ledger audit Markdown file."
+  default_prompt: "Use $pubmed-search-builder to build a high-sensitivity PubMed strategy for an evidence synthesis. First require a plain-language research/review question, then ask for optional seed PMIDs, state concise stage banners with reference-linked decision gates, and save a decision-ledger audit Markdown file."

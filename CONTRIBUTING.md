@@ -24,7 +24,7 @@ If you've validated a new search filter (diagnostic accuracy, prognosis, qualita
 
 ### 3. **Tool Improvements**
 
-- Bug fixes in `pubmed_tool.py`, `mesh_tool.py`, or `hooks_tool.py`
+- Bug fixes in `pubmed_tool.py`, `mesh_tool.py`, `hooks_tool.py`, or `manifest_tool.py`
 - Performance improvements
 - Better error messages
 - New command-line options or features
@@ -75,7 +75,7 @@ Have an idea? Open a GitHub issue describing:
 ## Development Setup
 
 1. Clone the repository (see above)
-2. Install Python 3.7+ (3.10+ recommended)
+2. Install Python 3.10+
 3. Create a `.env` file with your NCBI credentials (see [INSTALL.md](INSTALL.md))
 4. Test your setup:
    ```bash
@@ -93,6 +93,7 @@ If you modify `pubmed_tool.py`, `mesh_tool.py`, or `hooks_tool.py`:
    python -m py_compile scripts/pubmed_tool.py
    python -m py_compile scripts/mesh_tool.py
    python -m py_compile scripts/hooks_tool.py
+   python -m py_compile scripts/manifest_tool.py
    ```
 
 2. **Run the tool**:
@@ -108,7 +109,7 @@ If you modify `pubmed_tool.py`, `mesh_tool.py`, or `hooks_tool.py`:
    python scripts/pubmed_tool.py search "asthma[Mesh]" --retmax 0
 
    # Fetch a known PMID
-   python scripts/pubmed_tool.py fetch --pmids 24102982
+   python scripts/pubmed_tool.py fetch --pmids 24102982 --output fetch_24102982.json
    ```
 
 ### For Documentation Changes

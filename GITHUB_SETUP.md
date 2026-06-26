@@ -125,18 +125,28 @@ pubmed-search-builder/
 |   |   `-- feature_request.md
 |   `-- pull_request_template.md
 |-- references/
+|   |-- anti-patterns.md
+|   |-- audit-template.md
+|   |-- concept-analysis-and-gating.md
 |   |-- examples.md
+|   |-- framework-selection.md
+|   |-- goal-tracking.md
 |   |-- mesh-and-pubmed-tools.md
 |   |-- prisma-s-reporting.md
 |   |-- seed-pmid-validation.md
 |   |-- tiab-expansion.md
 |   |-- validated-methodological-filters-and-hedges.md
-|   |-- wildcard-and-truncation.md
 |   `-- workflow.md
 |-- scripts/
+|   |-- audit_markdown.py
 |   |-- hooks_tool.py
 |   |-- mesh_tool.py
 |   `-- pubmed_tool.py
+|-- tests/
+|   |-- test_audit_markdown.py
+|   |-- test_concept_analysis_docs.py
+|   |-- test_mesh_tool_tree.py
+|   `-- test_pubmed_tool_design_ledger.py
 |-- agents/
 |   `-- openai.yaml
 |-- .env.example          # <- User copies this to .env locally
@@ -161,7 +171,7 @@ Add this to the top of `README.md` to show repo status:
 ```markdown
 [![GitHub release](https://img.shields.io/github/v/release/YOUR-USERNAME/pubmed-search-builder)](https://github.com/YOUR-USERNAME/pubmed-search-builder/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 ```
 
 ### 2. Create a Release

@@ -2,7 +2,7 @@
 
 **High-sensitivity Boolean search strategy development for PubMed - built for evidence syntheses.**
 
-A comprehensive toolkit for building, testing, and validating PubMed search strategies that prioritize **recall over precision**. Includes bundled tools for MeSH descriptor lookup, text-word expansion, wildcard testing, seed PMID validation, and PRESS-style peer review.
+A comprehensive toolkit for building, testing, and validating PubMed search strategies that prioritize **recall over precision**. Includes bundled tools for MeSH descriptor lookup, text-word expansion, wildcard testing, seed PMID validation, and PRESS-style QA/reporting.
 
 Used for systematic reviews, scoping reviews, rapid reviews, evidence maps, and narrative syntheses where missing relevant records is costlier than screening extra noise.
 
@@ -27,7 +27,7 @@ Used for systematic reviews, scoping reviews, rapid reviews, evidence maps, and 
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/YOUR-USERNAME/pubmed-search-builder.git
+git clone https://github.com/aarontaycheehsien/pubmed-search-builder.git
 cd pubmed-search-builder
 ```
 
@@ -62,7 +62,7 @@ All strategies produced by this toolkit are drafts. They must be peer-reviewed b
 
 ### PubMed E-utilities (`scripts/pubmed_tool.py`)
 
-Query PubMed, fetch records, validate seed PMIDs, and test strategy variants.
+Query PubMed, fetch records, expand seed PMIDs into a candidate relevant set (similar articles and citation chaining), validate seed PMIDs, estimate relative recall against a benchmark set, rank candidate terms by enrichment, and test strategy variants.
 
 **Common commands:**
 
@@ -71,13 +71,22 @@ Query PubMed, fetch records, validate seed PMIDs, and test strategy variants.
 python scripts/pubmed_tool.py search "asthma[tiab]" --retmax 0
 
 # Fetch detailed metadata for known PMIDs
-python scripts/pubmed_tool.py fetch --pmids 24102982 21171099
+python scripts/pubmed_tool.py fetch --pmids 24102982 21171099 --output seed_fetch.json
+
+# Expand seed PMIDs into a candidate relevant set (similar articles + citation chaining)
+python scripts/pubmed_tool.py related --pmids 24102982 21171099 --links similar,citedin
 
 # Sample a few records from a query
-python scripts/pubmed_tool.py sample "asthma[Mesh] OR asthma[tiab]" --retmax 3
+python scripts/pubmed_tool.py sample --query-file asthma_block.txt --retmax 3 --output sample_asthma_block.json
 
 # Validate whether a strategy retrieves known seed PMIDs
 python scripts/pubmed_tool.py validate "(asthma[Mesh] OR asthma[tiab])" --pmids 24102982 21171099
+
+# Estimate relative recall against a benchmark set, with per-concept-block miss diagnosis
+python scripts/pubmed_tool.py recall --query-file strategy.txt --benchmark-json related.json --blocks-file blocks.json
+
+# Rank tiab/MeSH terms by enrichment in a seed set vs. PubMed background
+python scripts/pubmed_tool.py term-rank --pmids 24102982 21171099 --fields tiab,mesh
 
 # Batch-test multiple variants (queries.json or tab-delimited text)
 python scripts/pubmed_tool.py batch queries.json
@@ -89,6 +98,7 @@ python scripts/pubmed_tool.py doctor
 **Features:**
 
 - **Query translation analysis**: Automatic inspection of PubMed's translation and query mapping
+- **Evidence-preserving record output**: `fetch`, `mine`, and `sample` require `--output`, save full JSON, and print only receipt-style stdout
 - **API key protection**: Blocks exposure of API keys in queries or output
 - **Rate limiting**: Automatic handling of 3 req/sec (no key) vs 10 req/sec (with key)
 
@@ -119,6 +129,7 @@ Pre-submission checks for recall hazards and methodological filter alignment.
 ```bash
 # Final QA: check for recall hazards, missing MeSH/[tiab] layers, etc.
 python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt
+python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt --zero-hit-terms '"future phrase"'
 
 # Check whether you should add a methodological filter
 python scripts/hooks_tool.py filter-check --text-file protocol.txt
@@ -131,19 +142,29 @@ printing the whole report into the terminal.
 
 ```bash
 python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md
-python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md --if-exists fail
-python scripts/audit_markdown.py references/audit-example.json --output audit_example.md
+python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md --if-exists suffix
+python scripts/audit_markdown.py audit.json --overlay-json decisions.json --output audit_2026-05-18.md --validate-only
 ```
 
 By default, the tool writes the full audit report to disk and prints only a
 small JSON receipt with the output path, byte count, placeholder count, and
-section count. If the output path already exists, it chooses a clear numeric
-suffix by default; use `--if-exists fail` when a collision should stop the run.
-Use `--print-report` only when the full Markdown should be printed.
+section count. Use `--print-report` only when the full Markdown should be
+printed. Use `--validate-only` to check an audit JSON/overlay pair without
+writing Markdown.
 
-Use [`references/audit-example.json`](references/audit-example.json) as a
-starter input and [`references/audit-json-schema.md`](references/audit-json-schema.md)
-for the minimal field contract.
+### Run Manifest (`scripts/manifest_tool.py`)
+
+Maintain a canonical `run_manifest.json` provenance ledger for a build - an
+append-only record of every command run, its output path, the date, the result
+count, and any superseded file. No network access.
+
+```bash
+python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug demo
+python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "pubmed_tool.py search --query-file q.txt --retmax 0" --count 1234 --label "main strategy"
+python scripts/manifest_tool.py state banner concept-gate
+python scripts/manifest_tool.py show --manifest run_manifest.json --validate
+python scripts/manifest_tool.py report --manifest run_manifest.json
+```
 
 ---
 
@@ -196,7 +217,7 @@ See `references/validated-methodological-filters-and-hedges.md` for methodologic
 
 ## Requirements
 
-- **Python 3.7+** (3.10+ recommended)
+- **Python 3.10+**
 - **NCBI email address** (recommended; see below)
 - **NCBI API key** (optional but recommended; see below)
 - **Internet connection** (for NCBI and NLM APIs)
@@ -249,12 +270,16 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 
 - **[SKILL.md](SKILL.md)**: Activation contract, routing rules, guardrails, and final report template
 - **[references/workflow.md](references/workflow.md)**: Detailed step-by-step workflow
+- **[references/framework-selection.md](references/framework-selection.md)**: Question-type-to-framework selection (PICO, PECO, PIRD, PCC, SPIDER, etc.)
+- **[references/concept-analysis-and-gating.md](references/concept-analysis-and-gating.md)**: Concept-analysis ledger, AND-block admission test, and the concept gate
 - **[references/goal-tracking.md](references/goal-tracking.md)**: Goal tracking state rules, pre-goal intake, blockers, and completion audit
-- **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and operational sequence
+- **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and the tool-to-stage map
 - **[references/tiab-expansion.md](references/tiab-expansion.md)**: Title/abstract expansion sources and strategies
 - **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, the 600-variant cap, and testing
 - **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Seed PMID validation workflow
 - **[references/validated-methodological-filters-and-hedges.md](references/validated-methodological-filters-and-hedges.md)**: Cochrane, McMaster, and other validated filters
+- **[references/anti-patterns.md](references/anti-patterns.md)**: Catalogued LLM failure modes with literature anchors
+- **[references/audit-template.md](references/audit-template.md)**: Complete audit report Markdown template
 - **[references/prisma-s-reporting.md](references/prisma-s-reporting.md)**: PRISMA-S 2021 reporting checklist
 - **[references/examples.md](references/examples.md)**: Example search strategies
 
@@ -284,11 +309,12 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 If you use this toolkit in a publication, please cite:
 
 ```bibtex
-@software{pubmed_search_builder_2024,
+@software{tay_pubmed_search_builder_2026,
   title = {PubMed Search Builder: High-Sensitivity Boolean Search Strategy Development},
-  author = {AUTHOR_NAME},
-  year = {YEAR},
-  url = {https://github.com/YOUR-USERNAME/pubmed-search-builder}
+  author = {Tay, Aaron},
+  year = {2026},
+  version = {1.0.0},
+  url = {https://github.com/aarontaycheehsien/pubmed-search-builder}
 }
 ```
 

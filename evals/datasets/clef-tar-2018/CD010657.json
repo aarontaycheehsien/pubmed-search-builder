@@ -1,0 +1,25 @@
+{
+  "id": "CD010657",
+  "suite": "clef-tar-2018",
+  "question": "Dimercaptosuccinic acid (DMSA) scan or ultrasound in screening for vesicoureteral reflux among children with urinary tract infections (a diagnostic-test-accuracy review: in children with urinary tract infection, what is the accuracy of DMSA renal scan or ultrasound for detecting vesicoureteral reflux?)",
+  "gold_relevant_pmids": [
+    1327798, 1343562, 3523415, 8935409, 9028852, 9924638, 10353409, 10835062,
+    11793131, 12023172, 12172762, 12529459, 12650294, 12883980, 14758509,
+    15378148, 15379054, 16082551, 16205610, 17188624, 17273861, 17626605,
+    17665222, 17875650, 18035134, 19397555, 19593590, 19798584, 20708748,
+    22040289, 22048628, 22089774, 22374404, 23203209, 23354031
+  ],
+  "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD010657.",
+  "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
+  "protocol": {
+    "seeds": "none — proceed under the no-seed workflow",
+    "framework": "diagnostic (PIRD / diagnostic PICO). Index tests = DMSA renal scan OR renal/urinary ultrasound; target condition = vesicoureteral reflux; population = children with urinary tract infection.",
+    "essential_concepts": "vesicoureteral reflux; index test (DMSA scan OR renal/urinary ultrasound). Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
+    "optional_blocks": "DECLINE all optional secondary AND blocks — do NOT add a reference-standard / diagnostic-accuracy block, and do NOT require a separate children/UTI population AND block (handle the paediatric/UTI population at screening to protect recall).",
+    "methodological_filter": "none",
+    "limits": "none (no date, language, species, or age limits)",
+    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  },
+  "seed_pmids_given_to_skill": [],
+  "notes": "Diagnostic-test-accuracy review. Gold set = 35 included studies. No hand-built baseline strategy: use evals/generate.py (Phase 2) to have the skill build one. Several gold studies are from the 1990s; the harness reports reachable vs. unreachable separately."
+}
