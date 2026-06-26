@@ -128,6 +128,82 @@ def split_top_level_and(text: str) -> list[str]:
     return parts
 
 
+def split_top_level_or(text: str) -> list[str]:
+    parts = []
+    start = 0
+    depth = 0
+    in_quote = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            in_quote = not in_quote
+            index += 1
+            continue
+        if not in_quote:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(depth - 1, 0)
+            elif depth == 0 and text[index : index + 2].upper() == "OR":
+                before = text[index - 1] if index > 0 else " "
+                after = text[index + 2] if index + 2 < len(text) else " "
+                if not before.isalnum() and not after.isalnum():
+                    part = text[start:index].strip()
+                    if part:
+                        parts.append(part)
+                    start = index + 2
+                    index += 2
+                    continue
+        index += 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def extract_leaf_atoms(text: str) -> list[str]:
+    """Collect leaf OR-terms across arbitrary AND/OR nesting (quote/paren aware)."""
+    text = strip_outer_parentheses(text.strip())
+    if not text:
+        return []
+    and_parts = split_top_level_and(text)
+    if len(and_parts) > 1:
+        atoms: list[str] = []
+        for part in and_parts:
+            atoms.extend(extract_leaf_atoms(part))
+        return atoms
+    or_parts = split_top_level_or(text)
+    if len(or_parts) > 1:
+        atoms = []
+        for part in or_parts:
+            atoms.extend(extract_leaf_atoms(part))
+        return atoms
+    return [text]
+
+
+def duplicate_term_issues(text: str) -> list[dict[str, str]]:
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for atom in extract_leaf_atoms(text):
+        normalized = " ".join(atom.split()).lower()
+        if not normalized:
+            continue
+        counts[normalized] = counts.get(normalized, 0) + 1
+        display.setdefault(normalized, " ".join(atom.split()))
+    issues: list[dict[str, str]] = []
+    for normalized, count in counts.items():
+        if count > 1:
+            add_issue(
+                issues,
+                "warning",
+                "duplicate_term",
+                "An exact term appears more than once; remove the duplicate copies. This is recall-neutral cleanup and reduces 'not found in PubMed' noise from repeated zero-hit terms.",
+                f"{display[normalized]} ({count}x)",
+            )
+    return issues
+
+
 def has_mesh_layer(text: str) -> bool:
     return bool(re.search(r"\[(?:mesh|mesh terms|mh|mesh:noexp)\]", text, re.IGNORECASE))
 
@@ -214,7 +290,7 @@ def detect_filter_fragments(text: str) -> list[str]:
     return found[:20]
 
 
-def final_qa(strategy: str) -> dict[str, object]:
+def final_qa(strategy: str, *, zero_hit_terms: list[str] | None = None) -> dict[str, object]:
     issues: list[dict[str, str]] = []
     text = strategy.strip()
     lower = text.lower()
@@ -250,6 +326,19 @@ def final_qa(strategy: str) -> dict[str, object]:
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):
         add_issue(issues, "error", "proximity_with_truncation", "PubMed does not allow truncation inside proximity expressions.", value)
 
+    issues.extend(duplicate_term_issues(text))
+
+    for term in zero_hit_terms or []:
+        value = term.strip()
+        if value:
+            add_issue(
+                issues,
+                "warning",
+                "zero_hit_cleanup_candidate",
+                "This term was reported as not found in PubMed; remove and document it by default unless intentionally retained for future reruns.",
+                value,
+            )
+
     add_layer_balance_issues(issues, text)
 
     intents = detect_methodological_intents(text)
@@ -263,16 +352,26 @@ def final_qa(strategy: str) -> dict[str, object]:
             ", ".join(intents or filters),
         )
 
+    followups = [
+        "Resolve all errors before final output.",
+        "Document justification for all recall-reducing warnings that remain.",
+        "Include unresolved limitations in the final strategy notes.",
+    ]
+    if any(issue["code"] == "duplicate_term" for issue in issues):
+        followups.append(
+            "Remove the terms flagged as duplicate_term; this is recall-neutral cleanup, not a recall-reducing warning to justify."
+        )
+    if any(issue["code"] == "zero_hit_cleanup_candidate" for issue in issues):
+        followups.append(
+            "Remove and document zero_hit_cleanup_candidate terms by default after checking spelling, hyphenation, and spacing."
+        )
+
     return {
         "hook": "pre_final_strategy_qa",
         "ok": not any(issue["severity"] == "error" for issue in issues),
         "issue_counts": severity_counts(issues),
         "issues": issues,
-        "required_followups": [
-            "Resolve all errors before final output.",
-            "Document justification for all recall-reducing warnings that remain.",
-            "Include unresolved limitations in the final strategy notes.",
-        ],
+        "required_followups": followups,
     }
 
 
@@ -380,6 +479,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     qa_parser = subparsers.add_parser("final-qa", help="Run pre-final strategy QA checks.")
     add_text_args(qa_parser, "strategy", "strategy text")
+    qa_parser.add_argument(
+        "--zero-hit-terms",
+        nargs="*",
+        default=[],
+        help="Terms reported by PubMed as not found; emitted as zero_hit_cleanup_candidate issues.",
+    )
 
     filter_parser = subparsers.add_parser("filter-check", help="Check methodological filter requirements.")
     add_text_args(filter_parser, "text", "protocol/request/strategy text")
@@ -411,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
             parser=parser,
             label="strategy",
         )
-        write_json(final_qa(strategy))
+        write_json(final_qa(strategy, zero_hit_terms=args.zero_hit_terms))
     elif args.command == "filter-check":
         text = read_text_source(
             text=args.text,

@@ -14,6 +14,25 @@ logs/
 query.txt
 queries.json
 final_strategy.txt
+run_manifest.json
+audit_*.json
+audit_*.md
+/pubmed_*
+search_work/
+strategy_*.txt
+*_strategy_*.txt
+*_pubmed_*_strategy.txt
+hooks_*.json
+concept_*_tiab_*.txt
+concept_*_*.txt
+focused_pubmed_*.txt
+final_pubmed_*.txt
+cirrhosis_statins_*.txt
+cirrhosis_statins_*.tsv
+LLM-wiki/
+evals/results/
+evals/.cache/
+*.xlsx
 
 # Python cache and local tooling
 __pycache__/

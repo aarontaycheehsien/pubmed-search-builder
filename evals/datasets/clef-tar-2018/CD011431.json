@@ -1,0 +1,24 @@
+{
+  "id": "CD011431",
+  "suite": "clef-tar-2018",
+  "question": "Rapid diagnostic tests for diagnosing uncomplicated non-falciparum or Plasmodium vivax malaria in endemic countries (a diagnostic-test-accuracy review: in people with suspected non-falciparum / P. vivax malaria, what is the accuracy of rapid diagnostic tests?)",
+  "gold_relevant_pmids": [
+    10405377, 11123823, 11693975, 12932092, 15000726, 15228812, 15255320,
+    16117960, 16711337, 17172395, 17360871, 18256418, 18620560, 18981501,
+    20005196, 20046179, 20529273, 20602766, 20979601, 21376357, 21703009,
+    22536317, 22818643, 23234579, 23294729, 23742633
+  ],
+  "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD011431.",
+  "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
+  "protocol": {
+    "seeds": "none — proceed under the no-seed workflow",
+    "framework": "diagnostic (PIRD / diagnostic PICO). Index test = rapid diagnostic tests (RDTs); target condition = non-falciparum / Plasmodium vivax malaria.",
+    "essential_concepts": "malaria; rapid diagnostic test (RDT). Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
+    "optional_blocks": "DECLINE all optional secondary AND blocks — do NOT add a reference-standard / diagnostic-accuracy block, do NOT add a separate 'endemic countries' geographic block, and do NOT require a non-falciparum/species AND block (handle species scope at screening to protect recall).",
+    "methodological_filter": "none",
+    "limits": "none (no date, language, species, or age limits)",
+    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  },
+  "seed_pmids_given_to_skill": [],
+  "notes": "Diagnostic-test-accuracy review. Gold set = 26 included studies. No hand-built baseline strategy: use evals/generate.py (Phase 2) to have the skill build one. Some gold studies may predate or fall outside PubMed; the harness reports reachable vs. unreachable separately."
+}

@@ -2,15 +2,46 @@
 
 Seed PMIDs are optional but valuable.
 
-Ask once for seed PMIDs. If none are provided, proceed.
+Ask once for seed PMIDs only after an independently stated plain-language research/review question has been confirmed. If none are provided, proceed.
 
 When seed PMIDs are supplied before the concept gate, limited fetch/mining of those PMIDs is allowed before MeSH/PubMed exploration solely to inform concept analysis. Full seed validation still happens only after the draft strategy is built.
 
 Seed PMIDs should be used for both term discovery and validation.
 
+## Pre-gate seed triage
+
+Before the concept gate, triage supplied seeds without broad PubMed exploration:
+
+1. Normalize and deduplicate numeric PMIDs while preserving the user's order.
+2. Record malformed seed entries separately and do not pass them to PubMed.
+3. Run `pubmed_tool.py mine --pmids ... --output seed_mine.json` on the normalized numeric PMIDs. Inspect the saved JSON for `requested_pmids`, `found_pmids`, `missing_pmids`, fetched seed records, titles, abstract text where available, publication types, MeSH headings, keywords, and other returned metadata. If a separate fetch artifact is needed for scope decisions, run `pubmed_tool.py fetch --pmids ... --output seed_fetch.json` for the found PMIDs; this remains limited seed fetch/mining.
+4. Document missing or not-found PMIDs, exclude them from seed evidence and later known-item validation unless the user supplies corrected PMIDs, and continue with any found records.
+5. If no usable seed records remain, proceed under the no-seed workflow and state that seed-derived evidence and known-item recall are not available.
+6. Pause before the concept gate only when a fetched seed is retracted or appears materially out of scope. Ask only whether to exclude it, replace it, or retain it as a special validation seed, then stop.
+
+Treat a seed as retracted when PubMed metadata or publication types indicate a retracted publication or retraction status. Treat a seed as likely out of scope only when the fetched title, abstract, or publication type clearly conflicts with the stated review question. Ordinary uncertainty is recorded in the audit and does not block the concept gate.
+
+Do not use malformed, missing, excluded, or unresolved seed records as term evidence. If the user retains a questionable record as a special validation seed, record it separately from normal in-scope seed evidence.
+
+## Expand the seed set (optional)
+
+When at least one usable in-scope seed remains, optionally expand the seed set before the concept gate to discover terms more objectively. Real searchers rarely stop at the pasted PMIDs; PubMed "Similar articles" and citation chaining surface neighboring relevant papers that carry additional vocabulary and indexing.
+
+1. Run `pubmed_tool.py related --pmids <usable seeds> --links similar,citedin,refs` (drop link types you do not want). `similar` follows PubMed neighbors, `citedin` follows papers citing the seeds, `refs` follows papers the seeds cite.
+2. Prefer high-overlap candidates (`seed_overlap_count` > 1) and, for `similar`, high `similarity_score`. Treat single-seed, single-link hits as weaker.
+3. Feed the high-overlap candidate PMIDs to `pubmed_tool.py term-rank --pmids ...` so coverage/lift are scored against a richer relevant set than the raw seeds alone (see `mesh-and-pubmed-tools.md`).
+4. Optionally use the high-overlap set as a recall **heuristic** for the draft strategy. This is not validated sensitivity.
+
+Guardrails:
+
+- The expanded set is a **candidate relevant set, not a gold standard**. Expanded PMIDs are candidate evidence, never auto-added terms; classify each harvested term by concept role.
+- Record related-set evidence (links used, counts, caps, high-overlap PMIDs) **separately from user-confirmed seed evidence** in the audit ledger.
+- Never report neighbor retrieval as true search sensitivity, and do not let expansion pull the strategy toward overfitting (see "Avoid overfitting" below).
+- Pre-gate expansion is term-discovery support only; it does not authorize broad PubMed exploration, block testing, or variant comparison before the gate is resolved.
+
 ## Fetch and analyse seed records
 
-Prefer `pubmed_tool.py mine --pmids ... --strategy-file strategy.txt` so the extracted terms, gap checks, and seed-record metadata are captured in reusable JSON. Export that JSON to the audit workbook when the search will be reviewed or handed off.
+Prefer `pubmed_tool.py mine --pmids ... --strategy-file strategy.txt --output seed_mine.json` so the extracted terms, gap checks, abstracts, and seed-record metadata are captured in reusable JSON while stdout stays receipt-only. `fetch` and `mine` do not support `--summary`; inspect the saved JSON before making scope, relevance, term-discovery, seed-validity, or concept-role decisions. Export that JSON to the audit workbook when the search will be reviewed or handed off.
 
 For each seed PMID, use the PubMed script to extract:
 
@@ -46,6 +77,8 @@ Prioritise terms appearing in:
 
 Do not add every word from seed abstracts. Add terms that map to essential concepts and plausibly improve recall.
 
+To prioritise objectively rather than by eye, run `pubmed_tool.py term-rank --pmids ...` (or `--mine-json` from a prior mine run) to score candidate `[tiab]` and MeSH terms by enrichment in the seed set versus PubMed background. Favour high-coverage, high-lift terms and treat high-coverage but low-lift terms as likely noise. See `tiab-expansion.md` and `mesh-and-pubmed-tools.md`. Term-rank scores are term-discovery aids, not validated recall, and do not replace overfitting safeguards. When reusing a prior `mine` run via `--mine-json`, pass `--exclude-pmids <PMID ...>` for any seed excluded at pre-gate triage (out-of-scope, retracted, malformed), so excluded records never become term evidence.
+
 ## Validate retrieval
 
 Test whether the final strategy retrieves all in-scope seed PMIDs.
@@ -74,6 +107,23 @@ NOT
 )
 ```
 
+
+## Estimate relative recall (optional)
+
+Known-item validation only confirms the strategy finds papers you already have. To ask "is this strategy actually sensitive?", estimate **relative recall** against a larger benchmark relevant set with `pubmed_tool.py recall`.
+
+1. Choose a benchmark:
+   - **Independent gold standard** (strongest): an externally defined relevant set, such as the included studies of a prior systematic review on the topic. Pass via `--benchmark-pmids` or `--benchmark-query-file`.
+   - **Seed-expansion benchmark** (heuristic): the `related` candidate set from the "Expand the seed set" step, ideally filtered to high overlap. Pass the `related` JSON via `--benchmark-json --min-seed-overlap 2`.
+2. Pass the concept blocks via `--blocks-file` (JSON `{label, query}` list). The output reports overall `relative_recall_percent`, per-block `block_recall` with a `bottleneck` flag, and `miss_diagnosis` naming the `culprit_blocks` for each missed record.
+3. Use the bottleneck block to target revision: the lowest-recall block is usually where MeSH or text-word coverage is too narrow. An `and_interaction` flag points to a `NOT`, filter, or proximity problem rather than a weak block.
+
+Interpretation and guardrails:
+
+- Relative recall is **relative to the benchmark, not absolute search sensitivity**. Report it as such.
+- A seed-expansion benchmark is strategy-adjacent and can **flatter** recall; an independent hand-screened gold standard gives a more honest relative-recall estimate but still does not measure absolute sensitivity (no irrelevant records are screened).
+- A benchmark PMID that is not in PubMed is indistinguishable from a genuine miss.
+- Never use a recall number to silently narrow a recall-first strategy. Record the benchmark source, size, relative recall, and bottleneck block in the audit, labelled separately from known-item seed validation.
 
 ## Validate filters separately
 

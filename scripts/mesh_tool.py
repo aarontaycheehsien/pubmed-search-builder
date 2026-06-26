@@ -23,6 +23,7 @@ DEFAULT_MAX_TERM_DESCRIPTOR_LOOKUPS = 40
 DEFAULT_MAX_DETAIL_CANDIDATES = 30
 DEFAULT_MAX_TREE_DESCENDANTS = 100
 DEFAULT_MAX_TREE_SIBLINGS = 100
+DEFAULT_SWEEP_MAX_SECONDS = 120.0
 DEFAULT_EMAIL = ""
 DEFAULT_TOOL = "codex-search-strategy-check"
 REQUEST_TIMEOUT_SECONDS = 30
@@ -819,6 +820,107 @@ def candidate_sort_key(
     )
 
 
+def assemble_candidates(
+    candidates: dict[str, dict[str, object]],
+    candidate_sources: "defaultdict[str, list[str]]",
+    labels_normalized: dict[str, int],
+    details_map: dict[str, object],
+    details_skipped_ids: set[str],
+) -> list[dict[str, object]]:
+    """Project the accumulated candidate state into the ranked candidate list. Safe to call at any
+    point during a sweep (for checkpoints) and at the end."""
+    candidate_list = []
+    for descriptor_id, candidate in sorted(
+        candidates.items(),
+        key=lambda item: candidate_sort_key(item, candidate_sources, labels_normalized),
+    ):
+        entry = dict(candidate)
+        entry["sources"] = sorted(set(candidate_sources[descriptor_id]))
+        if descriptor_id in details_map:
+            entry["details"] = details_map[descriptor_id]
+        elif descriptor_id in details_skipped_ids:
+            entry["details_skipped"] = "Detail lookup skipped by --max-detail-candidates budget."
+        candidate_list.append(entry)
+    return candidate_list
+
+
+def build_sweep_result(
+    *,
+    concept: str,
+    variants: list[str],
+    matches: list[str],
+    labels: list[str],
+    candidate_list: list[dict[str, object]],
+    raw_searches: list[dict[str, object]],
+    status: str,
+    stop_reason: str | None,
+    pending: list[dict[str, str]],
+    errors: list[dict[str, object]],
+    max_seconds: float,
+    elapsed_seconds: float,
+    max_term_descriptor_lookups: int,
+    term_descriptor_lookup_count: int,
+    term_descriptor_lookup_skipped: int,
+    max_detail_candidates: int,
+    detail_candidate_count: int,
+    detail_candidate_skipped: int,
+) -> dict[str, object]:
+    """Assemble the full sweep result dict, including the completeness/recall accounting. The same
+    shape is used for on-disk checkpoints and the final returned result."""
+    units_total = len(matches) * len(labels)
+    units_pending = len(pending)
+    review_required: list[str] = []
+    if status != "complete":
+        review_required.append(
+            f"Sweep is PARTIAL (stop_reason={stop_reason}): MeSH/entry-term recall is incomplete. "
+            "Rerun the labels in `pending` and any failed labels in `errors` (a separate sweep is "
+            "fine) and merge candidates before finalizing the concept block. Do not treat these "
+            "candidates as a complete MeSH layer."
+        )
+    review_required.extend(
+        [
+            "Inspect each plausible candidate descriptor with details before selecting MeSH terms.",
+            "Check entry terms for [tiab] expansion.",
+            "Check related descriptors and tree context before deciding explosion/noexp.",
+            "Test accepted and rejected candidate descriptors in PubMed with --retmax 0.",
+            "Document rejected descriptors with reason: too broad, too narrow, wrong sense, obsolete, duplicate, or noisy.",
+        ]
+    )
+    return {
+        "operation": "sweep",
+        "concept": concept,
+        "variants": variants,
+        "matches_used": matches,
+        "status": status,
+        "stop_reason": stop_reason,
+        "coverage": {
+            "labels_total": len(labels),
+            "matches_total": len(matches),
+            "units_total": units_total,
+            "units_processed": units_total - units_pending,
+            "units_pending": units_pending,
+        },
+        "pending": pending,
+        "errors": errors,
+        "max_seconds": max_seconds,
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "candidate_ranking": "Sorted by match specificity, direct descriptor hits before term-derived hits, MeSH descriptors before supplementary concepts, then query-label order and label.",
+        "candidate_count": len(candidate_list),
+        "candidates": candidate_list,
+        "raw_searches": raw_searches,
+        "network_budget": {
+            "request_cache_entries": len(REQUEST_CACHE),
+            "max_term_descriptor_lookups": max_term_descriptor_lookups,
+            "term_descriptor_lookups_used": term_descriptor_lookup_count,
+            "term_descriptor_lookups_skipped": term_descriptor_lookup_skipped,
+            "max_detail_candidates": max_detail_candidates,
+            "detail_candidates_used": detail_candidate_count,
+            "detail_candidates_skipped": detail_candidate_skipped,
+        },
+        "review_required": review_required,
+    }
+
+
 def sweep(
     concept: str,
     variants: list[str],
@@ -826,8 +928,18 @@ def sweep(
     include_details: bool,
     max_term_descriptor_lookups: int,
     max_detail_candidates: int,
+    max_seconds: float = 0.0,
+    output_path: str | None = None,
 ) -> dict[str, object]:
-    labels = []
+    """Aggressively search MeSH descriptors and entry terms for a concept plus variants.
+
+    Hardened for long variant lists: a wall-clock budget (``max_seconds``; 0 = unlimited) bounds the
+    run, per-request failures are recorded and skipped instead of aborting, and (when ``output_path``
+    is set) a checkpoint is written after each label so a killed process still leaves useful partial
+    output. A shortened run is always explicit (``status="partial"`` + the unswept ``pending`` units
+    and any ``errors``) so recall is never silently reduced.
+    """
+    labels: list[str] = []
     for value in [concept, *variants]:
         cleaned = " ".join(value.split())
         if cleaned and cleaned.lower() not in {item.lower() for item in labels}:
@@ -835,15 +947,65 @@ def sweep(
 
     labels_normalized = {normalized_label(label): index for index, label in enumerate(labels)}
     matches = ["exact", "startswith", "contains"]
-    raw_searches = []
+    units = [(match, label) for match in matches for label in labels]
+    raw_searches: list[dict[str, object]] = []
     candidates: dict[str, dict[str, object]] = {}
     candidate_sources: defaultdict[str, list[str]] = defaultdict(list)
     term_descriptor_lookup_count = 0
     term_descriptor_lookup_skipped = 0
     seen_term_resources: set[str] = set()
+    errors: list[dict[str, object]] = []
+    details_map: dict[str, object] = {}
+    details_skipped_ids: set[str] = set()
 
-    for match in matches:
-        for label in labels:
+    start = time.monotonic()
+    deadline = start + max_seconds if max_seconds and max_seconds > 0 else None
+    time_budget_hit = False
+    pending: list[dict[str, str]] = []
+
+    def elapsed() -> float:
+        return time.monotonic() - start
+
+    def budget_exceeded() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    def snapshot(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> dict[str, object]:
+        return build_sweep_result(
+            concept=concept,
+            variants=variants,
+            matches=matches,
+            labels=labels,
+            candidate_list=assemble_candidates(
+                candidates, candidate_sources, labels_normalized, details_map, details_skipped_ids
+            ),
+            raw_searches=raw_searches,
+            status=status,
+            stop_reason=stop_reason,
+            pending=pending_units,
+            errors=errors,
+            max_seconds=max_seconds,
+            elapsed_seconds=elapsed(),
+            max_term_descriptor_lookups=max_term_descriptor_lookups,
+            term_descriptor_lookup_count=term_descriptor_lookup_count,
+            term_descriptor_lookup_skipped=term_descriptor_lookup_skipped,
+            max_detail_candidates=max_detail_candidates,
+            detail_candidate_count=len(details_map),
+            detail_candidate_skipped=len(details_skipped_ids),
+        )
+
+    def checkpoint(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> None:
+        if output_path:
+            dump_json_to_path(Path(output_path), snapshot(status, stop_reason, pending_units))
+
+    # Search phase: highest-value matches first (exact, then startswith, then contains) so a
+    # time-truncated run still captures the best descriptors. One failing label never aborts the run.
+    for index, (match, label) in enumerate(units):
+        if budget_exceeded():
+            time_budget_hit = True
+            pending = [{"match": m, "label": l} for (m, l) in units[index:]]
+            break
+
+        try:
             descriptor_result = lookup(label, match, limit)
             raw_searches.append(
                 {
@@ -869,7 +1031,10 @@ def sweep(
                     },
                 )
                 candidate_sources[descriptor_id].append(f"descriptor:{match}:{label}")
+        except MeshError as exc:
+            errors.append({"source": "descriptor", "match": match, "label": label, "message": str(exc)})
 
+        try:
             term_result = terms(label, match, limit)
             raw_searches.append(
                 {
@@ -883,16 +1048,32 @@ def sweep(
                 if not isinstance(item, dict):
                     continue
                 term_resource = str(item.get("resource", ""))
-                descriptor_hits = []
-                if term_resource:
-                    if term_resource in seen_term_resources:
-                        descriptor_hits = term_descriptor_candidates(term_resource, limit=10)
-                    elif term_descriptor_lookup_count < max_term_descriptor_lookups:
-                        seen_term_resources.add(term_resource)
-                        term_descriptor_lookup_count += 1
-                        descriptor_hits = term_descriptor_candidates(term_resource, limit=10)
-                    else:
-                        term_descriptor_lookup_skipped += 1
+                if not term_resource:
+                    continue
+                if term_resource in seen_term_resources:
+                    do_lookup = True
+                elif term_descriptor_lookup_count < max_term_descriptor_lookups:
+                    seen_term_resources.add(term_resource)
+                    term_descriptor_lookup_count += 1
+                    do_lookup = True
+                else:
+                    term_descriptor_lookup_skipped += 1
+                    do_lookup = False
+                if not do_lookup:
+                    continue
+                try:
+                    descriptor_hits = term_descriptor_candidates(term_resource, limit=10)
+                except MeshError as exc:
+                    errors.append(
+                        {
+                            "source": "term_descriptor",
+                            "match": match,
+                            "label": label,
+                            "term_resource": term_resource,
+                            "message": str(exc),
+                        }
+                    )
+                    continue
                 for descriptor_hit in descriptor_hits:
                     descriptor_id = descriptor_hit["descriptor"]
                     candidates.setdefault(
@@ -906,51 +1087,42 @@ def sweep(
                     candidate_sources[descriptor_id].append(
                         f"term:{match}:{label}:{item.get('label', '')}"
                     )
+        except MeshError as exc:
+            errors.append({"source": "term", "match": match, "label": label, "message": str(exc)})
 
-    candidate_list = []
-    detail_candidate_count = 0
-    detail_candidate_skipped = 0
-    for descriptor_id, candidate in sorted(
-        candidates.items(),
-        key=lambda item: candidate_sort_key(item, candidate_sources, labels_normalized),
-    ):
-        entry = dict(candidate)
-        entry["sources"] = sorted(set(candidate_sources[descriptor_id]))
-        if include_details:
-            if detail_candidate_count < max_detail_candidates:
-                detail_candidate_count += 1
-                entry["details"] = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
-            else:
-                detail_candidate_skipped += 1
-                entry["details_skipped"] = "Detail lookup skipped by --max-detail-candidates budget."
-        candidate_list.append(entry)
+        checkpoint("partial", "in_progress", [{"match": m, "label": l} for (m, l) in units[index + 1 :]])
 
-    return {
-        "operation": "sweep",
-        "concept": concept,
-        "variants": variants,
-        "matches_used": matches,
-        "candidate_ranking": "Sorted by match specificity, direct descriptor hits before term-derived hits, MeSH descriptors before supplementary concepts, then query-label order and label.",
-        "candidate_count": len(candidate_list),
-        "candidates": candidate_list,
-        "raw_searches": raw_searches,
-        "network_budget": {
-            "request_cache_entries": len(REQUEST_CACHE),
-            "max_term_descriptor_lookups": max_term_descriptor_lookups,
-            "term_descriptor_lookups_used": term_descriptor_lookup_count,
-            "term_descriptor_lookups_skipped": term_descriptor_lookup_skipped,
-            "max_detail_candidates": max_detail_candidates,
-            "detail_candidates_used": detail_candidate_count,
-            "detail_candidates_skipped": detail_candidate_skipped,
-        },
-        "review_required": [
-            "Inspect each plausible candidate descriptor with details before selecting MeSH terms.",
-            "Check entry terms for [tiab] expansion.",
-            "Check related descriptors and tree context before deciding explosion/noexp.",
-            "Test accepted and rejected candidate descriptors in PubMed with --retmax 0.",
-            "Document rejected descriptors with reason: too broad, too narrow, wrong sense, obsolete, duplicate, or noisy.",
-        ],
-    }
+    # Detail phase: enrich ranked candidates within the same wall-clock and count budgets.
+    if include_details and not time_budget_hit:
+        detail_attempts = 0
+        for descriptor_id, _candidate in sorted(
+            candidates.items(),
+            key=lambda item: candidate_sort_key(item, candidate_sources, labels_normalized),
+        ):
+            if budget_exceeded():
+                time_budget_hit = True
+                break
+            if detail_attempts >= max_detail_candidates:
+                details_skipped_ids.add(descriptor_id)
+                continue
+            detail_attempts += 1
+            try:
+                details_map[descriptor_id] = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
+            except MeshError as exc:
+                errors.append({"source": "details", "descriptor": descriptor_id, "message": str(exc)})
+            checkpoint("partial", "in_progress", pending)
+
+    reasons = []
+    if time_budget_hit:
+        reasons.append("time_budget")
+    if errors:
+        reasons.append("request_errors")
+    stop_reason = "+".join(reasons) if reasons else None
+    status = "partial" if (reasons or pending) else "complete"
+
+    result = snapshot(status, stop_reason, pending)
+    checkpoint(status, stop_reason, pending)
+    return result
 
 
 def sparql(query: str, limit: int, offset: int, inference: bool) -> dict[str, object]:
@@ -977,6 +1149,109 @@ def sparql(query: str, limit: int, offset: int, inference: bool) -> dict[str, ob
 def write_json(data: dict[str, object]) -> None:
     json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
+
+
+def dump_json_to_path(path: Path, data: dict[str, object]) -> None:
+    """Write the full result JSON to a file (used by sweep --output and checkpoints). Overwrites."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def summarize_sweep(result: dict[str, object]) -> dict[str, object]:
+    """Compact, token-cheap projection of a full sweep result for stdout.
+
+    Keeps everything recall-relevant (ranked candidate descriptors + their sources, completeness
+    status, the unswept ``pending`` units, errors, and the network budget) but drops the bulky
+    ``raw_searches`` echo and the per-candidate ``details`` blobs, which remain in the --output file.
+    """
+    candidates = []
+    for cand in result.get("candidates", []) or []:
+        if not isinstance(cand, dict):
+            continue
+        compact = {
+            "descriptor": cand.get("descriptor"),
+            "label": cand.get("label"),
+            "sources": cand.get("sources", []),
+        }
+        if "details" in cand:
+            compact["details_available"] = True
+        if "details_skipped" in cand:
+            compact["details_skipped"] = cand["details_skipped"]
+        candidates.append(compact)
+
+    errors = result.get("errors", []) or []
+    summary: dict[str, object] = {
+        "operation": "sweep",
+        "concept": result.get("concept"),
+        "status": result.get("status"),
+        "stop_reason": result.get("stop_reason"),
+        "coverage": result.get("coverage"),
+        "candidate_count": result.get("candidate_count"),
+        "candidates": candidates,
+        "network_budget": result.get("network_budget"),
+        "elapsed_seconds": result.get("elapsed_seconds"),
+        "max_seconds": result.get("max_seconds"),
+        "error_count": len(errors),
+    }
+    if result.get("pending"):
+        summary["pending"] = result["pending"]
+    if errors:
+        summary["errors"] = errors[:5]
+        if len(errors) > 5:
+            summary["errors_truncated_total"] = len(errors)
+    if result.get("status") != "complete":
+        review = result.get("review_required") or []
+        if review:
+            summary["review_required"] = [review[0]]
+    return summary
+
+
+def emit_sweep(result: dict[str, object], args: argparse.Namespace) -> None:
+    """Serialize a sweep result: full JSON to --output; compact summary to stdout when --summary or
+    --output is given; otherwise the full JSON to stdout (backward-compatible default)."""
+    output_path = getattr(args, "output", None)
+    pending_output_path = getattr(args, "pending_output", None)
+    if output_path:
+        dump_json_to_path(Path(output_path), result)
+    if pending_output_path:
+        write_pending_labels(Path(pending_output_path), result)
+    if getattr(args, "summary", False) or output_path or pending_output_path:
+        summary = summarize_sweep(result)
+        if output_path:
+            summary["output"] = str(output_path)
+        if pending_output_path:
+            summary["pending_output"] = str(pending_output_path)
+        write_json(summary)
+    else:
+        write_json(result)
+
+
+def write_pending_labels(path: Path, result: dict[str, object]) -> None:
+    """Write newline-delimited labels that still need a follow-up sweep.
+
+    The file is intentionally compatible with ``--variants-file``. The original concept is omitted
+    because it is already supplied via ``--concept`` on the rerun.
+    """
+    concept = normalized_label(result.get("concept", ""))
+    labels: list[str] = []
+    for item in result.get("pending", []) or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()
+        if not label or normalized_label(label) == concept:
+            continue
+        if label.casefold() not in {existing.casefold() for existing in labels}:
+            labels.append(label)
+    lines = [
+        "# Pending MeSH sweep labels from a partial run.",
+        "# Rerun with the same --concept and pass this file via --variants-file.",
+    ]
+    if labels:
+        lines.extend(labels)
+    else:
+        lines.append("# No pending non-concept labels.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1020,6 +1295,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_DETAIL_CANDIDATES,
         help="Maximum candidate descriptors to enrich when --details is used.",
     )
+    sweep_parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=DEFAULT_SWEEP_MAX_SECONDS,
+        help="Wall-clock budget for the whole sweep (0 = unlimited). On timeout the sweep stops and "
+        "returns status=partial with the unswept labels listed in `pending`.",
+    )
+    sweep_parser.add_argument(
+        "--output",
+        help="Write the full sweep JSON (including raw_searches and per-candidate details) to this "
+        "path, checkpointing after each label, and print a compact summary to stdout. Recommended "
+        "for long variant lists.",
+    )
+    sweep_parser.add_argument(
+        "--pending-output",
+        help="Write newline-delimited pending variant labels from a partial run; compatible with --variants-file on a rerun.",
+    )
+    sweep_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print a compact summary to stdout (drops raw_searches and per-candidate details). "
+        "Implied by --output.",
+    )
 
     sparql_parser = subparsers.add_parser("sparql", help="Run a MeSH RDF SPARQL query.")
     sparql_parser.add_argument("query")
@@ -1047,16 +1345,17 @@ def main(argv: list[str] | None = None) -> int:
             variants = list(args.variant)
             if args.variants_file:
                 variants.extend(read_lines(args.variants_file))
-            write_json(
-                sweep(
-                    args.concept,
-                    variants,
-                    args.limit,
-                    args.details,
-                    max(0, args.max_term_descriptor_lookups),
-                    max(0, args.max_detail_candidates),
-                )
+            result = sweep(
+                args.concept,
+                variants,
+                args.limit,
+                args.details,
+                max(0, args.max_term_descriptor_lookups),
+                max(0, args.max_detail_candidates),
+                max_seconds=max(0.0, args.max_seconds),
+                output_path=args.output,
             )
+            emit_sweep(result, args)
         elif args.command == "sparql":
             write_json(sparql(args.query, args.limit, args.offset, args.inference))
         else:

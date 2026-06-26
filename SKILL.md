@@ -1,44 +1,65 @@
 ---
 name: pubmed-search-builder
-description: "Build high-sensitivity PubMed/MEDLINE Boolean search strategies for systematic reviews, scoping reviews, rapid reviews, evidence maps, narrative/evidence syntheses, and other evidence-synthesis searches. When invoked, interpret topic questions as strategy-building requests, ask for optional seed PMIDs first, and do not answer the evidence question by searching PubMed. Use for MeSH and free-text expansion, seed PMID validation, PRESS-style review, PRISMA-S reporting, and audit-ledger documentation."
-license: MIT
-metadata:
-  version: "1.0.0"
+description: "Build high-sensitivity PubMed/MEDLINE Boolean search strategies for systematic reviews, scoping reviews, rapid reviews, evidence maps, narrative/evidence syntheses, and other evidence-synthesis searches. When invoked, interpret topic questions as strategy-building requests, require a plain-language research/review question before asking for optional seed PMIDs, and do not answer the evidence question by searching PubMed. Never accept user-entered Boolean syntax, PubMed line sets, field-tagged queries, or strategy fragments as build input. Use for MeSH and free-text expansion, seed PMID validation, PRESS-style QA, PRISMA-S reporting, and audit-ledger documentation."
 ---
 
 # PubMed High-Sensitivity Search Builder
 
 ## Core Goal
 
-Build high-sensitivity PubMed Boolean strategies for evidence syntheses from a topic or review question. Minimize missed relevant records. Precision is secondary, but noise should be tested, explained, and controlled when it can be controlled without damaging recall.
+Build high-sensitivity PubMed Boolean strategies for evidence syntheses from a topic or review question. Minimize missed relevant records; precision is secondary, but noise should be tested and controlled where that does not damage recall.
 
-## Invocation Contract
-
-When this skill is invoked, treat the user's topic or question as a request to build a PubMed search strategy. Do not answer clinical, epidemiological, prevalence, treatment, prognosis, or background questions by searching PubMed or the web for substantive answers. The deliverable is a documented Boolean strategy and audit trail.
-
-If the prompt looks like an answerable evidence question, convert it into the plain-language review question for strategy building and begin the seed PMID intake. Evidence-answer synthesis belongs only in a separate non-skill follow-up outside this strategy-building workflow.
+When this skill is invoked, treat the user's topic or question as a request to build a PubMed search strategy, even when it looks like an answerable clinical, epidemiological, prevalence, treatment, prognosis, or background question. Do not answer it by searching PubMed or the web; the deliverable is a documented Boolean strategy and audit trail. Provide substantive evidence answers only in a separate non-skill follow-up.
 
 ## First Response
 
-At the start of a new strategy-building task, including when the skill is invoked with an answerable-looking question, ask once whether the user has known relevant seed PMIDs. Make clear that seeds are optional. If the user already provided seeds, do not ask again.
+At the start of a new strategy-building task, including when the skill is invoked with an answerable-looking question, first require an independently stated plain-language research/review question or protocol-style question. If the user has not supplied one, ask only for the research/review question and stop.
 
-Pause and wait for the user's answer before MeSH/PubMed exploration, strategy drafting, topical answer searches, or the high-sensitivity concept-gate question. Continue only after the user supplies seed PMIDs, says they have no seeds, or explicitly asks to proceed without seeds. If seed PMIDs are supplied, limited seed fetch/mining is allowed before the concept gate solely to support concept analysis; do not run broader PubMed exploration, answer-finding searches, block testing, validation, variants, final QA, or filter checks before seed and concept-gate decisions are resolved.
+After the plain-language research/review question is confirmed, ask once whether the user has known relevant seed PMIDs. Make clear that seeds are optional. If the user already provided seeds, do not ask again. Pause and wait for the user's answer before running MeSH/PubMed exploration, drafting the strategy, searching PubMed for topical answers, or asking the concept-gate question.
+
+Seed gate policy: if the user has no seeds or asks to proceed without seeds, follow the no-seed workflow and state the validation limits. If seed PMIDs are supplied, normalize and deduplicate numeric PMIDs, document malformed entries and not-found PMIDs, and run only limited pre-gate seed fetch/mining of found records to populate seed evidence for concept analysis. Proceed past malformed or not-found PMIDs after documenting their exclusion. Pause before the concept gate only when a fetched seed is retracted or appears materially out of scope; then ask only whether to exclude it, replace it, or retain it as a special validation seed. Do not run broader PubMed exploration, block testing, validation, variants, final QA, or filter checks before the seed and concept-gate decisions are resolved. See `references/seed-pmid-validation.md`.
+
+## Stage Reporting Contract
+
+State a concise user-facing stage report before each major workflow transition, at one of two levels. **Decision-gate stages** - initial question intake, seed PMID intake, the concept gate, and any stage where a user/protocol decision is needed - require a full stage banner with all six fields below. **Other transitions** require only a one-line stage marker naming the stage and the governing reference files, unless a user decision arises (then promote to a full banner).
+
+A full stage banner includes these fields:
+
+- `Stage`: name the current stage from `references/workflow.md`.
+- `Reference(s) in force`: cite the exact governing reference files, such as `references/workflow.md`, `references/framework-selection.md`, `references/concept-analysis-and-gating.md`, `references/mesh-and-pubmed-tools.md`, `references/seed-pmid-validation.md`, or `references/audit-template.md`.
+- `Doing now`: the work about to happen in this stage.
+- `Allowed now`: actions allowed by the governing references at this point.
+- `Not doing yet`: actions blocked until a later stage or user/protocol decision.
+- `User decision needed`: the exact unresolved user/protocol question, or `none`.
+
+Keep banners short. At the concept gate, always include an explicit optional-concept-offers summary, even if it says none were identified. When materially plausible optional secondary blocks, outcome blocks, safety blocks, filters, limits, or focused variants are present, the `User decision needed` line must name them explicitly. When a stage banner says a user decision is needed, ask only that decision and stop.
 
 ## Required Input
 
-Build only from an independently stated topic, review question, or protocol-style question that is understandable without pasted Boolean syntax.
+Build only from an independently stated topic, review question, or protocol-style question, understandable without pasted Boolean syntax.
 
 - If the user provides a topic or review question, build the strategy from that question.
 - After seed status is resolved, use supplied seed PMIDs or seed papers as optional validation and supporting evidence; do not overfit to them.
-- If there are no seeds or the user asks to proceed without them, follow the no-seed workflow and state validation limits.
-- If the user provides only Boolean syntax, a PubMed line set, a field-tagged query, or a strategy fragment without a topic/review question, ask for the topic or review question in plain language.
-- If the user provides Boolean syntax along with a topic, ask them to provide or confirm the topic/review question without using the pasted strategy. Do not use pasted Boolean terms, operators, filters, or line structure as term evidence, logic evidence, hazard evidence, or review input.
+- If the user confirms there are no seed PMIDs or explicitly asks to proceed without seeds, follow the no-seed workflow and state the validation limits.
+- If the user provides only Boolean syntax, a PubMed line set, a field-tagged query, or a strategy fragment without a topic/review question, ask only for the topic or review question in plain language. Do not ask for seed PMIDs in the same response.
+- If the user provides Boolean syntax along with possible prose or topic context, ignore the pasted syntax and ask them to restate or confirm the topic/review question in plain language before asking for seed PMIDs.
+- Never use pasted Boolean terms, operators, filters, line numbers, field tags, or line structure as term evidence, logic evidence, scope evidence, hazard evidence, or review input.
+
+## Goal Tracking
+
+If the user starts with `/goal` or asks for goal tracking, read `references/goal-tracking.md` for pre-goal intake rules.
 
 ## Canonical Workflow
 
-Read `references/workflow.md` for the canonical build sequence, high-sensitivity mental model, tool-heavy build/test/validate flow, revision loop, final hygiene, stop criteria, audit Markdown handoff, and PRESS framing. Before MeSH lookup, read `references/concept-analysis-and-gating.md` for concept roles, seed/no-seed branches, the canonical concept-gate question, optional block/filter decisions, and pre-MeSH vocabulary/domain brainstorm rules.
+Read `references/workflow.md` for the canonical build sequence, high-sensitivity mental model, tool-heavy build/test/validate flow, revision loop, final hygiene, stop criteria, and audit handoff. Read `references/framework-selection.md` before extracting candidate slots: the default LLM behaviour is to force every question into PICO, which often reduces recall for exposure-based (PECO), qualitative (PICo/SPIDER), diagnostic (PIRD), or scoping (PCC) questions. Read `references/mesh-and-pubmed-tools.md` for bundled script usage.
 
-Use `references/mesh-and-pubmed-tools.md` for bundled script usage and audit tooling. Load title/abstract expansion, wildcard, filter, seed-validation, PRISMA-S, and examples only when needed. If the user starts with `/goal` or asks for goal tracking, read `references/goal-tracking.md` for pre-goal intake rules.
+## Concept Selection
+
+Read `references/concept-analysis-and-gating.md` before MeSH lookup for concept roles, gates, ledgers, seed/no-seed branches, optional block/filter decisions, and the pre-MeSH vocabulary/domain brainstorm. Read `references/anti-patterns.md` for catalogued failure modes (PICO-as-template, default outcomes/comparators, overfitting to seeds, ignoring failed retrieval, silent committal on ambiguous questions, one-shot Boolean) that the concept gate must guard against.
+
+## Build, Test, And Validate
+
+Read `references/workflow.md` for the build/test/validate flow; load the specific tool, tiab, wildcard, filter, and seed-validation references when those steps are reached. `fetch`, `mine`, and `sample` are record-content commands: they require `--output`, do not support `--summary`, and print only a receipt. Inspect the saved JSON, including abstracts where available, before recording any relevance, scope, noise, term-discovery, or concept-role decision. Compact output is appropriate for count, translation, validation, recall, variant, related-record, and term-rank dashboards.
 
 ## Stop Condition
 
@@ -46,20 +67,22 @@ Use the stop criteria in `references/workflow.md`; explicitly mark incomplete ch
 
 ## Output Format
 
-For every completed strategy build, save a Markdown audit report in the user's working/output folder, preferably `audit_YYYY-MM-DD.md` or `audit_<topic-slug>_YYYY-MM-DD.md` if multiple searches may share a folder. If a matching file exists, do not overwrite it silently; choose a clear suffix or ask when overwriting would be ambiguous. Report the saved path in the final response and in `Reporting notes`.
+For every completed strategy build, save the audit report as a Markdown file in the user's working/output folder, preferably named `audit_YYYY-MM-DD.md` or `audit_<topic-slug>_YYYY-MM-DD.md`. If a file with that name already exists, do not overwrite it silently; choose a clear suffix or ask. The audit must include a decision ledger of the user/protocol and search-design decisions made during the build; do not invent audit details, and mark untested or unsupported items as `not performed`, `not available`, or `not applicable`. Prefer `scripts/audit_markdown.py` (optionally seeded by `pubmed_tool.py audit-scaffold`) to render the report from a saved audit JSON file, and read `references/audit-template.md` for the audit structure. With a `concept_blocks` list the renderer also emits a numbered PubMed line set and a PRISMA-S appendix; `--emit-appendix <path>` writes those as a standalone paste-ready file.
 
-Use `references/audit-template.md` as the final report structure. Include the final strategy, a decision ledger, user/protocol decisions, search-design decisions, accepted/rejected/deferred MeSH or SCR choices, term-expansion choices, optional block/filter/limit handling, variant choices, seed-validation decisions, and QA caveats. Do not invent audit details. Mark unsupported or incomplete checks as `not performed`, `not available`, or `not applicable`.
+Also save a canonical `run_manifest.json` with `scripts/manifest_tool.py`: an append-only provenance ledger that records every command run, its output path, the date, the result count, and any superseded file. Run `manifest_tool.py show --validate --check-files --require-ready` before finishing - the binding handoff gate that exits non-zero unless the build-state concept gate is resolved and no user question is pending - then report both the saved audit Markdown path and the `run_manifest.json` path in the final response.
 
 ## References
 
-- `references/workflow.md`: full workflow.
-- `references/concept-analysis-and-gating.md`: concept ledger, seed/no-seed branches, roles, and gates.
-- `references/goal-tracking.md`: `/goal` intake and state rules.
-- `references/mesh-and-pubmed-tools.md`: bundled scripts.
-- `references/validated-methodological-filters-and-hedges.md`: filters and hedges.
-- `references/tiab-expansion.md`: title/abstract expansion.
-- `references/wildcard-and-truncation.md`: wildcard risk.
-- `references/seed-pmid-validation.md`: seed validation.
-- `references/audit-template.md`: audit Markdown template.
-- `references/prisma-s-reporting.md`: reporting notes.
-- `references/examples.md`: examples.
+- `references/workflow.md` - full build sequence, mental model, and stop criteria.
+- `references/framework-selection.md` - question-type-to-framework selection table.
+- `references/concept-analysis-and-gating.md` - concept-analysis ledger, concept gate, and seed/no-seed branches.
+- `references/anti-patterns.md` - catalogued LLM failure modes with literature anchors.
+- `references/goal-tracking.md` - `/goal` pre-goal intake and state rules.
+- `references/mesh-and-pubmed-tools.md` - bundled script usage and the tool-to-stage map.
+- `references/tiab-expansion.md` - title/abstract expansion and objective term ranking.
+- `references/wildcard-and-truncation.md` - wildcard safety and the 600-variant cap.
+- `references/seed-pmid-validation.md` - seed PMID validation workflow.
+- `references/validated-methodological-filters-and-hedges.md` - validated filters and hedges.
+- `references/prisma-s-reporting.md` - PRISMA-S reporting notes.
+- `references/audit-template.md` - complete audit report Markdown template.
+- `references/examples.md` - example search-strategy patterns.

@@ -18,6 +18,14 @@ from typing import Any
 
 
 DEFAULT_STATUS = "not performed"
+PRESS_2015_ELEMENTS = [
+    "1. Translation of the research question",
+    "2. Boolean and proximity operators",
+    "3. Subject headings",
+    "4. Text-word search",
+    "5. Spelling, syntax, line numbers",
+    "6. Limits and filters",
+]
 PLACEHOLDER_RE = re.compile(
     r"\[[^\]\n]*(?:"
     r"name|scope|count|date|path|reason|decision|descriptor|query|source|"
@@ -45,6 +53,22 @@ def load_json(path: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise AuditMarkdownError("Audit input JSON must contain an object.")
     return data
+
+
+def merge_overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge an authored audit overlay into a scaffold.
+
+    Dicts merge recursively so a small decisions file can fill scaffold placeholders without
+    restating all mechanical fields. Lists and scalars replace the scaffold value.
+    """
+    merged = dict(base)
+    for key, value in overlay.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = merge_overlay(existing, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -189,6 +213,16 @@ def render_search_structure(data: dict[str, Any]) -> list[str]:
     search_structure = as_dict(data.get("search_structure"))
     concepts = concept_rows(data)
     lines = ["## Search structure", ""]
+    framework = first_value(
+        data,
+        [
+            "search_structure.framework",
+            "framework",
+            "framework_choice",
+        ],
+    )
+    if framework not in (None, "", [], {}):
+        lines.append(f"- **Framework:** {compact_text(framework)}")
     if concepts:
         for index, concept in enumerate(concepts, start=1):
             name = concept.get("name") or concept.get("concept") or f"Concept {index}"
@@ -200,6 +234,7 @@ def render_search_structure(data: dict[str, Any]) -> list[str]:
     lines.extend(
         [
             f"- **Concept gate status:** {compact_text(search_structure.get('concept_gate_status'))}",
+            f"- **AND-block admission summary:** {compact_text(search_structure.get('and_block_admission_summary'))}",
             f"- **Concepts kept inside existing `OR` blocks:** {compact_text(search_structure.get('concepts_inside_or_blocks'))}",
             f"- **Omitted or reserve concepts:** {compact_text(search_structure.get('omitted_or_reserve_concepts'))}",
             f"- **Methodological filters or limits:** {compact_text(search_structure.get('methodological_filters_or_limits'))}",
@@ -207,6 +242,45 @@ def render_search_structure(data: dict[str, Any]) -> list[str]:
         ]
     )
     return lines
+
+
+def render_stage_trace(data: dict[str, Any]) -> list[str]:
+    trace_items = as_list(data.get("stage_trace"))
+    if not trace_items:
+        return []
+
+    rows = []
+    for item in trace_items:
+        if not isinstance(item, dict):
+            rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+            continue
+        rows.append(
+            [
+                item.get("stage") or item.get("stage_name"),
+                item.get("reference_files") or item.get("references") or item.get("reference_files_in_force"),
+                item.get("action_taken") or item.get("doing_now") or item.get("action"),
+                item.get("blocked_actions") or item.get("not_doing_yet"),
+                item.get("decision_needed") or item.get("user_decision_needed"),
+                item.get("user_protocol_decision") or item.get("user_or_protocol_decision") or item.get("protocol_decision"),
+            ]
+        )
+
+    return [
+        "## Stage Trace",
+        "",
+        markdown_table(
+            [
+                "Stage",
+                "Reference files",
+                "Action taken",
+                "Blocked actions",
+                "Decision needed",
+                "User/protocol decision",
+            ],
+            rows,
+        ),
+        "",
+    ]
 
 
 def render_user_decisions(data: dict[str, Any]) -> list[str]:
@@ -266,6 +340,89 @@ def render_decision_ledger(data: dict[str, Any]) -> list[str]:
     ]
 
 
+def truthy_audit_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "used", "supported"}
+
+
+def collect_record_content_evidence(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    explicit_sources = as_list(data.get("record_content_evidence")) + as_list(data.get("record_content_decisions"))
+    for item in explicit_sources:
+        if isinstance(item, dict):
+            rows.append(item)
+
+    for item in as_list(data.get("decision_ledger")):
+        if not isinstance(item, dict):
+            continue
+        has_record_fields = any(
+            key in item
+            for key in (
+                "record_content_decision",
+                "evidence_file_reviewed",
+                "record_content_reviewed",
+                "abstracts_reviewed",
+                "receipt_only_stdout_used_as_decision_evidence",
+                "decision_supported",
+            )
+        )
+        if has_record_fields:
+            rows.append(item)
+    return rows
+
+
+def record_content_evidence_issues(data: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for index, item in enumerate(collect_record_content_evidence(data), start=1):
+        if not truthy_audit_value(item.get("record_content_decision")):
+            continue
+        label = compact_text(item.get("decision_point") or item.get("label") or f"record-content decision {index}")
+        evidence_file = item.get("evidence_file_reviewed") or item.get("evidence_files_reviewed")
+        if evidence_file in (None, "", [], {}):
+            issues.append(f"{label}: record-content decision lacks evidence_file_reviewed")
+        if truthy_audit_value(item.get("receipt_only_stdout_used_as_decision_evidence")):
+            issues.append(f"{label}: receipt-only stdout cannot be used as decision evidence")
+    return issues
+
+
+def render_record_content_evidence(data: dict[str, Any]) -> list[str]:
+    rows = []
+    for item in collect_record_content_evidence(data):
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            [
+                item.get("decision_point") or item.get("label") or item.get("decision") or DEFAULT_STATUS,
+                item.get("evidence_file_reviewed") or item.get("evidence_files_reviewed"),
+                item.get("record_content_reviewed"),
+                item.get("abstracts_reviewed"),
+                item.get("receipt_only_stdout_used_as_decision_evidence"),
+                item.get("decision_supported"),
+            ]
+        )
+    return [
+        "## Record-content evidence reviewed",
+        "",
+        markdown_table(
+            [
+                "Decision",
+                "Evidence file reviewed",
+                "Record content reviewed",
+                "Abstracts reviewed",
+                "Receipt-only stdout used as decision evidence",
+                "Decision supported",
+            ],
+            rows,
+        ),
+        "",
+    ]
+
+
 def render_final_strategy(data: dict[str, Any]) -> list[str]:
     strategy = compact_text(first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"]))
     date_searched = compact_text(first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat()))
@@ -311,6 +468,130 @@ def mesh_review_lines(concept: dict[str, Any], index: int) -> list[str]:
     return lines
 
 
+def fetched_seed_rows(records: Any) -> list[list[Any]]:
+    rows = []
+    for record in as_list(records):
+        if not isinstance(record, dict):
+            rows.append([record, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+            continue
+        rows.append(
+            [
+                record.get("pmid"),
+                record.get("title"),
+                record.get("year"),
+                record.get("publication_types"),
+            ]
+        )
+    return rows
+
+
+def render_pre_gate_seed_triage(data: dict[str, Any]) -> list[str]:
+    triage = as_dict(first_value(data, ["pre_gate_seed_triage", "seed_triage"], {}))
+    lines = ["### Pre-gate seed triage", ""]
+    fields = [
+        ("Requested seed entries", "requested_seed_entries"),
+        ("Normalized unique numeric PMIDs", "normalized_unique_numeric_pmids"),
+        ("Malformed entries excluded", "malformed_entries_excluded"),
+        ("Evidence file reviewed", "evidence_file_reviewed"),
+        ("Record content reviewed", "record_content_reviewed"),
+        ("Abstracts reviewed", "abstracts_reviewed"),
+        ("Receipt-only stdout used as decision evidence", "receipt_only_stdout_used_as_decision_evidence"),
+        ("Decision supported", "decision_supported"),
+        ("Missing/not-found PMIDs excluded", "missing_not_found_pmids_excluded"),
+        ("Retracted seeds", "retracted_seeds"),
+        ("Likely out-of-scope seeds", "likely_out_of_scope_seeds"),
+        ("User/protocol decision when paused", "user_protocol_decision_when_paused"),
+    ]
+    none_when_empty = {"malformed_entries_excluded", "missing_not_found_pmids_excluded"}
+    for label, key in fields:
+        if key == "user_protocol_decision_when_paused":
+            default = "not applicable"
+        elif key in none_when_empty and key in triage:
+            default = "none"
+        else:
+            default = DEFAULT_STATUS
+        lines.append(f"- **{label}:** {compact_text(triage.get(key), default)}")
+    lines.extend(["", "Fetched seed records:", ""])
+    lines.append(markdown_table(["PMID", "Title", "Year", "Publication types"], fetched_seed_rows(triage.get("fetched_seed_records"))))
+    lines.append("")
+    return lines
+
+
+def render_seed_set_expansion(data: dict[str, Any]) -> list[str]:
+    expansion = as_dict(first_value(data, ["seed_set_expansion", "related_seed_expansion"], {}))
+    labelling = expansion.get("labelling") or (
+        "related-set evidence is recorded separately from user-confirmed seed evidence and is not treated as validated recall"
+    )
+    fields = [
+        ("Expansion run", "expansion_run"),
+        ("Link types used", "links_used"),
+        ("Per-link candidate counts", "link_counts"),
+        ("Max per seed", "max_per_seed"),
+        ("Max total", "max_total"),
+        ("Candidate count", "candidate_count"),
+        ("Candidate count before cap", "candidate_count_before_cap"),
+        ("High-overlap candidate PMIDs used for term discovery", "high_overlap_candidate_pmids"),
+        ("How related-set evidence was used", "how_related_set_evidence_was_used"),
+    ]
+    lines = ["### Seed-set expansion (related)", ""]
+    for label, key in fields:
+        default = "not applicable - no usable seeds" if key == "expansion_run" else DEFAULT_STATUS
+        lines.append(f"- **{label}:** {compact_text(expansion.get(key), default)}")
+    lines.append(f"- **Labelling:** {compact_text(labelling)}")
+    lines.append("")
+    return lines
+
+
+def render_relative_recall(data: dict[str, Any]) -> list[str]:
+    recall = as_dict(first_value(data, ["relative_recall", "relative_recall_estimation"], {}))
+    block_rows = []
+    for item in as_list(recall.get("block_recall")):
+        if isinstance(item, dict):
+            block_rows.append(
+                [
+                    item.get("label"),
+                    item.get("retrieved_count"),
+                    item.get("recall_percent"),
+                    item.get("bottleneck"),
+                ]
+            )
+        else:
+            block_rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+
+    miss_rows = []
+    for item in as_list(recall.get("miss_diagnosis")):
+        if isinstance(item, dict):
+            miss_rows.append([item.get("pmid"), item.get("culprit_blocks"), item.get("and_interaction")])
+        else:
+            miss_rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS])
+
+    caveat = recall.get("caveat") or recall.get("note") or (
+        "relative recall is recorded separately from known-item seed validation; a seed-expansion benchmark is a heuristic that can flatter recall"
+    )
+    lines = ["### Relative-recall estimation", ""]
+    fields = [
+        ("Relative-recall check run", "check_run"),
+        ("Benchmark source", "benchmark_source"),
+        ("Benchmark size", "benchmark_size"),
+        ("Relative recall", "relative_recall_percent"),
+        ("Retrieved count", "retrieved_count"),
+        ("Missed count", "missed_count"),
+        ("Retrieved PMIDs", "retrieved_pmids"),
+        ("Missed PMIDs", "missed_pmids"),
+        ("Bottleneck block", "bottleneck_block"),
+    ]
+    none_when_empty = {"retrieved_pmids", "missed_pmids"}
+    for label, key in fields:
+        default = "none" if key in none_when_empty and key in recall else DEFAULT_STATUS
+        lines.append(f"- **{label}:** {compact_text(recall.get(key), default)}")
+    lines.extend(["", "Per-block recall:", ""])
+    lines.append(markdown_table(["Block", "Retrieved count", "Recall percent", "Bottleneck"], block_rows))
+    lines.extend(["", "Misses and culprit blocks:", ""])
+    lines.append(markdown_table(["PMID", "Culprit blocks", "AND interaction"], miss_rows))
+    lines.extend(["", f"- **Caveat:** {compact_text(caveat)}", ""])
+    return lines
+
+
 def render_ncbi_work(data: dict[str, Any]) -> list[str]:
     lines = ["## NCBI CLI work performed", "", "### MeSH descriptors considered (per concept)", ""]
     concepts = concept_rows(data)
@@ -331,10 +612,11 @@ def render_ncbi_work(data: dict[str, Any]) -> list[str]:
             "",
             f"- {compact_text(seed_mesh, 'True seed-derived MeSH was not available.')}",
             "",
-            "### MeSH derived from PubMed query translations",
-            "",
         ]
     )
+    lines.extend(render_pre_gate_seed_triage(data))
+    lines.extend(render_seed_set_expansion(data))
+    lines.extend(["### MeSH derived from PubMed query translations", ""])
 
     atm_rows = []
     for item in as_list(first_value(data, ["atm_translations", "pubmed_query_translations"], [])):
@@ -358,6 +640,7 @@ def render_ncbi_work(data: dict[str, Any]) -> list[str]:
                 check_rows.append([item, DEFAULT_STATUS])
     lines.append(markdown_table(["Block / query tested", "Result count"], check_rows))
     lines.append("")
+    lines.extend(render_relative_recall(data))
     return lines
 
 
@@ -381,6 +664,8 @@ def render_tiab_expansion(data: dict[str, Any]) -> list[str]:
         ("Proximity expressions tested but rejected", "proximity_expressions_tested_but_rejected"),
         ("Wildcard stems added", "wildcard_stems_added"),
         ("Wildcard stems tested but rejected", "wildcard_stems_tested_but_rejected"),
+        ("Zero-hit terms removed (documented)", "zero_hit_terms_removed"),
+        ("Zero-hit terms kept after user choice", "zero_hit_terms_kept"),
     ]
     lines = ["## Title/abstract, proximity, and wildcard expansion log", ""]
     for label, key in fields:
@@ -407,6 +692,53 @@ def render_rationale(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_press_coverage(data: dict[str, Any]) -> list[str]:
+    raw = first_value(data, ["press_2015_element_coverage", "press_coverage"], None)
+    by_index: dict[int, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                value = {"coverage": value}
+            digits = re.findall(r"\d+", str(key))
+            if digits:
+                idx = int(digits[0]) - 1
+                if 0 <= idx < len(PRESS_2015_ELEMENTS):
+                    by_index[idx] = value
+    elif isinstance(raw, list):
+        for index, value in enumerate(raw):
+            if isinstance(value, dict):
+                digits = re.findall(r"\d+", str(value.get("element", "")))
+                idx = int(digits[0]) - 1 if digits else index
+            else:
+                idx = index
+                value = {"coverage": value}
+            if 0 <= idx < len(PRESS_2015_ELEMENTS):
+                by_index[idx] = value
+
+    rows = []
+    for index, element in enumerate(PRESS_2015_ELEMENTS):
+        item = by_index.get(index, {})
+        coverage = item.get("coverage") or item.get("status")
+        notes = item.get("notes") or item.get("supporting_section") or item.get("note")
+        rows.append([element, compact_text(coverage), compact_text(notes)])
+
+    return [
+        "## PRESS 2015 element coverage",
+        "",
+        "Map the audit's QA checks to the six PRESS 2015 elements "
+        "([McGowan et al. 2016](https://doi.org/10.1016/j.jclinepi.2016.01.021)). "
+        "For each element, state `addressed`, `not applicable`, or `not performed` "
+        "and link to the supporting section in this audit.",
+        "",
+        markdown_table(["PRESS 2015 element", "Coverage", "Notes / supporting section"], rows),
+        "",
+        "Peer review by an information specialist is still required before the strategy is run "
+        "as a final search; this self-mapping is a coverage record, not a substitute for external "
+        "PRESS peer review.",
+        "",
+    ]
+
+
 def render_seed_validation(data: dict[str, Any]) -> list[str]:
     seed = as_dict(data.get("seed_validation"))
     pmids = as_list(seed.get("seed_pmids_tested") or data.get("seed_pmids"))
@@ -421,7 +753,7 @@ def render_seed_validation(data: dict[str, Any]) -> list[str]:
             [
                 f"- Seed PMIDs tested: {compact_text(pmids)}",
                 f"- Retrieved: {compact_text(seed.get('retrieved'))}",
-                f"- Missed: {compact_text(seed.get('missed'))}",
+                f"- Missed: {compact_text(seed.get('missed'), 'none')}",
                 f"- Reason for misses: {compact_text(seed.get('reason_for_misses'), 'none')}",
                 f"- Revisions made after seed testing: {compact_text(seed.get('revisions_made_after_seed_testing'))}",
                 f"- Seeds judged out of scope, if any: {compact_text(seed.get('seeds_judged_out_of_scope'), 'none')}",
@@ -466,6 +798,7 @@ def render_reporting_notes(data: dict[str, Any], output_path: Path | None = None
         ("Restrictions and justifications", notes.get("restrictions_and_justifications")),
         ("Audit Markdown file", output_text),
         ("Audit workbook", notes.get("audit_workbook") or "not exported"),
+        ("Run manifest", notes.get("run_manifest") or notes.get("run_manifest_path")),
         ("Remaining caveats", notes.get("remaining_caveats")),
         ("Other databases", notes.get("other_databases") or "Database-specific strategies for other sources were not requested / not built / built separately."),
     ]
@@ -478,19 +811,163 @@ def render_reporting_notes(data: dict[str, Any], output_path: Path | None = None
     return lines
 
 
+def concept_block_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    blocks = first_value(data, ["concept_blocks", "blocks"], [])
+    return [item for item in as_list(blocks) if isinstance(item, dict) and (item.get("query") or item.get("label"))]
+
+
+def hash_combination(combination: Any, n_blocks: int) -> str:
+    """Render a combination such as '1 AND 2' as '#1 AND #2'. Default: all blocks AND-ed."""
+    text = compact_text(combination, "")
+    if not text or text == DEFAULT_STATUS:
+        return " AND ".join(f"#{i}" for i in range(1, n_blocks + 1))
+    return re.sub(r"#?\b(\d+)\b", lambda m: f"#{m.group(1)}", text)
+
+
+def build_line_set(data: dict[str, Any]) -> tuple[list[list[str]], list[str]]:
+    """Return (table_rows, consistency_issues) for the numbered PubMed line set.
+
+    Rows are 4-column [Line, Concept, Search query, Results]. The consistency guard flags a
+    block whose query text does not appear in final_strategy - a sign the delivered strategy
+    drifted from the blocks the line set is built from.
+    """
+    blocks = concept_block_rows(data)
+    if not blocks:
+        return [], []
+    rows: list[list[str]] = []
+    for index, block in enumerate(blocks, start=1):
+        rows.append([
+            f"#{index}",
+            compact_text(block.get("label"), f"Concept {index}"),
+            compact_text(block.get("query")),
+            compact_text(block.get("count")),
+        ])
+    n = len(blocks)
+    final_count = compact_text(first_value(data, ["result_count", "final_count", "topic_only_count"]))
+    rows.append([f"#{n + 1}", "Topic (combined)", hash_combination(data.get("combination"), n), final_count])
+    filt = as_dict(data.get("methodological_filter"))
+    if filt.get("query"):
+        rows.append([f"#{n + 2}", "Methodological filter", compact_text(filt.get("query")), compact_text(filt.get("count"))])
+        rows.append([
+            f"#{n + 3}",
+            "Topic + filter",
+            f"#{n + 1} AND #{n + 2}",
+            compact_text(first_value(data, ["topic_plus_filter_count", "filter_count"])),
+        ])
+
+    issues: list[str] = []
+    final_strategy = compact_text(first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"]), "")
+    if final_strategy and final_strategy != DEFAULT_STATUS:
+        norm_final = re.sub(r"\s+", " ", final_strategy).lower()
+        for index, block in enumerate(blocks, start=1):
+            query = compact_text(block.get("query"), "")
+            if query and query != DEFAULT_STATUS and re.sub(r"\s+", " ", query).lower() not in norm_final:
+                issues.append(f"block #{index} query is not present in the final strategy (possible line-set drift)")
+    return rows, issues
+
+
+def render_line_set(data: dict[str, Any]) -> list[str]:
+    rows, issues = build_line_set(data)
+    if not rows:
+        return []
+    date_searched = compact_text(
+        first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat())
+    )
+    lines = [
+        "## Search strategy (numbered line set)",
+        "",
+        f"PubMed, searched {date_searched}. Line numbers (`#n`) reference earlier lines, as in the PubMed Advanced Search history.",
+        "",
+        markdown_table(["Line", "Concept", "Search query", "Results"], rows),
+        "",
+    ]
+    if issues:
+        lines.append("**Line-set consistency warnings:**")
+        lines.extend(f"- {issue}" for issue in issues)
+        lines.append("")
+    return lines
+
+
+def render_prisma_s_appendix(data: dict[str, Any]) -> list[str]:
+    notes = as_dict(data.get("reporting_notes"))
+    filt = as_dict(data.get("methodological_filter"))
+    date_searched = compact_text(
+        first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat())
+    )
+    final_strategy = compact_text(first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"]))
+    if filt.get("query") or filt.get("source"):
+        filter_text = (
+            f"{compact_text(filt.get('source'), 'validated filter')} "
+            f"({compact_text(filt.get('version'), 'version not stated')}), PubMed interface; "
+            f"adapted: {compact_text(filt.get('adapted'), 'no')}."
+        )
+    else:
+        filter_text = "No methodological search filter was applied."
+    multi_db = compact_text(
+        notes.get("multi_database") or notes.get("other_databases"),
+        "Out of scope for this strategy; the protocol should specify additional databases, each needing a translated strategy.",
+    )
+    limits = compact_text(
+        notes.get("restrictions_and_justifications") or notes.get("limits"),
+        "No limits or restrictions were applied.",
+    )
+    prior_work = compact_text(notes.get("prior_work"), "not applicable")
+    updates = compact_text(notes.get("updates"), "No updates planned.")
+    peer = compact_text(
+        first_value(data, ["peer_review_status", "reporting_notes.peer_review"]),
+        "Not yet peer reviewed; per PRESS (McGowan et al., 2016) it should be peer reviewed by a second information specialist before being run.",
+    )
+    return [
+        "## PRISMA-S appendix (PubMed)",
+        "",
+        "Paste-ready reporting block; items follow PRISMA-S 2021 (Rethlefsen et al., 2021). See `references/prisma-s-reporting.md`.",
+        "",
+        "- **Database (Item 1):** PubMed (NLM interface, https://pubmed.ncbi.nlm.nih.gov/).",
+        f"- **Multi-database searching (Item 2):** {multi_db}",
+        "- **Full search strategy (Item 8):** the numbered line set above; final combined strategy:",
+        "",
+        "```text",
+        final_strategy,
+        "```",
+        "",
+        f"- **Limits and restrictions (Item 9):** {limits}",
+        f"- **Search filters (Item 10):** {filter_text}",
+        f"- **Prior work (Item 11):** {prior_work}",
+        f"- **Updates (Item 12):** {updates}",
+        f"- **Date of final search (Item 13):** {date_searched}",
+        f"- **Peer review (Item 14):** {peer}",
+        "- **Total records and deduplication (Items 15-16):** to be reported by the review team after the search is run.",
+        "",
+    ]
+
+
+def render_appendix_document(data: dict[str, Any]) -> str:
+    """Standalone paste-ready artifact: just the line set + PRISMA-S appendix."""
+    title = compact_text(first_value(data, ["title", "topic", "review_question"], "PubMed search"))
+    lines = [f"# {title} - search strategy appendix", ""]
+    lines.extend(render_line_set(data))
+    lines.extend(render_prisma_s_appendix(data))
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None) -> str:
     title = compact_text(first_value(data, ["title", "topic", "review_question"], "PubMed search audit"))
     lines = [f"# {title}", ""]
     lines.extend(render_search_structure(data))
+    lines.extend(render_stage_trace(data))
     lines.extend(render_user_decisions(data))
     lines.extend(render_decision_ledger(data))
+    lines.extend(render_record_content_evidence(data))
     lines.extend(render_final_strategy(data))
+    lines.extend(render_line_set(data))
     lines.extend(render_ncbi_work(data))
     lines.extend(render_tiab_expansion(data))
     lines.extend(render_rationale(data))
+    lines.extend(render_press_coverage(data))
     lines.extend(render_seed_validation(data))
     lines.extend(render_peer_review(data))
     lines.extend(render_reporting_notes(data, output_path))
+    lines.extend(render_prisma_s_appendix(data))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -528,6 +1005,10 @@ def write_audit_markdown(
 ) -> dict[str, Any]:
     initial_path = output_path_from_data(data, output)
     path = resolve_existing_path(initial_path, if_exists)
+    record_issues = record_content_evidence_issues(data)
+    if record_issues:
+        preview = "; ".join(record_issues[:5])
+        raise AuditMarkdownError(f"Record-content evidence validation failed: {preview}")
     markdown = render_audit_markdown(data, path)
     placeholders = unresolved_placeholders(markdown)
     if placeholders and not allow_placeholders:
@@ -542,6 +1023,39 @@ def write_audit_markdown(
         "bytes": path.stat().st_size,
         "placeholder_count": len(placeholders),
         "section_count": markdown.count("\n## "),
+    }
+
+
+def validate_audit_markdown(
+    *,
+    data: dict[str, Any],
+    output: str | None,
+    allow_placeholders: bool,
+) -> dict[str, Any]:
+    path = output_path_from_data(data, output)
+    record_issues = record_content_evidence_issues(data)
+    markdown = render_audit_markdown(data, path)
+    placeholders = unresolved_placeholders(markdown)
+    appendix_markdown = render_appendix_document(data)
+    appendix_placeholders = unresolved_placeholders(appendix_markdown)
+    _, line_set_issues = build_line_set(data)
+    issues = []
+    issues.extend(record_issues)
+    issues.extend(line_set_issues)
+    if placeholders and not allow_placeholders:
+        issues.append(f"unresolved audit placeholders: {', '.join(placeholders[:5])}")
+    if appendix_placeholders and not allow_placeholders:
+        issues.append(f"unresolved appendix placeholders: {', '.join(appendix_placeholders[:5])}")
+    return {
+        "ok": not issues,
+        "operation": "audit-markdown-validate",
+        "output_path": str(path),
+        "placeholder_count": len(placeholders),
+        "appendix_placeholder_count": len(appendix_placeholders),
+        "section_count": markdown.count("\n## "),
+        "line_set_issue_count": len(line_set_issues),
+        "record_content_issue_count": len(record_issues),
+        "issues": issues,
     }
 
 
@@ -562,11 +1076,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--if-exists",
         choices=["fail", "suffix", "overwrite"],
-        default="suffix",
-        help="How to handle an existing output path. Default: suffix.",
+        default="fail",
+        help="How to handle an existing output path. Default: fail.",
+    )
+    parser.add_argument(
+        "--overlay-json",
+        help="Optional small authored JSON object to deep-merge into the audit scaffold before rendering.",
     )
     parser.add_argument("--allow-placeholders", action="store_true", help="Allow unresolved placeholder-like text.")
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate merged audit JSON, placeholders, evidence attestations, line-set consistency, and appendix readiness without writing Markdown.",
+    )
     parser.add_argument("--print-report", action="store_true", help="Print the full Markdown report instead of the compact JSON receipt.")
+    parser.add_argument(
+        "--emit-appendix",
+        help="Also write a standalone paste-ready appendix (numbered line set + PRISMA-S block) to this path.",
+    )
     return parser
 
 
@@ -575,12 +1102,33 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         data = load_json(args.audit_json)
+        if args.overlay_json:
+            data = merge_overlay(data, load_json(args.overlay_json))
+        if args.validate_only:
+            summary = validate_audit_markdown(
+                data=data,
+                output=args.output,
+                allow_placeholders=args.allow_placeholders,
+            )
+            write_json(summary)
+            return 0 if summary["ok"] else 1
         summary = write_audit_markdown(
             data=data,
             output=args.output,
             if_exists=args.if_exists,
             allow_placeholders=args.allow_placeholders,
         )
+        if args.emit_appendix:
+            appendix_markdown = render_appendix_document(data)
+            appendix_placeholders = unresolved_placeholders(appendix_markdown)
+            if appendix_placeholders and not args.allow_placeholders:
+                raise AuditMarkdownError(
+                    f"Unresolved appendix placeholders found: {', '.join(appendix_placeholders[:5])}"
+                )
+            appendix_path = resolve_existing_path(Path(args.emit_appendix), args.if_exists)
+            appendix_path.parent.mkdir(parents=True, exist_ok=True)
+            appendix_path.write_text(appendix_markdown, encoding="utf-8")
+            summary["appendix_path"] = str(appendix_path)
         if args.print_report:
             sys.stdout.write(Path(summary["output_path"]).read_text(encoding="utf-8"))
         else:

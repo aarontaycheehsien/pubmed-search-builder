@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -23,11 +24,22 @@ from xml.sax.saxutils import escape as xml_escape
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_EMAIL = ""
 DEFAULT_TOOL = "codex-search-strategy-check"
+REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_RETRIES = 3
+REQUEST_BACKOFF_SECONDS = 1.0
+TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 INLINE_QUERY_WARNING_LENGTH = 1400
 HUGE_RETMAX_WARNING = 1000
 QUERY_TRANSLATION_MAX_ISSUES = 5
 QUERY_TRANSLATION_EVIDENCE_LIMIT = 240
 ATM_EXPANSION_RATIO_WARNING = 4.0
+RELATED_MAX_PER_SEED = 20
+RELATED_MAX_TOTAL = 200
+RELATED_LINKNAMES = {
+    "similar": "pubmed_pubmed",
+    "citedin": "pubmed_pubmed_citedin",
+    "refs": "pubmed_pubmed_refs",
+}
 ENV_FILE_CACHE: dict[str, str] | None = None
 API_KEY_ASSIGNMENT_PATTERN = re.compile(
     r"\b(?P<name>NCBI_API_KEY|api[_-]?key)\s*=\s*(?P<value>[^\s&),;]+)",
@@ -170,15 +182,113 @@ VARIANT_METADATA_FIELDS = (
     "decision_reason",
 )
 SEED_VALIDATION_WARNING = "Seed PMID retrieval is known-item validation, not true search sensitivity."
+RECALL_UID_CHUNK = 100
+BENCHMARK_QUERY_CAP = 500
+RELATIVE_RECALL_NOTE = (
+    "Relative recall is the share of a benchmark relevant set the strategy retrieves; it is "
+    "relative to that benchmark, not absolute search sensitivity. Against a seed-expansion "
+    "benchmark (e.g. a related-articles/citation set) it is a heuristic that can flatter recall, "
+    "because the benchmark is strategy-adjacent. Against an independent, hand-screened gold "
+    "standard (e.g. the included studies of a prior review) it is a legitimate relative-recall "
+    "estimate but still not absolute sensitivity, since no negatives are screened. A benchmark "
+    "PMID that is not in PubMed is indistinguishable from a genuine miss. Do not use a recall "
+    "number to silently narrow a recall-first strategy."
+)
 NO_LABELLED_SAMPLE_NOTE = "not estimable; no labelled sample supplied"
 ZERO_RELEVANT_SAMPLE_NOTE = "undefined/infinite; zero relevant labelled records"
 TRUE_RELEVANCE_VALUES = {"1", "true", "yes", "y", "relevant", "include", "included"}
 FALSE_RELEVANCE_VALUES = {"0", "false", "no", "n", "irrelevant", "exclude", "excluded", "not relevant"}
 SAMPLE_METADATA_KEYS = {"sample_description", "description", "method", "sampling_method", "note", "notes"}
 
+DEFAULT_TERM_RANK_MAX_TERMS = 40
+TERM_RANK_RELEVANT_QUERY_CAP = 200
+PUBMED_TOTAL_ESTIMATE = 38_000_000
+TERM_RANK_NOISE_BACKGROUND = 100_000
+TERM_RANK_NOISE_COVERAGE = 0.5
+TERM_RANK_FIELDS = ("tiab", "mesh")
+TERM_RANK_CAVEAT = (
+    "Term-rank scores are descriptive term-discovery aids derived from a relevant/seed record set, "
+    "not validated search recall. coverage = relevant_df / relevant_record_count. "
+    "lift = coverage / (background_count / pubmed_total_estimate) and uses an approximate corpus "
+    "size, so lift is meaningful only for relative ranking, not as an absolute statistic. "
+    "Treat high-coverage, high-lift terms as strong [tiab]/[Mesh] candidates and verify in PubMed. "
+    "Structured-abstract section labels (e.g. OBJECTIVES, RESULTS), statistical fragments "
+    "(e.g. 'p 0', '95 ci'), and non-topical MeSH (check tags such as Humans/Female and common "
+    "geographic descriptors such as Queensland) are excluded from candidates before scoring."
+)
+
+# Term-rank noise classes dropped from candidates before scoring (see term_rank_noise_reason).
+# Stored as normalize_for_match()-normalized forms (lowercase, alnum tokens, single spaces).
+STRUCTURED_ABSTRACT_HEADINGS = {
+    "background", "objective", "objectives", "aim", "aims", "goal", "goals", "purpose",
+    "introduction", "importance", "rationale", "context",
+    "method", "methods", "methodology", "materials and methods", "patients and methods",
+    "design", "study design", "setting", "settings",
+    "participant", "participants", "subjects",
+    "intervention", "interventions", "exposure", "exposures",
+    "measurement", "measurements", "main outcome measures", "main outcome measure",
+    "outcome", "outcomes", "outcome measures", "main results",
+    "result", "results", "finding", "findings",
+    "conclusion", "conclusions", "conclusions and relevance", "interpretation", "discussion",
+    "data sources", "study selection", "data extraction", "data synthesis", "data collection",
+    "eligibility criteria", "selection criteria", "search strategy",
+    "limitation", "limitations",
+    "trial registration", "clinical trial registration", "registration",
+    "funding", "keywords",
+}
+
+NON_TOPICAL_TERMS = {
+    # MeSH check tags (complete).
+    "humans", "animals", "male", "female", "pregnancy",
+    "infant", "infant newborn", "child", "child preschool", "adolescent",
+    "adult", "young adult", "middle aged", "aged", "aged 80 and over",
+    # Common geographic descriptors (partial; rare place names may still slip through).
+    "africa", "asia", "europe", "north america", "south america", "australia",
+    "antarctica", "oceania", "americas", "latin america", "caribbean region",
+    "mediterranean region", "scandinavian and nordic countries",
+    "united states", "united states of america", "usa", "united kingdom", "great britain",
+    "canada", "new zealand", "china", "india", "japan", "south korea", "republic of korea",
+    "germany", "france", "italy", "spain", "netherlands", "sweden", "norway", "denmark",
+    "finland", "switzerland", "belgium", "austria", "ireland", "portugal", "greece", "poland",
+    "russia", "brazil", "mexico", "argentina", "chile", "colombia", "south africa", "nigeria",
+    "kenya", "ethiopia", "ghana", "egypt", "israel", "saudi arabia", "iran", "iraq", "turkey",
+    "pakistan", "bangladesh", "sri lanka", "nepal", "indonesia", "malaysia", "philippines",
+    "thailand", "vietnam", "singapore", "taiwan", "hong kong",
+    "queensland", "new south wales", "victoria", "western australia", "south australia",
+    "tasmania", "northern territory", "england", "scotland", "wales", "northern ireland",
+    "california", "texas", "florida", "new york", "ontario", "quebec", "british columbia",
+}
+
+# >=3-letter statistical markers that must not count as a "content" token in the fragment check.
+STAT_WORDS = {"iqr", "sem", "aor"}
+
+# Section-label words that are never topical, so a tiab phrase beginning or ending with one is a
+# structured-abstract artifact (e.g. "results copd", "objectives to assess"). Deliberately a
+# conservative subset of STRUCTURED_ABSTRACT_HEADINGS: words that double as topical modifiers
+# (intervention, exposure, outcome, design, setting, participants, subjects, context) are excluded
+# so phrases like "early intervention" survive.
+BOUNDARY_NOISE_TOKENS = {
+    "background", "objective", "objectives", "aim", "aims", "goal", "goals", "purpose",
+    "introduction", "importance", "rationale",
+    "method", "methods", "methodology",
+    "result", "results", "finding", "findings",
+    "conclusion", "conclusions", "interpretation", "discussion",
+    "limitation", "limitations", "registration", "funding", "keywords",
+}
+
 
 class PubMedError(Exception):
     pass
+
+
+def retry_delay(attempt: int) -> float:
+    # exponential backoff with light jitter to avoid synchronized retries during sweeps
+    base = REQUEST_BACKOFF_SECONDS * (2 ** attempt)
+    return base + random.uniform(0, REQUEST_BACKOFF_SECONDS)
+
+
+def transient_http_error(exc: urllib.error.HTTPError) -> bool:
+    return exc.code in TRANSIENT_HTTP_STATUS
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -314,17 +424,20 @@ def parse_batch_queries(raw: str) -> list[dict[str, str]]:
         except json.JSONDecodeError as exc:
             raise PubMedError(f"Could not parse batch JSON: {exc}") from exc
         if isinstance(data, dict):
-            items = [{"label": str(label), "query": str(query)} for label, query in data.items()]
+            items = []
+            for label, query in data.items():
+                assert_plain_query(str(label), query)
+                items.append({"label": str(label), "query": str(query)})
         elif isinstance(data, list):
             items = []
             for index, item in enumerate(data, start=1):
                 if isinstance(item, str):
+                    assert_plain_query(f"query_{index}", item)
                     items.append({"label": f"query_{index}", "query": item})
                 elif isinstance(item, dict):
-                    query = item.get("query")
-                    if query is None:
-                        raise PubMedError(f"Batch item {index} is missing a query field.")
                     label = item.get("label") or item.get("name") or f"query_{index}"
+                    query = item.get("query")
+                    assert_plain_query(str(label), query)
                     items.append({"label": str(label), "query": str(query)})
                 else:
                     raise PubMedError(f"Batch item {index} must be a string or object.")
@@ -452,6 +565,7 @@ def query_translation_drift_hook(
     query_translation: str,
     translations: object,
     warnings: object,
+    errors: object = None,
 ) -> dict[str, object]:
     issues: list[dict[str, str]] = []
 
@@ -474,6 +588,39 @@ def query_translation_drift_hook(
                 "PubMed reported a query translation warning; review the translated query before relying on the count.",
                 item,
             )
+
+    if isinstance(errors, dict):
+        phrase_items = normalize_warning_items(errors.get("phrasesnotfound"))
+        field_items = normalize_warning_items(errors.get("fieldsnotfound"))
+    elif errors:
+        phrase_items = normalize_warning_items(errors)
+        field_items = []
+    else:
+        phrase_items = []
+        field_items = []
+
+    not_found = list(dict.fromkeys(phrase_items))
+    if not_found:
+        evidence = ", ".join(not_found)
+        if len(phrase_items) > len(not_found):
+            evidence += f" ({len(phrase_items)} total occurrences)"
+        add_translation_issue(
+            issues,
+            "warning",
+            "phrases_not_found",
+            "PubMed found no records for these terms (zero hits). The default is to remove and document them (removal is recall-neutral since they match no records); offer to keep any as an intentional zero-hit term. First check spelling, hyphenation, and spacing variants, because a not-found term may be a typo for a real term rather than genuinely absent.",
+            evidence,
+        )
+
+    fields_not_found = list(dict.fromkeys(field_items))
+    if fields_not_found:
+        add_translation_issue(
+            issues,
+            "warning",
+            "fields_not_found",
+            "PubMed did not recognize these field tags, so part of the query may be silently mis-scoped; fix the field tag.",
+            ", ".join(fields_not_found),
+        )
 
     tags = field_tags(query)
     atm_sources = translation_sources(translations)
@@ -712,17 +859,36 @@ class NcbiClient:
             user_agent = f"{user_agent} ({self.email})"
         req.add_header("User-Agent", user_agent)
 
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                data = response.read()
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")[:2000]
-            raise PubMedError(f"NCBI HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise PubMedError(f"NCBI request failed: {exc.reason}") from exc
+        for attempt in range(REQUEST_RETRIES + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                    data = response.read()
+                self._last_request = time.monotonic()
+                return data
+            except urllib.error.HTTPError as exc:
+                if not transient_http_error(exc) or attempt == REQUEST_RETRIES:
+                    body = exc.read().decode("utf-8", errors="replace")[:2000]
+                    raise PubMedError(
+                        f"NCBI HTTP {exc.code} after {attempt + 1} attempt(s): {body}"
+                    ) from exc
+            except urllib.error.URLError as exc:
+                if attempt == REQUEST_RETRIES:
+                    raise PubMedError(
+                        f"NCBI request failed after {attempt + 1} attempt(s): {exc.reason}"
+                    ) from exc
+            except TimeoutError as exc:
+                if attempt == REQUEST_RETRIES:
+                    raise PubMedError(
+                        f"NCBI request timed out after {attempt + 1} attempt(s): {exc}"
+                    ) from exc
+            except OSError as exc:
+                if attempt == REQUEST_RETRIES:
+                    raise PubMedError(
+                        f"NCBI request failed after {attempt + 1} attempt(s): {exc}"
+                    ) from exc
+            time.sleep(retry_delay(attempt))
 
-        self._last_request = time.monotonic()
-        return data
+        raise PubMedError("NCBI request failed: retries exhausted.")
 
     def metadata(self) -> dict[str, object]:
         return {
@@ -750,6 +916,7 @@ def esearch(client: NcbiClient, query: str, retmax: int, retstart: int, sort: st
     query_translation = result.get("querytranslation", "")
     translations = result.get("translationset", [])
     warnings = result.get("warninglist", {})
+    errors = result.get("errorlist", {})
     return {
         "query": query,
         "count": int(result.get("count", 0)),
@@ -759,7 +926,8 @@ def esearch(client: NcbiClient, query: str, retmax: int, retstart: int, sort: st
         "query_translation": query_translation,
         "translations": translations,
         "warnings": warnings,
-        "query_translation_hook": query_translation_drift_hook(query, query_translation, translations, warnings),
+        "errors": errors,
+        "query_translation_hook": query_translation_drift_hook(query, query_translation, translations, warnings, errors),
         "request_info": client.metadata(),
     }
 
@@ -1043,6 +1211,7 @@ def mine_seed_pmids(
             {
                 "pmid": record.get("pmid", ""),
                 "title": record.get("title", ""),
+                "abstract": record.get("abstract", ""),
                 "journal": record.get("journal", ""),
                 "year": record.get("year", ""),
                 "doi": record.get("doi", ""),
@@ -1079,9 +1248,120 @@ def efetch(client: NcbiClient, pmids: list[str]) -> dict[str, object]:
     raw = client.request("efetch.fcgi", params, method="POST" if len(pmids) > 50 else "GET")
     root = ET.fromstring(raw)
     records = [parse_article(article) for article in root.findall("./PubmedArticle")]
+    requested_pmids = [str(pmid) for pmid in pmids]
+    found_pmids = [str(record.get("pmid", "")) for record in records if record.get("pmid")]
+    found_set = set(found_pmids)
     return {
-        "requested_pmids": pmids,
+        "operation": "fetch",
+        "requested_pmids": requested_pmids,
+        "found_pmids": found_pmids,
+        "missing_pmids": [pmid for pmid in requested_pmids if pmid not in found_set],
         "records": records,
+        "request_info": client.metadata(),
+    }
+
+
+def elink_neighbors(client: NcbiClient, seed_pmid: str, linkname: str) -> list[dict[str, object]]:
+    """Return PubMed neighbors for one seed via eLink as [{"pmid", "score"}] rows."""
+    params = {
+        "dbfrom": "pubmed",
+        "db": "pubmed",
+        "id": str(seed_pmid),
+        "linkname": linkname,
+        "retmode": "json",
+    }
+    # Similarity scores are only returned for the "similar articles" set.
+    if linkname == "pubmed_pubmed":
+        params["cmd"] = "neighbor_score"
+    raw = client.request("elink.fcgi", params, method="GET")
+    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    neighbors: list[dict[str, object]] = []
+    for linkset in payload.get("linksets", []) or []:
+        for linksetdb in linkset.get("linksetdbs", []) or []:
+            if linksetdb.get("linkname") != linkname:
+                continue
+            for link in linksetdb.get("links", []) or []:
+                if isinstance(link, dict):
+                    pmid = str(link.get("id", "")).strip()
+                    score_value = link.get("score")
+                    score = int(score_value) if str(score_value).isdigit() else None
+                else:
+                    pmid = str(link).strip()
+                    score = None
+                if pmid:
+                    neighbors.append({"pmid": pmid, "score": score})
+    return neighbors
+
+
+def related_pmids(
+    client: NcbiClient,
+    pmids: list[str],
+    *,
+    links: list[str],
+    max_per_seed: int,
+    max_total: int,
+) -> dict[str, object]:
+    seeds = [str(pmid) for pmid in pmids]
+    seed_set = set(seeds)
+    # candidate pmid -> aggregated provenance
+    candidates: dict[str, dict[str, object]] = {}
+    link_counts: dict[str, int] = {name: 0 for name in links}
+
+    for linkname in links:
+        eutils_linkname = RELATED_LINKNAMES[linkname]
+        for seed in seeds:
+            neighbors = elink_neighbors(client, seed, eutils_linkname)
+            kept = 0
+            for neighbor in neighbors:
+                pmid = str(neighbor.get("pmid", ""))
+                if not pmid or pmid in seed_set:
+                    continue
+                if kept >= max_per_seed:
+                    break
+                kept += 1
+                link_counts[linkname] += 1
+                entry = candidates.get(pmid)
+                if entry is None:
+                    entry = {
+                        "pmid": pmid,
+                        "via": [],
+                        "seed_sources": [],
+                        "similarity_score": None,
+                        "seed_overlap_count": 0,
+                    }
+                    candidates[pmid] = entry
+                if linkname not in entry["via"]:
+                    entry["via"].append(linkname)
+                if seed not in entry["seed_sources"]:
+                    entry["seed_sources"].append(seed)
+                    entry["seed_overlap_count"] = len(entry["seed_sources"])
+                score = neighbor.get("score")
+                if score is not None:
+                    current = entry["similarity_score"]
+                    if current is None or int(score) > int(current):
+                        entry["similarity_score"] = int(score)
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda item: (
+            -int(item.get("seed_overlap_count", 0)),
+            -(int(item["similarity_score"]) if item.get("similarity_score") is not None else -1),
+            str(item.get("pmid", "")),
+        ),
+    )
+    capped = ranked[:max_total]
+
+    return {
+        "operation": "related",
+        "seed_pmids": seeds,
+        "links_used": links,
+        "max_per_seed": max_per_seed,
+        "max_total": max_total,
+        "link_counts": link_counts,
+        "candidate_count": len(capped),
+        "candidate_count_before_cap": len(ranked),
+        "candidate_pmids": capped,
+        "note": SEED_VALIDATION_WARNING,
         "request_info": client.metadata(),
     }
 
@@ -1091,6 +1371,7 @@ def sample(client: NcbiClient, query: str, retmax: int, sort: str | None) -> dic
     pmids = list(search_result.get("pmids", []))
     fetch_result = efetch(client, pmids) if pmids else {"requested_pmids": [], "records": []}
     return {
+        "operation": "sample",
         "search": search_result,
         "records": fetch_result.get("records", []),
         "request_info": client.metadata(),
@@ -1115,6 +1396,236 @@ def validate(client: NcbiClient, query: str, pmids: list[str]) -> dict[str, obje
         "query_translation_hook": search_result.get("query_translation_hook", {}),
         "request_info": client.metadata(),
     }
+
+
+def retrieve_against_pmids(client: NcbiClient, query: str, pmids: list[str]) -> set[str]:
+    """Return the subset of pmids retrieved by query, chunking the uid block for large sets."""
+    retrieved: set[str] = set()
+    for start in range(0, len(pmids), RECALL_UID_CHUNK):
+        chunk = pmids[start : start + RECALL_UID_CHUNK]
+        if not chunk:
+            continue
+        uid_block = " OR ".join(f"{pmid}[uid]" for pmid in chunk)
+        combined = f"({query}) AND ({uid_block})"
+        search_result = esearch(client, combined, retmax=len(chunk), retstart=0, sort=None)
+        retrieved.update(str(pmid) for pmid in search_result.get("pmids", []))
+    return retrieved
+
+
+def load_benchmark_or_blocks_json(path: str) -> object:
+    """Load JSON that may be an object (related/mine output) or a bare list."""
+    try:
+        return json.loads(read_text_source(path))
+    except json.JSONDecodeError as exc:
+        raise PubMedError(f"Could not parse JSON file {path}: {exc}") from exc
+
+
+POWERSHELL_OBJECT_SIGNATURES = (
+    "@{",
+    "LastWriteTime",
+    "LastAccessTime",
+    "CreationTime",
+    "DirectoryName",
+    "PSChildName",
+    "PSParentPath",
+    "PSProvider",
+    "VersionInfo",
+    "System.IO.",
+)
+
+
+def assert_plain_query(label: str, query: object) -> None:
+    """Reject a query value that is a serialized object/file-metadata blob instead of a plain PubMed
+    query string (the usual cause is PowerShell ConvertTo-Json of a file/object). Shared by the
+    recall block validator and the variants/batch query parsers."""
+    if isinstance(query, (dict, list)):
+        raise PubMedError(
+            f"Query {label!r} is a non-string {type(query).__name__}; a query must be plain PubMed query "
+            "text. An object was serialized into the query field - in PowerShell, Get-Item/Get-ChildItem "
+            'piped to ConvertTo-Json does this. Write each entry as {"label": "...", "query": "<query text>"}.'
+        )
+    text = "" if query is None else str(query)
+    if not text.strip():
+        raise PubMedError(
+            f"Query {label!r} is missing or empty. Each entry needs a non-empty PubMed query string; if the "
+            "file was built in PowerShell, make sure an object was not serialized in place of the query text."
+        )
+    signature = next((sig for sig in POWERSHELL_OBJECT_SIGNATURES if sig in text), None)
+    if signature is not None:
+        raise PubMedError(
+            f"Query {label!r} looks like serialized object/file metadata, not a PubMed query "
+            f"(found {signature!r} in {compact_evidence(text)!r}). This usually means PowerShell serialized "
+            "a file or object into the query field. Write the query as plain text."
+        )
+
+
+def validate_recall_blocks(raw: object) -> None:
+    """Fail fast on a malformed --blocks-file (e.g. a PowerShell-serialized object in a query field)
+    before any network call, with a clear message naming the offending block."""
+    if isinstance(raw, list):
+        for index, item in enumerate(raw, start=1):
+            if isinstance(item, dict):
+                label = str(item.get("label") or item.get("name") or f"block {index}")
+                assert_plain_query(label, item.get("query"))
+            elif isinstance(item, str):
+                assert_plain_query(f"block {index}", item)
+            else:
+                raise PubMedError(f"Block {index} must be an object or query string, got {type(item).__name__}.")
+    elif isinstance(raw, dict):
+        for index, (label, value) in enumerate(raw.items(), start=1):
+            if isinstance(value, dict) and "query" in value:
+                assert_plain_query(str(label), value.get("query"))
+            else:
+                assert_plain_query(str(label), value)
+    else:
+        raise PubMedError(
+            "--blocks-file must contain a JSON list of {label, query} blocks or a {label: query} map, "
+            f"got {type(raw).__name__}."
+        )
+
+
+def extract_benchmark_pmids(data: object, *, min_seed_overlap: int) -> list[str]:
+    """Pull a PMID list from a benchmark JSON payload (related/mine output or a bare list)."""
+    pmids: list[str] = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        if isinstance(data.get("candidate_pmids"), list):
+            items = data["candidate_pmids"]
+        elif isinstance(data.get("found_pmids"), list):
+            items = data["found_pmids"]
+        elif isinstance(data.get("requested_pmids"), list):
+            items = data["requested_pmids"]
+        else:
+            items = []
+    else:
+        items = []
+    for item in items:
+        if isinstance(item, dict):
+            if int(item.get("seed_overlap_count", 0) or 0) < min_seed_overlap:
+                continue
+            pmid = str(item.get("pmid", "")).strip()
+        else:
+            pmid = str(item).strip()
+        if pmid:
+            pmids.append(pmid)
+    return pmids
+
+
+def assert_numeric_pmids(pmids: list[str], *, source: str) -> None:
+    """Fail fast when a PMID source yielded non-numeric values, the usual cause being a
+    PowerShell-serialized object/metadata serialized instead of a PMID list."""
+    bad = [pmid for pmid in pmids if not str(pmid).strip().isdigit()]
+    if bad:
+        preview = compact_evidence(", ".join(str(pmid) for pmid in bad[:5]))
+        raise PubMedError(
+            f"{source} produced non-numeric values where PMIDs were expected (e.g. {preview!r}). This often "
+            "means an object or metadata was serialized instead of a PMID list (a PowerShell ConvertTo-Json "
+            "pitfall). Provide a JSON list of numeric PMIDs, or a related/mine output."
+        )
+
+
+def dedup_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def filter_pmids(
+    pmids: list[str], *, only: list[str] | None = None, exclude: list[str] | None = None
+) -> tuple[list[str], list[str]]:
+    """Apply an optional accepted-whitelist (``only``) and exclusion (``exclude``) filter to a
+    resolved relevant-set PMID list. Returns ``(kept, removed)`` with order preserved, so a seed
+    excluded at pre-gate triage never reaches term ranking even when reused from a mine JSON."""
+    kept = dedup_preserving_order([str(pmid) for pmid in pmids])
+    only_set = {str(pmid) for pmid in (only or [])}
+    exclude_set = {str(pmid) for pmid in (exclude or [])}
+    removed: list[str] = []
+    if only_set:
+        removed += [pmid for pmid in kept if pmid not in only_set]
+        kept = [pmid for pmid in kept if pmid in only_set]
+    if exclude_set:
+        removed += [pmid for pmid in kept if pmid in exclude_set]
+        kept = [pmid for pmid in kept if pmid not in exclude_set]
+    return kept, dedup_preserving_order(removed)
+
+
+def relative_recall(
+    client: NcbiClient,
+    query: str,
+    benchmark_pmids: list[str],
+    *,
+    benchmark_source: str,
+    blocks: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    benchmark = dedup_preserving_order([str(pmid) for pmid in benchmark_pmids])
+    if not benchmark:
+        raise PubMedError("No benchmark PMIDs resolved for relative-recall estimation.")
+
+    full_retrieved = retrieve_against_pmids(client, query, benchmark)
+    retrieved_pmids = [pmid for pmid in benchmark if pmid in full_retrieved]
+    missed_pmids = [pmid for pmid in benchmark if pmid not in full_retrieved]
+    benchmark_size = len(benchmark)
+
+    result: dict[str, object] = {
+        "operation": "recall",
+        "query": query,
+        "benchmark_source": benchmark_source,
+        "benchmark_size": benchmark_size,
+        "retrieved_count": len(retrieved_pmids),
+        "missed_count": len(missed_pmids),
+        "relative_recall_percent": round((len(retrieved_pmids) / benchmark_size) * 100, 2),
+        "retrieved_pmids": retrieved_pmids,
+        "missed_pmids": missed_pmids,
+        "note": RELATIVE_RECALL_NOTE,
+        "request_info": client.metadata(),
+    }
+
+    if blocks:
+        block_retrieved: dict[str, set[str]] = {}
+        block_recall = []
+        for block in blocks:
+            label = str(block.get("label", ""))
+            block_query = str(block.get("query", ""))
+            retrieved = retrieve_against_pmids(client, block_query, benchmark)
+            block_retrieved[label] = retrieved
+            block_recall.append(
+                {
+                    "label": label,
+                    "query": block_query,
+                    "retrieved_count": len(retrieved),
+                    "recall_percent": round((len(retrieved) / benchmark_size) * 100, 2),
+                    "bottleneck": False,
+                }
+            )
+        if block_recall:
+            min_recall = min(row["recall_percent"] for row in block_recall)
+            for row in block_recall:
+                row["bottleneck"] = row["recall_percent"] == min_recall
+
+        miss_diagnosis = []
+        for pmid in missed_pmids:
+            culprit_blocks = [label for label, retrieved in block_retrieved.items() if pmid not in retrieved]
+            miss_diagnosis.append(
+                {
+                    "pmid": pmid,
+                    "culprit_blocks": culprit_blocks,
+                    "and_interaction": len(culprit_blocks) == 0,
+                }
+            )
+        result["block_recall"] = block_recall
+        result["miss_diagnosis"] = miss_diagnosis
+        result["block_diagnosis_note"] = (
+            "culprit_blocks lists concept blocks that individually fail to retrieve a missed PMID. "
+            "and_interaction marks a miss retrieved by every block alone but lost by the full strategy "
+            "(check NOT operators, filters, or proximity rather than a weak block)."
+        )
+
+    return result
 
 
 def batch_search(client: NcbiClient, queries: list[dict[str, object]], retmax: int, sort: str | None) -> dict[str, object]:
@@ -1147,14 +1658,13 @@ def normalize_variant_item(item: object, index: int, *, label_override: str | No
         query = item
         source: dict[str, object] = {}
     elif isinstance(item, dict):
-        query = item.get("query")
-        if query is None:
-            raise PubMedError(f"Variant item {index} is missing a query field.")
         label = label_override or item.get("label") or item.get("name") or f"query_{index}"
+        query = item.get("query")
         source = item
     else:
         raise PubMedError(f"Variant item {index} must be a string or object.")
 
+    assert_plain_query(str(label), query)  # reject object/metadata/empty queries (PowerShell pitfall)
     normalized_query = normalize_query(str(query))
     if not normalized_query:
         raise PubMedError(f"Variant item {index} has an empty query.")
@@ -1410,6 +1920,200 @@ def compare_variants(
     }
 
 
+def record_phrase_set(record: dict[str, object]) -> set[str]:
+    tokens = text_tokens(record_search_text(record))
+    grams: set[str] = set()
+    for size in (2, 3):
+        for index in range(0, max(0, len(tokens) - size + 1)):
+            gram_tokens = tokens[index : index + size]
+            if useful_ngram(gram_tokens):
+                grams.add(" ".join(gram_tokens))
+    return grams
+
+
+def record_acronym_set(record: dict[str, object]) -> set[str]:
+    found: set[str] = set()
+    for match in ACRONYM_PATTERN.finditer(record_search_text(record)):
+        value = match.group(0).strip("-")
+        if len(value) > 1 and not value.isdigit():
+            found.add(value)
+    return found
+
+
+def record_mesh_set(record: dict[str, object]) -> set[str]:
+    names: set[str] = set()
+    for heading in record.get("mesh_headings", []):
+        if isinstance(heading, dict):
+            name = str(heading.get("name", ""))
+        else:
+            name = str(heading)
+        if name:
+            names.add(name)
+    return names
+
+
+def record_keyword_set(record: dict[str, object]) -> set[str]:
+    return {str(keyword).strip() for keyword in record.get("keywords", []) if str(keyword).strip()}
+
+
+def background_query_for(term: str, field: str) -> str:
+    cleaned = " ".join(str(term).split()).strip('"')
+    if field == "mesh":
+        return f'"{cleaned}"[Mesh]'
+    if " " in cleaned:
+        return f'"{cleaned}"[tiab]'
+    return f"{cleaned}[tiab]"
+
+
+def _content_token(token: str) -> bool:
+    """A token carries topical content if it has >=3 alphabetic characters and is not a known
+    statistical marker. Operates on whitespace-split tokens of the display term, so hyphenated
+    symbols like ``IL-6``/``PD-L1`` stay one token and are not mistaken for statistical fragments."""
+    return sum(1 for ch in token if ch.isalpha()) >= 3 and token.lower() not in STAT_WORDS
+
+
+def term_rank_noise_reason(term: str, field: str) -> str | None:
+    """Classify a term-rank candidate as a noise class to drop, or return None to keep it.
+
+    Drops structured-abstract section labels (OBJECTIVES, RESULTS, ...), MeSH check tags and common
+    geographic descriptors (Humans, Female, Queensland, ...), and statistical fragments (``p 0``,
+    ``95 ci``, ...). The statistical rule applies only to multi-token ``tiab`` candidates, so single
+    tokens such as ``p53``, ``IL-6``, ``PD-L1`` are never dropped as statistical.
+    """
+    cleaned = " ".join(str(term).split())
+    normalized = normalize_for_match(cleaned)
+    if not normalized:
+        return "empty"
+    if normalized in NON_TOPICAL_TERMS:
+        return "non_topical"
+    if normalized in STRUCTURED_ABSTRACT_HEADINGS:
+        return "boilerplate"
+    if field == "tiab":
+        tokens = cleaned.split()
+        if len(tokens) >= 2:
+            if not any(_content_token(token) for token in tokens):
+                return "statistical"
+            words = normalized.split()
+            if words and (words[0] in BOUNDARY_NOISE_TOKENS or words[-1] in BOUNDARY_NOISE_TOKENS):
+                return "boilerplate"
+    return None
+
+
+def term_rank_candidates(
+    records: list[dict[str, object]],
+    fields: list[str],
+    strategy_text: str,
+) -> tuple[list[dict[str, object]], int]:
+    total = len(records)
+    document_frequency: defaultdict[tuple[str, str], int] = defaultdict(int)
+    display: dict[tuple[str, str], str] = {}
+    sources: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    want_tiab = "tiab" in fields
+    want_mesh = "mesh" in fields
+
+    for record in records:
+        per_record: list[tuple[str, str, str]] = []
+        if want_tiab:
+            per_record.extend((term, "tiab", "phrase") for term in record_phrase_set(record))
+            per_record.extend((term, "tiab", "acronym") for term in record_acronym_set(record))
+            per_record.extend((term, "tiab", "keyword") for term in record_keyword_set(record))
+        if want_mesh:
+            per_record.extend((term, "mesh", "mesh") for term in record_mesh_set(record))
+
+        counted_keys: set[tuple[str, str]] = set()
+        for term, field, source in per_record:
+            cleaned = " ".join(str(term).split())
+            if term_rank_noise_reason(cleaned, field):
+                continue
+            normalized = normalize_for_match(cleaned)
+            if not normalized:
+                continue
+            key = (field, normalized)
+            sources[key].add(source)
+            display.setdefault(key, cleaned)
+            if key not in counted_keys:
+                counted_keys.add(key)
+                document_frequency[key] += 1
+
+    rows: list[dict[str, object]] = []
+    for key, count in document_frequency.items():
+        field, _normalized = key
+        term = display[key]
+        rows.append(
+            {
+                "term": term,
+                "field": field,
+                "relevant_df": count,
+                "coverage": round(count / total, 4) if total else 0.0,
+                "sources": sorted(sources[key]),
+                "in_strategy": in_strategy(term, strategy_text) if strategy_text else False,
+            }
+        )
+    return rows, total
+
+
+def term_rank(
+    client: NcbiClient,
+    records: list[dict[str, object]],
+    *,
+    fields: list[str],
+    max_terms: int,
+    strategy_text: str,
+    pubmed_total: int,
+) -> dict[str, object]:
+    rows, total = term_rank_candidates(records, fields, strategy_text)
+    rows.sort(
+        key=lambda row: (
+            -int(row["relevant_df"]),
+            0 if row["field"] == "mesh" else 1,
+            str(row["term"]).lower(),
+        )
+    )
+    scored = rows[:max_terms]
+    pubmed_total = max(int(pubmed_total), 1)
+
+    for row in scored:
+        background_query = background_query_for(str(row["term"]), str(row["field"]))
+        search_result = esearch(client, background_query, retmax=0, retstart=0, sort=None)
+        background_count = int(search_result.get("count", 0) or 0)
+        coverage = float(row["coverage"])
+        row["background_query"] = background_query
+        row["background_count"] = background_count
+        row["suggested_layer"] = background_query
+        if background_count <= 0:
+            row["lift"] = None
+            row["background_zero"] = True
+            row["noise_risk"] = False
+        else:
+            row["lift"] = round(coverage / (background_count / pubmed_total), 2)
+            row["noise_risk"] = bool(
+                background_count >= TERM_RANK_NOISE_BACKGROUND and coverage < TERM_RANK_NOISE_COVERAGE
+            )
+
+    scored.sort(
+        key=lambda row: (
+            -float(row["coverage"]),
+            -(row.get("lift") or 0.0),
+            -int(row["relevant_df"]),
+            str(row["term"]).lower(),
+        )
+    )
+
+    return {
+        "operation": "term-rank",
+        "relevant_record_count": total,
+        "fields": fields,
+        "max_terms": max_terms,
+        "pubmed_total_estimate": pubmed_total,
+        "candidates_considered": len(rows),
+        "candidates_scored": len(scored),
+        "candidates_unscored": max(0, len(rows) - len(scored)),
+        "method_note": TERM_RANK_CAVEAT,
+        "ranked_terms": scored,
+        "request_info": client.metadata(),
+    }
+
+
 def load_json_file(path: str) -> dict[str, object]:
     try:
         data = json.loads(read_text_source(path))
@@ -1642,6 +2346,8 @@ def build_audit_workbook(
     variants_data: dict[str, object] | None,
     mine_source: str,
     variants_source: str,
+    term_rank_data: dict[str, object] | None = None,
+    term_rank_source: str = "",
 ) -> dict[str, object]:
     sheets: list[tuple[str, list[list[object]]]] = []
     summary = [
@@ -1649,12 +2355,15 @@ def build_audit_workbook(
         ["Generated UTC", datetime.now(timezone.utc).replace(microsecond=0).isoformat()],
         ["Mine JSON", mine_source or "not supplied"],
         ["Variants JSON", variants_source or "not supplied"],
+        ["Term-rank JSON", term_rank_source or "not supplied"],
         ["Seed records", mine_data.get("record_count", "") if mine_data else ""],
         ["Requested PMIDs", list_text(mine_data.get("requested_pmids", [])) if mine_data else ""],
         ["Found PMIDs", list_text(mine_data.get("found_pmids", [])) if mine_data else ""],
         ["Missing PMIDs", list_text(mine_data.get("missing_pmids", [])) if mine_data else ""],
         ["Variant count", variants_data.get("variant_count", "") if variants_data else ""],
         ["Baseline variant", variants_data.get("baseline_label", "") if variants_data else ""],
+        ["Term-rank record count", term_rank_data.get("relevant_record_count", "") if term_rank_data else ""],
+        ["Term-rank scored terms", term_rank_data.get("candidates_scored", "") if term_rank_data else ""],
     ]
     sheets.append(("Summary", summary))
 
@@ -1778,6 +2487,28 @@ def build_audit_workbook(
                 candidate_rows.append([item.get("term", ""), list_text(item.get("sources", [])), item.get("count", ""), item.get("in_strategy", "")])
         sheets.append(("TIAB Candidates", candidate_rows))
 
+    if term_rank_data:
+        term_rank_rows = [
+            ["Term", "Field", "Relevant df", "Coverage", "Background count", "Lift", "Noise risk", "In strategy", "Sources", "Suggested layer"]
+        ]
+        for item in term_rank_data.get("ranked_terms", []):
+            if isinstance(item, dict):
+                term_rank_rows.append(
+                    [
+                        item.get("term", ""),
+                        item.get("field", ""),
+                        item.get("relevant_df", ""),
+                        item.get("coverage", ""),
+                        item.get("background_count", ""),
+                        item.get("lift", ""),
+                        item.get("noise_risk", ""),
+                        item.get("in_strategy", ""),
+                        list_text(item.get("sources", [])),
+                        item.get("suggested_layer", ""),
+                    ]
+                )
+        sheets.append(("Term Ranking", term_rank_rows))
+
     output = Path(output_path)
     write_xlsx(output, sheets)
     return {
@@ -1786,6 +2517,619 @@ def build_audit_workbook(
         "sheet_count": len(sheets),
         "sheets": [name for name, _ in sheets],
     }
+
+
+AUDIT_SCAFFOLD_RECORD_KINDS = ("fetch", "mine", "sample")
+AUDIT_SCAFFOLD_NOTE = (
+    "Mechanical fields were filled from saved tool outputs; judgment fields are bracketed "
+    "placeholders that audit_markdown.py refuses to render until you author them. Counts come "
+    "from --output file content, not the manifest's hand-typed --count. Fill all placeholders, "
+    "complete the remaining audit-template.md sections, then render with audit_markdown.py."
+)
+
+
+def audit_placeholder(text: str) -> str:
+    """A bracketed placeholder. Callers include an audit_markdown PLACEHOLDER_RE trigger word
+    (decision/reason/count/date/summary/concept/strategy/record/pmid/source/name) so the renderer
+    refuses to emit the audit until the agent replaces it."""
+    return f"[{text}]"
+
+
+def scaffold_resolve_output(path: Path, if_exists: str) -> Path:
+    # Mirrors audit_markdown.py/manifest_tool.py so a re-run never clobbers an authored audit.
+    if not path.exists() or if_exists == "overwrite":
+        return path
+    if if_exists == "fail":
+        raise PubMedError(f"Audit scaffold output already exists: {path}")
+    if if_exists != "suffix":
+        raise PubMedError(f"Unsupported --if-exists policy: {if_exists}")
+    stem, suffix, parent = path.stem, path.suffix, path.parent
+    for index in range(2, 1000):
+        candidate = parent / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise PubMedError(f"Could not find an available suffix for: {path}")
+
+
+def _scaffold_count_from_output(output_path: object) -> int | None:
+    """Read a tool-produced count from a saved --output file; None if unreadable/absent."""
+    if not isinstance(output_path, str) or not output_path:
+        return None
+    try:
+        data = load_json_file(output_path)
+    except Exception:
+        return None
+    count = data.get("count") if isinstance(data, dict) else None
+    return count if isinstance(count, int) else None
+
+
+def _scaffold_record_summary(record: object) -> dict[str, object] | None:
+    if not isinstance(record, dict):
+        return None
+    pmid = str(record.get("pmid") or "").strip()
+    if not pmid:
+        return None
+    return {
+        "pmid": pmid,
+        "title": record.get("title") or "",
+        "year": record.get("year") or "",
+        "publication_types": record.get("publication_types") or [],
+        "abstract_present": bool(str(record.get("abstract") or "").strip()),
+    }
+
+
+def _scaffold_seed_triage(
+    seed_fetch_data: dict[str, object] | None,
+    seed_mine_data: dict[str, object] | None,
+    sources: dict[str, str],
+) -> dict[str, object] | None:
+    source_key = "seed_fetch" if seed_fetch_data else "seed_mine"
+    data = seed_fetch_data or seed_mine_data
+    if not data:
+        return None
+    requested = [str(pmid) for pmid in (data.get("requested_pmids") or [])]
+    found = [str(pmid) for pmid in (data.get("found_pmids") or [])]
+    missing = [str(pmid) for pmid in (data.get("missing_pmids") or [])]
+    records = [
+        row
+        for row in (_scaffold_record_summary(record) for record in (data.get("records") or []))
+        if row is not None
+    ]
+    return {
+        "requested_seed_entries": requested,
+        "normalized_unique_numeric_pmids": dedup_preserving_order(requested),
+        "malformed_entries_excluded": "not available from saved fetch/mine JSON",
+        "fetched_seed_records": records,
+        "evidence_file_reviewed": sources.get(source_key, ""),
+        "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
+        "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
+        "receipt_only_stdout_used_as_decision_evidence": "no",
+        "decision_supported": audit_placeholder("decision supported: yes/no"),
+        "missing_not_found_pmids_excluded": missing,
+        "retracted_seeds": audit_placeholder("retracted seed decision after record review, or none"),
+        "likely_out_of_scope_seeds": audit_placeholder("out-of-scope seed decision after record review, or none"),
+        "user_protocol_decision_when_paused": audit_placeholder("user/protocol decision for seed triage if paused, or not applicable"),
+        "found_pmids": found,
+    }
+
+
+def _scaffold_related_candidate_labels(candidates: object) -> list[str]:
+    rows = [item for item in (candidates or []) if isinstance(item, dict)]
+    high_overlap = [item for item in rows if int(item.get("seed_overlap_count") or 0) > 1]
+    labels: list[str] = []
+    for item in high_overlap[:20]:
+        pmid = str(item.get("pmid") or "").strip()
+        if not pmid:
+            continue
+        overlap = item.get("seed_overlap_count")
+        via = list_text(item.get("via") or [])
+        labels.append(f"{pmid} (seed_overlap_count={overlap}; via={via})")
+    return labels
+
+
+def _scaffold_seed_set_expansion(related_data: dict[str, object] | None) -> dict[str, object] | None:
+    if not related_data:
+        return None
+    return {
+        "expansion_run": "Yes",
+        "links_used": related_data.get("links_used") or [],
+        "link_counts": related_data.get("link_counts") or {},
+        "max_per_seed": related_data.get("max_per_seed"),
+        "max_total": related_data.get("max_total"),
+        "candidate_count": related_data.get("candidate_count"),
+        "candidate_count_before_cap": related_data.get("candidate_count_before_cap"),
+        "high_overlap_candidate_pmids": _scaffold_related_candidate_labels(related_data.get("candidate_pmids")),
+        "how_related_set_evidence_was_used": audit_placeholder("related-set use decision: fed to term-rank / recall heuristic / not used"),
+        "labelling": (
+            "related-set evidence is recorded separately from user-confirmed seed evidence and is not treated as validated recall"
+        ),
+    }
+
+
+def _scaffold_bottleneck_block(block_recall: object) -> str:
+    for item in block_recall or []:
+        if isinstance(item, dict) and item.get("bottleneck"):
+            return str(item.get("label") or "")
+    return ""
+
+
+def _scaffold_relative_recall(recall_data: dict[str, object] | None) -> dict[str, object] | None:
+    if not recall_data:
+        return None
+    return {
+        "check_run": "Yes",
+        "benchmark_source": recall_data.get("benchmark_source"),
+        "benchmark_size": recall_data.get("benchmark_size"),
+        "relative_recall_percent": recall_data.get("relative_recall_percent"),
+        "retrieved_count": recall_data.get("retrieved_count"),
+        "missed_count": recall_data.get("missed_count"),
+        "retrieved_pmids": recall_data.get("retrieved_pmids") or [],
+        "missed_pmids": recall_data.get("missed_pmids") or [],
+        "block_recall": recall_data.get("block_recall") or [],
+        "bottleneck_block": _scaffold_bottleneck_block(recall_data.get("block_recall")),
+        "miss_diagnosis": recall_data.get("miss_diagnosis") or [],
+        "caveat": recall_data.get("note") or RELATIVE_RECALL_NOTE,
+    }
+
+
+def _scaffold_concept_blocks(blocks_raw: object, cli_checks: dict[str, object]) -> list[dict[str, object]]:
+    """Normalize a --blocks-file into concept_blocks [{label, query, count}].
+
+    Counts come from the block's own `count` if present, else from a labelled manifest search entry
+    (the pubmed_cli_checks map) matched by label. Counts are best-effort: an unmatched block simply
+    has no count, which the renderer shows as 'not performed'.
+    """
+    normalized: list[tuple[str, str, object]] = []
+    if isinstance(blocks_raw, list):
+        for index, item in enumerate(blocks_raw, start=1):
+            if isinstance(item, dict):
+                label = str(item.get("label") or item.get("name") or f"Concept {index}")
+                query, count = item.get("query"), item.get("count")
+            else:
+                label, query, count = f"Concept {index}", item, None
+            if query:
+                normalized.append((label, str(query), count))
+    elif isinstance(blocks_raw, dict):
+        for index, (label, value) in enumerate(blocks_raw.items(), start=1):
+            if isinstance(value, dict):
+                query, count = value.get("query"), value.get("count")
+            else:
+                query, count = value, None
+            if query:
+                normalized.append((str(label), str(query), count))
+
+    blocks: list[dict[str, object]] = []
+    for label, query, count in normalized:
+        if count is None and isinstance(cli_checks, dict):
+            matched = cli_checks.get(label)
+            count = matched if isinstance(matched, int) else None
+        block: dict[str, object] = {"label": label, "query": query}
+        if count is not None:
+            block["count"] = count
+        blocks.append(block)
+    return blocks
+
+
+def build_audit_scaffold(
+    *,
+    topic_slug: str,
+    manifest_data: dict[str, object] | None,
+    date_searched: str | None,
+    final_search_data: dict[str, object] | None,
+    strategy_text: str | None,
+    validate_data: dict[str, object] | None,
+    variants_data: dict[str, object] | None,
+    seed_fetch_data: dict[str, object] | None,
+    seed_mine_data: dict[str, object] | None,
+    related_data: dict[str, object] | None,
+    recall_data: dict[str, object] | None,
+    seed_status: str,
+    audit_workbook: str | None,
+    sources: dict[str, str],
+    blocks_data: object | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Build a partial audit JSON (audit_markdown.py contract) from saved tool outputs.
+
+    Mechanical fields are filled from file content; judgment fields are trigger-word placeholders;
+    the scaffold cites that record-content evidence files exist but never attests the agent
+    reviewed them ("No reviewed JSON, no decision").
+    """
+    entries = [e for e in (manifest_data or {}).get("entries", []) if isinstance(e, dict)]
+    filled: list[str] = []
+    placeholders: list[str] = []
+    audit: dict[str, object] = {}
+
+    slug = topic_slug or str((manifest_data or {}).get("topic_slug") or "")
+    if slug:
+        audit["title"] = f"PubMed high-sensitivity search audit: {slug}"
+        audit["topic"] = slug
+        filled.append("title/topic")
+    else:
+        audit["title"] = audit_placeholder("name this search topic or review question")
+        placeholders.append("title")
+
+    if date_searched:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_searched):
+            raise PubMedError("--date-searched must use YYYY-MM-DD.")
+        audit["date_searched"] = date_searched
+        filled.append("date_searched (override)")
+    else:
+        # date_searched: search-time from the manifest, never the scaffold-run time.
+        search_dates = sorted(
+            str(e.get("timestamp_utc", ""))[:10]
+            for e in entries
+            if e.get("kind") == "search" and str(e.get("timestamp_utc", ""))
+        )
+        if search_dates:
+            audit["date_searched"] = search_dates[-1]
+            filled.append("date_searched")
+        elif manifest_data and manifest_data.get("updated_utc"):
+            audit["date_searched"] = str(manifest_data["updated_utc"])[:10]
+            filled.append("date_searched")
+        else:
+            audit["date_searched"] = audit_placeholder("date searched")
+            placeholders.append("date_searched")
+
+    # result_count + final_strategy: only from explicit final inputs; never guessed.
+    if final_search_data and isinstance(final_search_data.get("count"), int):
+        audit["result_count"] = final_search_data["count"]
+        filled.append("result_count")
+    else:
+        audit["result_count"] = audit_placeholder("final result count")
+        placeholders.append("result_count")
+    if strategy_text and strategy_text.strip():
+        audit["final_strategy"] = strategy_text.strip()
+        filled.append("final_strategy")
+    else:
+        audit["final_strategy"] = audit_placeholder("final PubMed strategy text")
+        placeholders.append("final_strategy")
+
+    # pubmed_cli_checks: labeled manifest search/batch entries; counts from --output file content.
+    cli_checks: dict[str, object] = {}
+    for entry in entries:
+        kind = entry.get("kind")
+        label = str(entry.get("label") or "").strip()
+        out = entry.get("output_path")
+        if kind == "search" and label:
+            count = _scaffold_count_from_output(out)
+            cli_checks[label] = count if count is not None else entry.get("count")
+        elif kind == "batch" and isinstance(out, str) and out:
+            try:
+                batch = load_json_file(out)
+            except Exception:
+                batch = None
+            for row in (batch.get("results", []) if isinstance(batch, dict) else []):
+                if isinstance(row, dict) and row.get("label"):
+                    cli_checks[str(row["label"])] = row.get("count")
+    if final_search_data and isinstance(final_search_data.get("count"), int):
+        cli_checks.setdefault("Final combined topic-only strategy", final_search_data["count"])
+    if cli_checks:
+        audit["pubmed_cli_checks"] = cli_checks
+        filled.append("pubmed_cli_checks")
+
+    # concept_blocks: numbered line set + PRISMA-S appendix input (audit_markdown.py). Counts are
+    # matched from labelled manifest search entries; the combination defaults to all blocks AND-ed
+    # (override in an overlay for non-trivial logic). The agent still authors filter/limit details.
+    if blocks_data is not None:
+        concept_blocks = _scaffold_concept_blocks(blocks_data, cli_checks)
+        if concept_blocks:
+            audit["concept_blocks"] = concept_blocks
+            audit["combination"] = " AND ".join(str(i) for i in range(1, len(concept_blocks) + 1))
+            filled.append("concept_blocks")
+
+    # Aggregate zero-hit / not-found phrases across saved search/batch outputs (the final search is
+    # post-hygiene and usually clean, so scan them all). Removed-vs-kept stays the agent's decision.
+    zero_hit: list[str] = []
+    for entry in entries:
+        if entry.get("kind") not in ("search", "batch"):
+            continue
+        out = entry.get("output_path")
+        if not (isinstance(out, str) and out):
+            continue
+        try:
+            doc = load_json_file(out)
+        except Exception:
+            continue
+        nodes = [doc, *(r for r in doc.get("results", []) if isinstance(r, dict))] if isinstance(doc, dict) else []
+        for node in nodes:
+            phrases, _ = _not_found_phrases(node)
+            zero_hit.extend(phrases)
+    zero_hit = list(dict.fromkeys(p for p in zero_hit if p))[:COMPACT_NOT_FOUND_CAP]
+
+    # ATM translation from the final search (sanitize brackets so field tags can't self-block).
+    if final_search_data and final_search_data.get("query_translation"):
+        translation = str(final_search_data["query_translation"]).replace("[", "(").replace("]", ")")
+        audit["atm_translations"] = [
+            {"query": "final topic-only strategy", "translation": translation, "added_explicitly": audit_placeholder("confirm: yes/no")}
+        ]
+        filled.append("atm_translations")
+
+    # Seed validation from the validate output, or an explicit/placeholdered seed status.
+    if validate_data:
+        provided = validate_data.get("provided_pmids") or []
+        missed = validate_data.get("missed_pmids") or []
+        seed_block: dict[str, object] = {
+            "seed_pmids_tested": provided,
+            "retrieved": validate_data.get("retrieved_pmids") or [],
+            "missed": missed,
+            "seeds_judged_out_of_scope": "none",
+            "revisions_made_after_seed_testing": audit_placeholder("revisions after seed testing, or none"),
+        }
+        if missed:
+            seed_block["reason_for_misses"] = audit_placeholder("reason for each missed seed")
+            placeholders.append("seed_validation.reason_for_misses")
+        else:
+            seed_block["reason_for_misses"] = "none"
+        audit["seed_validation"] = seed_block
+        filled.append("seed_validation")
+    elif seed_status == "no":
+        pass  # renderer shows "Seed PMIDs provided: No" with the no-seed limits.
+    else:
+        audit["seed_pmids"] = [audit_placeholder("state seed PMIDs tested, or 'no seeds supplied'")]
+        placeholders.append("seed_validation.seed_pmids")
+
+    # Variant choice (mechanical, from decision_status/role).
+    if variants_data:
+        results = [r for r in variants_data.get("results", []) if isinstance(r, dict)]
+        selected = [r for r in results if str(r.get("decision_status", "")).lower() == "selected"]
+        if selected:
+            audit["main_variant_chosen"] = f"{selected[0].get('label', '')} ({selected[0].get('count', '')} records)"
+            filled.append("main_variant_chosen")
+        focused = [r for r in results if str(r.get("role", "")).lower() in ("focused", "precision")]
+        if focused:
+            audit["focused_variant_count"] = "; ".join(f"{r.get('label', '')}={r.get('count', '')}" for r in focused)
+            filled.append("focused_variant_count")
+
+    seed_triage = _scaffold_seed_triage(seed_fetch_data, seed_mine_data, sources)
+    if seed_triage:
+        audit["pre_gate_seed_triage"] = seed_triage
+        filled.append("pre_gate_seed_triage")
+        placeholders.append("pre_gate_seed_triage (record review/scope decisions)")
+
+    seed_expansion = _scaffold_seed_set_expansion(related_data)
+    if seed_expansion:
+        audit["seed_set_expansion"] = seed_expansion
+        filled.append("seed_set_expansion")
+        placeholders.append("seed_set_expansion.how_related_set_evidence_was_used")
+
+    relative_recall = _scaffold_relative_recall(recall_data)
+    if relative_recall:
+        audit["relative_recall"] = relative_recall
+        filled.append("relative_recall")
+
+    # Record-content evidence: cite that the saved files exist; never attest review.
+    rc_rows = []
+    for entry in entries:
+        kind = str(entry.get("kind") or "")
+        out = entry.get("output_path")
+        if kind in AUDIT_SCAFFOLD_RECORD_KINDS and isinstance(out, str) and out:
+            rc_rows.append(
+                {
+                    "decision_point": audit_placeholder(f"decision this {kind} JSON supports"),
+                    "evidence_file_reviewed": out,
+                    "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
+                    "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
+                    "receipt_only_stdout_used_as_decision_evidence": "no",
+                    "decision_supported": audit_placeholder("decision supported: yes/no"),
+                }
+            )
+    if rc_rows:
+        audit["record_content_evidence"] = rc_rows
+        filled.append("record_content_evidence (paths only)")
+        placeholders.append("record_content_evidence (review/supported)")
+
+    # Forced judgment placeholders: the agent must author these (render blocked until then).
+    audit["search_structure"] = {
+        "framework": audit_placeholder("framework, question type, and reason"),
+        "concept_gate_status": "completed",
+        "and_block_admission_summary": audit_placeholder("AND-block admission summary"),
+        "methodological_filters_or_limits": audit_placeholder("none, or filter source/version/interface/adaptation"),
+    }
+    audit["decision_ledger"] = [
+        {
+            "decision_point": audit_placeholder("author the decision ledger: each decision point"),
+            "options_considered": audit_placeholder("options considered"),
+            "evidence_or_test_used": audit_placeholder("evidence or test used"),
+            "decision_made": audit_placeholder("decision made"),
+            "rationale_or_recall_risk_note": audit_placeholder("rationale and recall-risk reason"),
+            "reflected_in_strategy_or_report": audit_placeholder("where reflected"),
+        }
+    ]
+    audit["rationale"] = {
+        "mesh_choices": audit_placeholder("MeSH descriptor decisions: accepted/rejected and why"),
+        "text_word_choices": audit_placeholder("text-word choices and reasons"),
+        "pre_mesh_vocabulary_domain_choices": audit_placeholder("pre-MeSH vocabulary/domain decisions"),
+        "concept_gate_and_omitted_block_choices": audit_placeholder("concept-gate and omitted-block decisions"),
+        "methodological_filters_or_limits": audit_placeholder("filter/limit decisions and source"),
+        "sensitivity_vs_precision": audit_placeholder("sensitivity vs precision: chosen design and reason"),
+        "qa": audit_placeholder("QA summary: drift, final-qa, filter-check"),
+    }
+    audit["peer_review_attention_points"] = [audit_placeholder("peer-review attention point: high-impact decision")]
+    placeholders.extend(["search_structure", "decision_ledger", "rationale", "peer_review_attention_points"])
+
+    # Capture dropped zero-hit phrases: embed the PubMed-reported phrases as a hint, but leave the
+    # removed-vs-kept call to the agent (a `decision` trigger word forces authoring before render).
+    if zero_hit:
+        sanitized = "; ".join(p.replace("[", "(").replace("]", ")") for p in zero_hit)
+        removed = audit_placeholder(f"record the removed/kept decision for these PubMed zero-hit phrases: {sanitized}")
+        filled.append("tiab_expansion.zero_hit_phrases (evidence)")
+    else:
+        removed = audit_placeholder("zero-hit phrases removed + documented during final hygiene, or none (record the decision)")
+    audit["tiab_expansion"] = {
+        "zero_hit_terms_removed": removed,
+        "zero_hit_terms_kept": audit_placeholder("zero-hit terms kept by user choice as intentional, or none"),
+    }
+    placeholders.append("tiab_expansion.zero_hit_terms (decision)")
+
+    # Omit reporting_notes.date_searched: the renderer falls back to top-level date_searched,
+    # so a date placeholder is authored once rather than duplicated.
+    audit["reporting_notes"] = {
+        "database": "PubMed",
+        "audit_workbook": audit_workbook or "not exported",
+        "remaining_caveats": audit_placeholder("remaining caveats and recall-risk reasons"),
+    }
+    if sources.get("manifest"):
+        audit["reporting_notes"]["run_manifest"] = sources["manifest"]  # type: ignore[index]
+    placeholders.append("reporting_notes.remaining_caveats")
+
+    receipt = {
+        "operation": "audit-scaffold",
+        "fields_filled": filled,
+        "placeholder_fields": placeholders,
+        "placeholder_count": len(placeholders),
+        "sources_used": sources,
+        "note": AUDIT_SCAFFOLD_NOTE,
+    }
+    return audit, receipt
+
+
+def build_audit_overlay_template(audit: dict[str, object]) -> dict[str, object]:
+    """Return a compact judgment overlay template for an audit scaffold.
+
+    The scaffold owns mechanical fields. This overlay owns authored decisions and rationale,
+    so agents can preserve scaffold-filled counts, dates, strategy text, and evidence paths while
+    filling the human judgment fields that audit_markdown.py intentionally blocks as placeholders.
+    """
+    overlay: dict[str, object] = {
+        "search_structure": {
+            "framework": audit_placeholder("decision: framework, question type, and reason"),
+            "concept_gate_status": "completed",
+            "and_block_admission_summary": audit_placeholder("decision: AND-block admission summary"),
+            "concepts_inside_or_blocks": audit_placeholder("summary: concepts kept inside OR blocks, or not applicable"),
+            "omitted_or_reserve_concepts": audit_placeholder("summary: omitted/reserve concepts and recall-risk reasons"),
+            "methodological_filters_or_limits": audit_placeholder("decision: none, or filter source/version/interface/adaptation"),
+        },
+        "decision_ledger": [
+            {
+                "decision_point": audit_placeholder("decision point"),
+                "options_considered": audit_placeholder("options considered"),
+                "evidence_or_test_used": audit_placeholder("evidence or test used"),
+                "decision_made": audit_placeholder("decision made"),
+                "rationale_or_recall_risk_note": audit_placeholder("rationale and recall-risk reason"),
+                "reflected_in_strategy_or_report": audit_placeholder("where reflected"),
+            }
+        ],
+        "rationale": {
+            "mesh_choices": audit_placeholder("summary: MeSH descriptor decisions"),
+            "text_word_choices": audit_placeholder("summary: text-word decisions"),
+            "pre_mesh_vocabulary_domain_choices": audit_placeholder("summary: pre-MeSH vocabulary/domain decisions"),
+            "concept_gate_and_omitted_block_choices": audit_placeholder("summary: concept gate and omitted-block decisions"),
+            "methodological_filters_or_limits": audit_placeholder("summary: filter/limit decisions"),
+            "sensitivity_vs_precision": audit_placeholder("summary: chosen design and workload/recall trade-off"),
+            "qa": audit_placeholder("summary: query translation drift, final-qa, and filter-check"),
+        },
+        "peer_review_attention_points": [
+            audit_placeholder("summary: peer-review attention point"),
+        ],
+        "tiab_expansion": {
+            "zero_hit_terms_removed": audit_placeholder("decision: zero-hit terms removed and documented, or none"),
+            "zero_hit_terms_kept": audit_placeholder("decision: zero-hit terms kept intentionally, or none"),
+        },
+        "reporting_notes": {
+            "remaining_caveats": audit_placeholder("summary: remaining caveats and recall-risk reasons"),
+        },
+    }
+    if "pre_gate_seed_triage" in audit:
+        overlay["pre_gate_seed_triage"] = {
+            "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
+            "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
+            "decision_supported": audit_placeholder("decision supported: yes/no"),
+            "retracted_seeds": audit_placeholder("decision: retracted seeds, or none"),
+            "likely_out_of_scope_seeds": audit_placeholder("decision: likely out-of-scope seeds, or none"),
+            "user_protocol_decision_when_paused": audit_placeholder("decision: seed triage user/protocol decision, or not applicable"),
+        }
+    if "seed_set_expansion" in audit:
+        overlay["seed_set_expansion"] = {
+            "how_related_set_evidence_was_used": audit_placeholder(
+                "decision: related-set use, e.g. term-rank / recall heuristic / not used"
+            )
+        }
+    if "record_content_evidence" in audit:
+        overlay["record_content_evidence"] = [
+            {
+                "decision_point": audit_placeholder("decision this record-content JSON supports"),
+                "evidence_file_reviewed": row.get("evidence_file_reviewed", "")
+                if isinstance(row, dict)
+                else audit_placeholder("source path"),
+                "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
+                "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
+                "receipt_only_stdout_used_as_decision_evidence": "no",
+                "decision_supported": audit_placeholder("decision supported: yes/no"),
+            }
+            for row in audit.get("record_content_evidence", [])
+        ]
+    return overlay
+
+
+def run_audit_scaffold(args: argparse.Namespace) -> dict[str, object]:
+    sources: dict[str, str] = {}
+    manifest_data = None
+    if args.manifest:
+        manifest_data = load_json_file(args.manifest)
+        sources["manifest"] = args.manifest
+    final_search_data = None
+    if args.final_search_json:
+        final_search_data = load_json_file(args.final_search_json)
+        sources["final_search"] = args.final_search_json
+    strategy_text = None
+    if args.strategy_file:
+        strategy_text = read_text_source(args.strategy_file)
+        sources["strategy_file"] = args.strategy_file
+    validate_data = None
+    if args.validate_json:
+        validate_data = load_json_file(args.validate_json)
+        sources["validate"] = args.validate_json
+    variants_data = None
+    if args.variants_json:
+        variants_data = load_json_file(args.variants_json)
+        sources["variants"] = args.variants_json
+    seed_fetch_data = None
+    if args.seed_fetch_json:
+        seed_fetch_data = load_json_file(args.seed_fetch_json)
+        sources["seed_fetch"] = args.seed_fetch_json
+    seed_mine_data = None
+    if args.seed_mine_json:
+        seed_mine_data = load_json_file(args.seed_mine_json)
+        sources["seed_mine"] = args.seed_mine_json
+    related_data = None
+    if args.related_json:
+        related_data = load_json_file(args.related_json)
+        sources["related"] = args.related_json
+    recall_data = None
+    if args.recall_json:
+        recall_data = load_json_file(args.recall_json)
+        sources["recall"] = args.recall_json
+    blocks_data = None
+    if args.blocks_file:
+        blocks_data = load_benchmark_or_blocks_json(args.blocks_file)
+        validate_recall_blocks(blocks_data)
+        sources["blocks_file"] = args.blocks_file
+
+    audit, receipt = build_audit_scaffold(
+        topic_slug=args.topic_slug or "",
+        manifest_data=manifest_data,
+        date_searched=args.date_searched,
+        final_search_data=final_search_data,
+        strategy_text=strategy_text,
+        validate_data=validate_data,
+        variants_data=variants_data,
+        seed_fetch_data=seed_fetch_data,
+        seed_mine_data=seed_mine_data,
+        related_data=related_data,
+        recall_data=recall_data,
+        seed_status=args.seed_status,
+        audit_workbook=args.audit_workbook,
+        sources=sources,
+        blocks_data=blocks_data,
+    )
+    output = scaffold_resolve_output(Path(args.output), args.if_exists)
+    dump_json_to_path(output, audit)
+    receipt["output"] = str(output)
+    if args.overlay_template:
+        overlay_output = scaffold_resolve_output(Path(args.overlay_template), args.if_exists)
+        dump_json_to_path(overlay_output, build_audit_overlay_template(audit))
+        receipt["overlay_template"] = str(overlay_output)
+    return receipt
 
 
 def doctor(client: NcbiClient, test_query: str) -> dict[str, object]:
@@ -1817,10 +3161,501 @@ def write_json(data: dict[str, object]) -> None:
     sys.stdout.write("\n")
 
 
+def dump_json_to_path(path: Path, data: dict[str, object]) -> None:
+    """Write the full result JSON to a file (used by --output). Overwrites; tool outputs are regenerated."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _hook_codes(hook: object) -> list[str]:
+    if not isinstance(hook, dict):
+        return []
+    codes: list[str] = []
+    for issue in hook.get("issues", []) or []:
+        if isinstance(issue, dict) and issue.get("code"):
+            code = str(issue["code"])
+            if code not in codes:
+                codes.append(code)
+    return codes
+
+
+COMPACT_NOT_FOUND_CAP = 50
+
+
+def _hook_details(hook: object) -> list[dict[str, object]]:
+    """Issue code + evidence (the actual not-found phrases / field tags) from a hook, so compact
+    output surfaces the actionable payload instead of only the bare code."""
+    if not isinstance(hook, dict):
+        return []
+    details: list[dict[str, object]] = []
+    for issue in hook.get("issues", []) or []:
+        if isinstance(issue, dict) and issue.get("code") and issue.get("evidence"):
+            details.append({"code": str(issue["code"]), "evidence": str(issue["evidence"])})
+    return details
+
+
+def _not_found_phrases(node: dict[str, object]) -> tuple[list[str], int]:
+    """Complete deduped zero-hit / not-found phrase list from the raw PubMed errorlist
+    (``phrasesnotfound``) and warninglist (``quotedphrasesnotfound``)."""
+    items: list[str] = []
+    errors = node.get("errors") if isinstance(node, dict) else None
+    warnings = node.get("warnings") if isinstance(node, dict) else None
+    if isinstance(errors, dict):
+        items += normalize_warning_items(errors.get("phrasesnotfound"))
+    if isinstance(warnings, dict):
+        items += normalize_warning_items(warnings.get("quotedphrasesnotfound"))
+    deduped = list(dict.fromkeys(item for item in items if item))
+    return deduped[:COMPACT_NOT_FOUND_CAP], len(deduped)
+
+
+def _qa_signal(node: dict[str, object]) -> dict[str, object]:
+    """QA-visible signal from a result or sub-result node (search, per-batch-result, per-variant).
+
+    Surfaces the actionable payload, not just codes: the actual not-found phrases (so zero-hit
+    cleanup needs no full-output rerun) and per-issue evidence, alongside the warning/error/drift
+    status.
+    """
+    hook = node.get("query_translation_hook") or {}
+    warnings = node.get("warnings") or {}
+    errors = node.get("errors") or {}
+    phrases, total = _not_found_phrases(node)
+    signal: dict[str, object] = {
+        "warning_count": len(warnings) if isinstance(warnings, dict) else 0,
+        "error_count": len(errors) if isinstance(errors, dict) else 0,
+        "drift_ok": bool(hook.get("ok", True)) if isinstance(hook, dict) else True,
+        "drift_review": bool(hook.get("review_recommended", False)) if isinstance(hook, dict) else False,
+        "drift_codes": _hook_codes(hook),
+    }
+    details = _hook_details(hook)
+    if details:
+        signal["drift_details"] = details
+    if phrases:
+        signal["phrases_not_found"] = phrases
+        signal["phrases_not_found_total"] = total
+    return signal
+
+
+def _precmd_signal(result: dict[str, object]) -> tuple[bool, list[str]]:
+    pre = result.get("pre_command_hook") or {}
+    if not isinstance(pre, dict):
+        return True, []
+    return bool(pre.get("ok", True)), _hook_codes(pre)
+
+
+COMPACT_TOP_TERMS = 20
+COMPACT_TOP_RECORDS = 20
+COMPACT_RECORD_MESH = 8
+COMPACT_PMIDS = 50
+
+
+def _trim_terms(ranked_terms: list[object]) -> list[dict[str, object]]:
+    trimmed: list[dict[str, object]] = []
+    for row in ranked_terms[:COMPACT_TOP_TERMS]:
+        if isinstance(row, dict):
+            trimmed.append(
+                {
+                    "term": row.get("term"),
+                    "field": row.get("field"),
+                    "coverage": row.get("coverage"),
+                    "lift": row.get("lift"),
+                    "noise_risk": row.get("noise_risk"),
+                }
+            )
+    return trimmed
+
+
+def _count_rows_with_totals(rows: object, *, limit: int = COMPACT_TOP_TERMS) -> dict[str, object]:
+    source_rows = [row for row in (rows or []) if isinstance(row, dict)]
+    compact_rows: list[dict[str, object]] = []
+    for row in source_rows[:limit]:
+        compact: dict[str, object] = {"term": row.get("term"), "count": row.get("count")}
+        for key in ("major_count", "in_strategy", "sources"):
+            if key in row:
+                compact[key] = row.get(key)
+        compact_rows.append(compact)
+    return {
+        "rows": compact_rows,
+        "total": len(source_rows),
+        "shown": len(compact_rows),
+        "omitted": max(0, len(source_rows) - len(compact_rows)),
+    }
+
+
+def _pmid_list_with_totals(pmids: object, *, limit: int = COMPACT_PMIDS) -> dict[str, object]:
+    values = [str(pmid) for pmid in (pmids or [])]
+    return {
+        "pmids": values[:limit],
+        "total": len(values),
+        "shown": min(limit, len(values)),
+        "omitted": max(0, len(values) - limit),
+    }
+
+
+def _mesh_names(record: dict[str, object]) -> list[str]:
+    names: list[str] = []
+    for heading in record.get("mesh_headings", []) or []:
+        if isinstance(heading, dict):
+            name = str(heading.get("name", "")).strip()
+        else:
+            name = str(heading).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _record_summary(record: dict[str, object]) -> dict[str, object]:
+    mesh_names = _mesh_names(record)
+    return {
+        "pmid": record.get("pmid", ""),
+        "title": record.get("title", ""),
+        "year": record.get("year", ""),
+        "journal": record.get("journal", ""),
+        "publication_types": record.get("publication_types", []),
+        "abstract_present": bool(str(record.get("abstract", "")).strip()),
+        "mesh_headings": mesh_names[:COMPACT_RECORD_MESH],
+        "mesh_heading_total": len(mesh_names),
+        "mesh_heading_omitted": max(0, len(mesh_names) - COMPACT_RECORD_MESH),
+    }
+
+
+def _record_summaries(records: object, *, limit: int = COMPACT_TOP_RECORDS) -> dict[str, object]:
+    source_records = [record for record in (records or []) if isinstance(record, dict)]
+    compact_records = [_record_summary(record) for record in source_records[:limit]]
+    return {
+        "records": compact_records,
+        "total": len(source_records),
+        "shown": len(compact_records),
+        "omitted": max(0, len(source_records) - len(compact_records)),
+    }
+
+
+def _record_count_rows(records: object, key: str, *, limit: int = COMPACT_TOP_TERMS) -> dict[str, object]:
+    counts: Counter[str] = Counter()
+    for record in (records or []):
+        if not isinstance(record, dict):
+            continue
+        if key == "mesh_headings":
+            values = _mesh_names(record)
+        else:
+            values = [str(value) for value in (record.get(key, []) or []) if value]
+        counts.update(value for value in values if value)
+    rows = [{"term": term, "count": count} for term, count in counts.most_common()]
+    return _count_rows_with_totals(rows, limit=limit)
+
+
+def summarize_result(command: str, result: dict[str, object]) -> dict[str, object]:
+    """Pure projection of a full result dict to a compact, QA-preserving summary for stdout.
+
+    Never mutates ``result`` and never changes search behavior: it only chooses which fields to
+    print. Verbose payloads (full query text, query_translation, long PMID/term arrays) are
+    dropped from stdout but remain in the full ``--output`` JSON. Every QA signal is preserved:
+    counts, warning/error counts and codes, translation-drift status, seed retrieved/missed,
+    relative recall and bottleneck. Truncated views always report totals so nothing is hidden.
+
+    ``ok`` flags hard failures only (pre-command errors, PubMed errorlist entries, and missed
+    known-item seeds); advisory warnings and translation-drift heuristics are surfaced via their
+    own fields (``warning_count``, ``drift_ok``, ``drift_codes``) and do not flip ``ok``.
+    """
+    if command in {"fetch", "mine", "sample"}:
+        raise ValueError(
+            f"{command} is a record-content command and does not support compact analytical summaries."
+        )
+
+    precmd_ok, precmd_codes = _precmd_signal(result)
+    summary: dict[str, object] = {"operation": result.get("operation", command)}
+    ok = precmd_ok
+
+    if command == "search":
+        qa = _qa_signal(result)
+        summary.update(
+            {
+                "count": result.get("count"),
+                "retmax": result.get("retmax"),
+                "pmids_returned": len(result.get("pmids") or []),
+                **qa,
+            }
+        )
+        ok = precmd_ok and qa["error_count"] == 0
+    elif command == "batch":
+        rows = []
+        any_drift = False
+        for item in result.get("results") or []:
+            qa = _qa_signal(item if isinstance(item, dict) else {})
+            any_drift = any_drift or not qa["drift_ok"]
+            row: dict[str, object] = {
+                "label": item.get("label") if isinstance(item, dict) else None,
+                "count": item.get("count") if isinstance(item, dict) else None,
+                "warning_count": qa["warning_count"],
+                "drift_ok": qa["drift_ok"],
+                "drift_codes": qa["drift_codes"],
+            }
+            for key in ("drift_details", "phrases_not_found", "phrases_not_found_total"):
+                if key in qa:
+                    row[key] = qa[key]
+            rows.append(row)
+        summary.update({"query_count": result.get("query_count"), "results": rows, "any_drift": any_drift})
+        # any_drift is advisory and surfaced as its own field; it does not flip ok.
+    elif command == "variants":
+        rows = []
+        for item in result.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            qa = _qa_signal(item)
+            row: dict[str, object] = {
+                "label": item.get("label"),
+                "count": item.get("count"),
+                "count_delta_from_baseline": item.get("count_delta_from_baseline"),
+                "percent_of_baseline": item.get("percent_of_baseline"),
+                "drift_codes": qa["drift_codes"],
+            }
+            for key in ("role", "decision_status", "seed_recall_percent", "seed_pmids_missed", "estimated_nnr"):
+                if key in item:
+                    row[key] = item[key]
+            rows.append(row)
+        summary.update(
+            {
+                "variant_count": result.get("variant_count"),
+                "baseline_label": result.get("baseline_label"),
+                "results": rows,
+            }
+        )
+    elif command == "validate":
+        qa = _qa_signal(result)
+        provided = result.get("provided_pmids") or []
+        retrieved = result.get("retrieved_pmids") or []
+        missed = result.get("missed_pmids") or []
+        summary.update(
+            {
+                "provided_count": len(provided),
+                "retrieved_count": len(retrieved),
+                "missed_count": len(missed),
+                "retrieved_pmids": retrieved,
+                "missed_pmids": missed,
+                "recall_percent": round((len(retrieved) / len(provided)) * 100, 2) if provided else None,
+                **qa,
+            }
+        )
+        ok = precmd_ok and len(missed) == 0
+    elif command == "recall":
+        block_recall = [
+            {
+                "label": b.get("label"),
+                "recall_percent": b.get("recall_percent"),
+                "bottleneck": b.get("bottleneck", False),
+            }
+            for b in (result.get("block_recall") or [])
+            if isinstance(b, dict)
+        ]
+        bottleneck_block = next((b["label"] for b in block_recall if b["bottleneck"]), None)
+        miss_diagnosis = result.get("miss_diagnosis") or []
+        summary.update(
+            {
+                "benchmark_source": result.get("benchmark_source"),
+                "benchmark_size": result.get("benchmark_size"),
+                "relative_recall_percent": result.get("relative_recall_percent"),
+                "retrieved_count": result.get("retrieved_count"),
+                "missed_count": result.get("missed_count"),
+                "missed_pmids": result.get("missed_pmids") or [],
+                "block_recall": block_recall,
+                "bottleneck_block": bottleneck_block,
+                "miss_diagnosis_count": len(miss_diagnosis),
+                "and_interaction_count": sum(1 for m in miss_diagnosis if isinstance(m, dict) and m.get("and_interaction")),
+            }
+        )
+    elif command == "related":
+        candidates = result.get("candidate_pmids") or []
+        top_overlap = max(
+            (int(c.get("seed_overlap_count", 0) or 0) for c in candidates if isinstance(c, dict)),
+            default=0,
+        )
+        summary.update(
+            {
+                "seed_count": len(result.get("seed_pmids") or []),
+                "links_used": result.get("links_used"),
+                "link_counts": result.get("link_counts"),
+                "candidate_count": result.get("candidate_count"),
+                "candidate_count_before_cap": result.get("candidate_count_before_cap"),
+                "max_per_seed": result.get("max_per_seed"),
+                "max_total": result.get("max_total"),
+                "top_overlap": top_overlap,
+            }
+        )
+    elif command == "term-rank":
+        ranked = result.get("ranked_terms") or []
+        summary.update(
+            {
+                "relevant_record_count": result.get("relevant_record_count"),
+                "fields": result.get("fields"),
+                "candidates_scored": result.get("candidates_scored"),
+                "candidates_unscored": result.get("candidates_unscored"),
+                "top_terms": _trim_terms(ranked),
+                "ranked_terms_total": len(ranked),
+                "ranked_terms_shown": min(COMPACT_TOP_TERMS, len(ranked)),
+                "noise_risk_count": sum(1 for r in ranked if isinstance(r, dict) and r.get("noise_risk")),
+            }
+        )
+
+    summary["ok"] = bool(ok)
+    summary["precmd_ok"] = precmd_ok
+    if precmd_codes:
+        summary["precmd_codes"] = precmd_codes
+    return summary
+
+
+def emit(command: str, result: dict[str, object], args: argparse.Namespace) -> None:
+    """Serialize a command result: full JSON by default; compact summary to stdout when
+    --summary or --output is given; full JSON to the --output file when requested.
+
+    A pure passthrough to write_json(result) when neither flag is present, so commands that
+    do not expose the flags keep their existing verbose output unchanged.
+    """
+    output_path = getattr(args, "output", None)
+    if output_path:
+        dump_json_to_path(Path(output_path), result)
+    if getattr(args, "summary", False) or output_path:
+        summary = summarize_result(command, result)
+        if output_path:
+            summary["output"] = str(output_path)
+        write_json(summary)
+    else:
+        write_json(result)
+
+
+RECORD_CONTENT_DECISION_WARNING = (
+    "Do not make relevance, scope, noise, term-discovery, or concept-role decisions "
+    "from this receipt. Inspect the saved full JSON, including abstracts where available."
+)
+
+
+def emit_record_content_receipt(command: str, result: dict[str, object], args: argparse.Namespace) -> None:
+    output_path = getattr(args, "output", None)
+    if not output_path:
+        raise ValueError(f"{command} requires --output for full record-content JSON.")
+
+    dump_json_to_path(Path(output_path), result)
+    precmd_ok, precmd_codes = _precmd_signal(result)
+    receipt: dict[str, object] = {
+        "operation": command,
+        "status": "saved_full_json",
+        "ok": bool(precmd_ok),
+        "precmd_ok": bool(precmd_ok),
+        "output": str(output_path),
+        "stdout_role": "receipt_only",
+        "full_json_review_required": True,
+        "decision_warning": RECORD_CONTENT_DECISION_WARNING,
+    }
+    if precmd_codes:
+        receipt["precmd_codes"] = precmd_codes
+
+    if command == "fetch":
+        requested = result.get("requested_pmids") or []
+        found = result.get("found_pmids") or []
+        missing = result.get("missing_pmids") or []
+        receipt.update(
+            {
+                "requested_count": len(requested),
+                "found_count": len(found),
+                "missing_count": len(missing),
+                "missing_pmids": missing,
+                "records_saved": len(result.get("records") or []),
+            }
+        )
+        receipt["ok"] = bool(precmd_ok and len(missing) == 0)
+    elif command == "mine":
+        requested = result.get("requested_pmids") or []
+        found = result.get("found_pmids") or []
+        missing = result.get("missing_pmids") or []
+        receipt.update(
+            {
+                "requested_count": len(requested),
+                "found_count": len(found),
+                "missing_count": len(missing),
+                "missing_pmids": missing,
+                "records_saved": result.get("record_count"),
+                "strategy_provided": bool(result.get("strategy_provided", False)),
+            }
+        )
+        receipt["ok"] = bool(precmd_ok and len(missing) == 0)
+    elif command == "sample":
+        search = result.get("search") if isinstance(result.get("search"), dict) else {}
+        qa = _qa_signal(search)
+        pmids = search.get("pmids") or []
+        records = result.get("records") or []
+        receipt.update(
+            {
+                "search_count": search.get("count"),
+                "retmax": search.get("retmax"),
+                "pmids_returned": len(pmids),
+                "records_saved": len(records),
+                "warning_count": qa["warning_count"],
+                "error_count": qa["error_count"],
+            }
+        )
+        receipt["ok"] = bool(precmd_ok and qa["error_count"] == 0)
+    else:
+        raise ValueError(f"{command} is not a record-content command.")
+
+    write_json(receipt)
+
+
+def add_compact_output_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print a compact QA summary to stdout instead of full JSON (counts, warning/error codes, drift, seed/recall signals). Get full data with --output.",
+    )
+    command_parser.add_argument(
+        "--output",
+        help="Write the full result JSON to this path; stdout then shows the compact summary. Record the path with manifest_tool.py.",
+    )
+
+
+def add_record_output_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--output",
+        required=True,
+        help="Write full record-content JSON to this path. Stdout prints only a minimal receipt.",
+    )
+
+
 def add_query_input_arguments(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("query", nargs="?", help="PubMed query string. Use '-' to read from stdin.")
     command_parser.add_argument("--query-file", help="Read the PubMed query from a UTF-8 text file. Use '-' for stdin.")
     command_parser.add_argument("--query-stdin", action="store_true", help="Read the PubMed query from stdin.")
+
+
+def parse_term_rank_fields(value: str, parser: argparse.ArgumentParser) -> list[str]:
+    fields: list[str] = []
+    for item in str(value).split(","):
+        name = item.strip().lower()
+        if not name:
+            continue
+        if name not in TERM_RANK_FIELDS:
+            parser.error(
+                f"Unknown --fields value: {item!r}. Only {', '.join(TERM_RANK_FIELDS)} are supported. "
+                "Phrases, acronyms, and author keywords are scored within the tiab layer; there is no "
+                "separate keywords/acronym/phrase field."
+            )
+        if name not in fields:
+            fields.append(name)
+    if not fields:
+        parser.error("Provide at least one --fields value (tiab and/or mesh).")
+    return fields
+
+
+def parse_related_links(value: str, parser: argparse.ArgumentParser) -> list[str]:
+    links: list[str] = []
+    for item in str(value).split(","):
+        name = item.strip().lower()
+        if not name:
+            continue
+        if name not in RELATED_LINKNAMES:
+            parser.error(f"Unknown --links value: {item!r}. Choose from: {', '.join(RELATED_LINKNAMES)}.")
+        if name not in links:
+            links.append(name)
+    if not links:
+        parser.error(f"Provide at least one --links value ({', '.join(RELATED_LINKNAMES)}).")
+    return links
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1835,6 +3670,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     fetch_parser = subparsers.add_parser("fetch", help="Fetch PubMed records by PMID.")
     fetch_parser.add_argument("--pmids", nargs="+", required=True)
+    add_record_output_arguments(fetch_parser)
+
+    related_parser = subparsers.add_parser(
+        "related",
+        help="Expand seed PMIDs into a candidate relevant set via PubMed eLink (similar articles, cited-by, references).",
+    )
+    related_parser.add_argument("--pmids", nargs="+", required=True, help="Seed PMIDs to expand.")
+    related_parser.add_argument(
+        "--links",
+        default="similar",
+        help="Comma-separated link types to follow: similar, citedin, refs (default: similar).",
+    )
+    related_parser.add_argument(
+        "--max-per-seed",
+        type=int,
+        default=RELATED_MAX_PER_SEED,
+        help="Maximum neighbors kept per seed per link type (default: %(default)s).",
+    )
+    related_parser.add_argument(
+        "--max-total",
+        type=int,
+        default=RELATED_MAX_TOTAL,
+        help="Hard cap on the deduplicated candidate set (default: %(default)s).",
+    )
 
     mine_parser = subparsers.add_parser("mine", help="Fetch seed PMIDs and mine MeSH, keywords, phrases, and acronyms.")
     mine_parser.add_argument("--pmids", nargs="+", required=True)
@@ -1843,15 +3702,100 @@ def build_parser() -> argparse.ArgumentParser:
     mine_parser.add_argument("--max-phrases", type=int, default=80)
     mine_parser.add_argument("--max-acronyms", type=int, default=60)
     mine_parser.add_argument("--min-phrase-count", type=int, default=1)
+    add_record_output_arguments(mine_parser)
+
+    term_rank_parser = subparsers.add_parser(
+        "term-rank",
+        help="Rank tiab/MeSH terms by enrichment in a relevant/seed set vs. PubMed background.",
+    )
+    term_rank_source = term_rank_parser.add_mutually_exclusive_group(required=True)
+    term_rank_source.add_argument("--pmids", nargs="+", help="Relevant/seed PMIDs to fetch and analyse.")
+    term_rank_source.add_argument("--mine-json", help="JSON output from the mine command; its found PMIDs become the relevant set.")
+    term_rank_source.add_argument("--relevant-query-file", help="UTF-8 file with a PubMed query defining a pilot relevant set. Use '-' for stdin.")
+    term_rank_parser.add_argument(
+        "--exclude-pmids",
+        nargs="*",
+        default=None,
+        help="PMIDs to drop from the resolved relevant set (e.g. seeds excluded at pre-gate triage as out-of-scope/retracted). Combine with --mine-json to reuse mined seeds minus the excluded ones.",
+    )
+    term_rank_parser.add_argument(
+        "--only-pmids",
+        nargs="*",
+        default=None,
+        help="Restrict the resolved relevant set to these accepted PMIDs (whitelist/intersection).",
+    )
+    term_rank_parser.add_argument("--strategy", help="Optional existing strategy text to flag terms already present.")
+    term_rank_parser.add_argument("--strategy-file", help="Optional UTF-8 strategy file to flag terms already present.")
+    term_rank_parser.add_argument(
+        "--fields",
+        default="tiab,mesh",
+        help="Comma-separated scoring layers: only tiab and/or mesh (default both). Phrases, "
+        "acronyms, and author keywords are scored within tiab; there is no separate "
+        "keywords/acronym/phrase field.",
+    )
+    term_rank_parser.add_argument(
+        "--max-terms",
+        type=int,
+        default=DEFAULT_TERM_RANK_MAX_TERMS,
+        help="Maximum candidate terms to score with a PubMed background count (caps API calls).",
+    )
+    term_rank_parser.add_argument(
+        "--relevant-retmax",
+        type=int,
+        default=TERM_RANK_RELEVANT_QUERY_CAP,
+        help="Maximum records to fetch when --relevant-query-file is used.",
+    )
+    term_rank_parser.add_argument(
+        "--pubmed-total",
+        type=int,
+        default=PUBMED_TOTAL_ESTIMATE,
+        help="Approximate PubMed corpus size used as the lift denominator.",
+    )
 
     sample_parser = subparsers.add_parser("sample", help="Search PubMed and fetch a small sample.")
     add_query_input_arguments(sample_parser)
     sample_parser.add_argument("--retmax", type=int, default=5)
     sample_parser.add_argument("--sort", choices=["pub_date", "Author", "JournalName", "relevance"], default=None)
+    add_record_output_arguments(sample_parser)
 
     validate_parser = subparsers.add_parser("validate", help="Check whether a query retrieves supplied seed PMIDs.")
     add_query_input_arguments(validate_parser)
     validate_parser.add_argument("--pmids", nargs="+", required=True)
+
+    recall_parser = subparsers.add_parser(
+        "recall",
+        help="Estimate relative recall of a strategy against a benchmark relevant set, with per-block miss diagnosis.",
+    )
+    add_query_input_arguments(recall_parser)
+    recall_source = recall_parser.add_mutually_exclusive_group(required=True)
+    recall_source.add_argument("--benchmark-pmids", nargs="+", help="Benchmark relevant PMIDs (e.g. an independent gold standard).")
+    recall_source.add_argument("--benchmark-json", help="JSON from related/mine, or a bare PMID list, defining the benchmark set.")
+    recall_source.add_argument("--benchmark-query-file", help="UTF-8 file with a query defining the benchmark set. Use '-' for stdin.")
+    recall_parser.add_argument(
+        "--min-seed-overlap",
+        type=int,
+        default=1,
+        help="When --benchmark-json is a related run, keep only candidates with at least this seed_overlap_count (default: %(default)s).",
+    )
+    recall_parser.add_argument(
+        "--benchmark-retmax",
+        type=int,
+        default=BENCHMARK_QUERY_CAP,
+        help="Maximum records fetched when --benchmark-query-file is used (default: %(default)s).",
+    )
+    recall_parser.add_argument("--blocks-file", help="JSON list of {label, query} concept blocks (or a {label: query} map) for per-block miss diagnosis.")
+    recall_parser.add_argument(
+        "--exclude-pmids",
+        nargs="*",
+        default=None,
+        help="PMIDs to drop from the resolved benchmark set (e.g. seeds excluded at pre-gate triage as out-of-scope/retracted, or noise from a related expansion). Combine with --benchmark-json to reuse a candidate set minus the excluded ones.",
+    )
+    recall_parser.add_argument(
+        "--only-pmids",
+        nargs="*",
+        default=None,
+        help="Restrict the resolved benchmark set to these accepted PMIDs (whitelist/intersection).",
+    )
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple PubMed ESearch count checks.")
     batch_parser.add_argument("queries_file", help="JSON or text batch file. Use '-' to read from stdin.")
@@ -1866,13 +3810,60 @@ def build_parser() -> argparse.ArgumentParser:
     variants_parser.add_argument("--seed-pmids", nargs="+", help="Optional known relevant PMIDs to validate against each variant.")
     variants_parser.add_argument("--labelled-samples", help="Optional JSON file keyed by variant label with PMID-level relevance labels for pilot precision/NNR estimates.")
 
-    audit_parser = subparsers.add_parser("audit-workbook", help="Create an XLSX audit workbook from mine and/or variants JSON outputs.")
+    audit_parser = subparsers.add_parser("audit-workbook", help="Create an XLSX audit workbook from mine, variants, and/or term-rank JSON outputs.")
     audit_parser.add_argument("--mine-json", help="JSON output from the mine command.")
     audit_parser.add_argument("--variants-json", help="JSON output from the variants command.")
+    audit_parser.add_argument("--term-rank-json", help="JSON output from the term-rank command.")
     audit_parser.add_argument("--output", required=True, help="Path for the .xlsx workbook to create.")
+
+    scaffold_parser = subparsers.add_parser(
+        "audit-scaffold",
+        help="Build a partial audit JSON from saved tool outputs + run_manifest.json (mechanical fields filled; judgment fields left as placeholders for audit_markdown.py).",
+    )
+    scaffold_parser.add_argument("--output", required=True, help="Path for the audit JSON to create (then render with audit_markdown.py).")
+    scaffold_parser.add_argument("--manifest", help="run_manifest.json for discovery (CLI checks, evidence files, search dates).")
+    scaffold_parser.add_argument("--final-search-json", help="Saved --output JSON of the delivered/post-hygiene search (result count + ATM translation).")
+    scaffold_parser.add_argument("--strategy-file", help="UTF-8 file with the final PubMed strategy text.")
+    scaffold_parser.add_argument("--validate-json", help="Saved validate --output JSON (seed retrieved/missed).")
+    scaffold_parser.add_argument("--variants-json", help="Saved variants --output JSON (chosen/focused variant).")
+    scaffold_parser.add_argument("--seed-fetch-json", help="Saved fetch --output JSON from pre-gate seed triage.")
+    scaffold_parser.add_argument("--seed-mine-json", help="Saved mine --output JSON from pre-gate seed mining.")
+    scaffold_parser.add_argument("--related-json", help="Saved related --output JSON for seed-set expansion.")
+    scaffold_parser.add_argument("--recall-json", help="Saved recall --output JSON for relative-recall estimation.")
+    scaffold_parser.add_argument("--blocks-file", help="JSON list of {label, query} concept blocks (or a {label: query} map) to populate concept_blocks for the numbered line set; counts are matched from labelled manifest search entries.")
+    scaffold_parser.add_argument("--audit-workbook", help="Path of an exported .xlsx audit workbook, if any.")
+    scaffold_parser.add_argument("--topic-slug", default="", help="Topic slug for the audit title (defaults to the manifest topic_slug).")
+    scaffold_parser.add_argument("--date-searched", help="Override audit date searched (YYYY-MM-DD), useful for local/reporting-date alignment.")
+    scaffold_parser.add_argument(
+        "--seed-status",
+        choices=["yes", "no", "unknown"],
+        default="unknown",
+        help="Seed status when no --validate-json is given. Default: unknown (emit a placeholder rather than guess no-seed).",
+    )
+    scaffold_parser.add_argument(
+        "--if-exists",
+        choices=["fail", "suffix", "overwrite"],
+        default="fail",
+        help="How to handle an existing --output. Default: fail (protects an audit you have already filled in).",
+    )
+    scaffold_parser.add_argument(
+        "--overlay-template",
+        help="Also write a compact authored-judgment overlay template for audit_markdown.py --overlay-json.",
+    )
 
     doctor_parser = subparsers.add_parser("doctor", help="Check NCBI environment settings and run a tiny PubMed test.")
     doctor_parser.add_argument("--test-query", default="asthma[tiab]")
+
+    for compact_parser in (
+        search_parser,
+        related_parser,
+        term_rank_parser,
+        validate_parser,
+        recall_parser,
+        batch_parser,
+        variants_parser,
+    ):
+        add_compact_output_arguments(compact_parser)
 
     return parser
 
@@ -1891,13 +3882,27 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = esearch(client, query, args.retmax, args.retstart, args.sort)
-            write_json(attach_hook(result, preflight))
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "fetch":
             preflight = pre_command_hook(client, args)
             if not preflight["ok"]:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
-            write_json(attach_hook(efetch(client, args.pmids), preflight))
+            emit_record_content_receipt(args.command, attach_hook(efetch(client, args.pmids), preflight), args)
+        elif args.command == "related":
+            links = parse_related_links(args.links, parser)
+            preflight = pre_command_hook(client, args)
+            if not preflight["ok"]:
+                write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 2
+            result = related_pmids(
+                client,
+                args.pmids,
+                links=links,
+                max_per_seed=max(1, args.max_per_seed),
+                max_total=max(1, args.max_total),
+            )
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "mine":
             if args.strategy and args.strategy_file:
                 parser.error("Use only one of --strategy or --strategy-file.")
@@ -1916,7 +3921,57 @@ def main(argv: list[str] | None = None) -> int:
                 max_acronyms=max(0, args.max_acronyms),
                 min_phrase_count=max(1, args.min_phrase_count),
             )
-            write_json(attach_hook(result, preflight))
+            emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
+        elif args.command == "term-rank":
+            if args.strategy and args.strategy_file:
+                parser.error("Use only one of --strategy or --strategy-file.")
+            fields = parse_term_rank_fields(args.fields, parser)
+            strategy_text = args.strategy or ""
+            if args.strategy_file:
+                strategy_text = read_text_source(args.strategy_file)
+            pmids: list[str] = []
+            relevant_query: str | None = None
+            if args.pmids:
+                pmids = [str(pmid) for pmid in args.pmids]
+            elif args.mine_json:
+                mine_payload = load_json_file(args.mine_json)
+                pmids = [
+                    str(pmid)
+                    for pmid in (mine_payload.get("found_pmids") or mine_payload.get("requested_pmids") or [])
+                ]
+            else:
+                relevant_query = normalize_query(read_text_source(args.relevant_query_file))
+                if not relevant_query:
+                    parser.error("Relevant query file is empty.")
+            preflight = pre_command_hook(client, args, query=relevant_query)
+            if not preflight["ok"]:
+                write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 2
+            if relevant_query is not None:
+                search_result = esearch(client, relevant_query, max(1, args.relevant_retmax), 0, None)
+                pmids = [str(pmid) for pmid in search_result.get("pmids", [])]
+            exclude_list = [str(pmid) for pmid in (args.exclude_pmids or [])]
+            only_list = [str(pmid) for pmid in (args.only_pmids or [])]
+            pre_filter = dedup_preserving_order([str(pmid) for pmid in pmids])
+            pmids, _removed = filter_pmids(pmids, only=only_list or None, exclude=exclude_list or None)
+            exclude_set = set(exclude_list)
+            excluded_present = [pmid for pmid in pre_filter if pmid in exclude_set]
+            if not pmids:
+                write_json({"error": "No relevant PMIDs resolved for term ranking.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 1
+            fetch_result = efetch(client, pmids)
+            result = term_rank(
+                client,
+                list(fetch_result.get("records", [])),
+                fields=fields,
+                max_terms=max(1, args.max_terms),
+                strategy_text=strategy_text,
+                pubmed_total=args.pubmed_total,
+            )
+            result["relevant_pmids"] = pmids
+            if excluded_present:
+                result["excluded_pmids"] = excluded_present
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "sample":
             query = resolve_query(args, parser)
             preflight = pre_command_hook(client, args, query=query)
@@ -1924,7 +3979,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = sample(client, query, args.retmax, args.sort)
-            write_json(attach_hook(result, preflight))
+            emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
         elif args.command == "validate":
             query = resolve_query(args, parser)
             preflight = pre_command_hook(client, args, query=query)
@@ -1932,7 +3987,61 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = validate(client, query, args.pmids)
-            write_json(attach_hook(result, preflight))
+            emit(args.command, attach_hook(result, preflight), args)
+        elif args.command == "recall":
+            query = resolve_query(args, parser)
+            blocks = None
+            if args.blocks_file:
+                raw_blocks = load_benchmark_or_blocks_json(args.blocks_file)
+                validate_recall_blocks(raw_blocks)
+                blocks = parse_variant_items(raw_blocks)
+            benchmark_query: str | None = None
+            benchmark_source = ""
+            benchmark_seed_pmids: list[str] = []
+            if args.benchmark_pmids:
+                benchmark_seed_pmids = [str(pmid) for pmid in args.benchmark_pmids]
+                benchmark_source = "benchmark-pmids"
+            elif args.benchmark_json:
+                payload = load_benchmark_or_blocks_json(args.benchmark_json)
+                benchmark_seed_pmids = extract_benchmark_pmids(payload, min_seed_overlap=max(0, args.min_seed_overlap))
+                assert_numeric_pmids(benchmark_seed_pmids, source=f"--benchmark-json {args.benchmark_json}")
+                benchmark_source = f"benchmark-json:{args.benchmark_json}"
+            else:
+                benchmark_query = normalize_query(read_text_source(args.benchmark_query_file))
+                if not benchmark_query:
+                    parser.error("Benchmark query file is empty.")
+                benchmark_source = "benchmark-query"
+            scan_queries: list[dict[str, object]] = [{"label": "strategy", "query": query}]
+            if benchmark_query:
+                scan_queries.append({"label": "benchmark-query", "query": benchmark_query})
+            for block in blocks or []:
+                scan_queries.append({"label": str(block.get("label", "")), "query": str(block.get("query", ""))})
+            preflight = pre_command_hook(client, args, query=query, queries=scan_queries)
+            if not preflight["ok"]:
+                write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 2
+            if benchmark_query is not None:
+                benchmark_search = esearch(client, benchmark_query, max(1, args.benchmark_retmax), 0, None)
+                benchmark_seed_pmids = [str(pmid) for pmid in benchmark_search.get("pmids", [])]
+            exclude_list = [str(pmid) for pmid in (args.exclude_pmids or [])]
+            only_list = [str(pmid) for pmid in (args.only_pmids or [])]
+            pre_filter = dedup_preserving_order([str(pmid) for pmid in benchmark_seed_pmids])
+            benchmark_seed_pmids, _removed = filter_pmids(benchmark_seed_pmids, only=only_list or None, exclude=exclude_list or None)
+            exclude_set = set(exclude_list)
+            excluded_present = [pmid for pmid in pre_filter if pmid in exclude_set]
+            if not benchmark_seed_pmids:
+                write_json({"error": "No benchmark PMIDs resolved for relative-recall estimation.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 1
+            result = relative_recall(
+                client,
+                query,
+                benchmark_seed_pmids,
+                benchmark_source=benchmark_source,
+                blocks=blocks,
+            )
+            if excluded_present:
+                result["excluded_pmids"] = excluded_present
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "batch":
             queries = parse_batch_queries(read_text_source(args.queries_file))
             preflight = pre_command_hook(client, args, queries=queries)
@@ -1940,7 +4049,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = batch_search(client, queries, args.retmax, args.sort)
-            write_json(attach_hook(result, preflight))
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "variants":
             queries, file_baseline = parse_variant_queries(read_text_source(args.variants_file))
             labelled_samples = parse_labelled_samples(read_text_source(args.labelled_samples)) if args.labelled_samples else None
@@ -1957,12 +4066,13 @@ def main(argv: list[str] | None = None) -> int:
                 seed_pmids=args.seed_pmids,
                 labelled_samples=labelled_samples,
             )
-            write_json(attach_hook(result, preflight))
+            emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "audit-workbook":
-            if not args.mine_json and not args.variants_json:
-                parser.error("Provide --mine-json, --variants-json, or both.")
+            if not args.mine_json and not args.variants_json and not args.term_rank_json:
+                parser.error("Provide --mine-json, --variants-json, --term-rank-json, or a combination.")
             mine_data = load_json_file(args.mine_json) if args.mine_json else None
             variants_data = load_json_file(args.variants_json) if args.variants_json else None
+            term_rank_data = load_json_file(args.term_rank_json) if args.term_rank_json else None
             write_json(
                 build_audit_workbook(
                     output_path=args.output,
@@ -1970,8 +4080,12 @@ def main(argv: list[str] | None = None) -> int:
                     variants_data=variants_data,
                     mine_source=args.mine_json or "",
                     variants_source=args.variants_json or "",
+                    term_rank_data=term_rank_data,
+                    term_rank_source=args.term_rank_json or "",
                 )
             )
+        elif args.command == "audit-scaffold":
+            write_json(run_audit_scaffold(args))
         elif args.command == "doctor":
             test_query = normalize_query(args.test_query)
             if not test_query:

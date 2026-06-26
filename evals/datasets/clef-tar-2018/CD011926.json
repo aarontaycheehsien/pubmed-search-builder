@@ -1,0 +1,28 @@
+{
+  "id": "CD011926",
+  "suite": "clef-tar-2018",
+  "question": "Molecular assays for the diagnosis of sepsis in neonates",
+  "strategy_file": "CD011926.strategy.txt",
+  "blocks_file": "CD011926.blocks.json",
+  "gold_relevant_pmids": [
+    9350892, 10878046, 12673260, 15482666, 15985688, 16085969, 16145149,
+    16258155, 16825509, 16982493, 17880793, 18550744, 18624992, 19124696,
+    19152691, 19273654, 19279393, 19407210, 19531943, 20667142, 21251558,
+    22192484, 22205207, 23045950, 23137657, 23485823, 24388336, 25047415,
+    25102109
+  ],
+  "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD011926.",
+  "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
+  "protocol": {
+    "seeds": "none — proceed under the no-seed workflow",
+    "framework": "diagnostic (PIRD / diagnostic PICO). Index test = molecular / nucleic-acid amplification assays; target condition = neonatal sepsis / bloodstream infection.",
+    "essential_concepts": "neonatal sepsis / bloodstream infection; molecular / nucleic-acid amplification assay. Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
+    "optional_blocks": "DECLINE all optional secondary AND blocks — no diagnostic-accuracy/outcome block, no separate reference-standard block.",
+    "methodological_filter": "none",
+    "limits": "none (no date, language, species, or age limits)",
+    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  },
+  "seed_pmids_given_to_skill": [],
+  "strategy_provenance": "Hand-built 3-block high-sensitivity PubMed strategy authored for this fixture as a scoring baseline. NOT the published Cochrane/Ovid search (that is in Ovid syntax and would need translation). Replace with skill-generated output in Phase 2.",
+  "notes": "Diagnostic-test-accuracy review. Gold set = 29 included studies. Some may predate or fall outside PubMed; the harness reports reachable vs. unreachable separately."
+}
