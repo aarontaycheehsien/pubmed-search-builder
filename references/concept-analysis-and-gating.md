@@ -48,6 +48,16 @@ Sensitivity-dangerous concepts include outcomes, comparators, mechanisms, mediat
 
 Do not ask about ordinary term expansion that stays inside an existing `OR` block. Ask only when the decision would add a separate `AND` block, add a filter, or otherwise narrow the main strategy.
 
+## Canonical concept-gate question
+
+Use this wording when candidate concepts may become sensitivity-dangerous mandatory `AND` blocks or filters:
+
+```text
+Before I build the PubMed blocks, I need to protect recall by deciding which concepts are safe to require as separate AND blocks. For the main high-sensitivity strategy, should I require only [essential concept(s)] and treat [outcomes/comparators/settings/mechanisms/barriers/facilitators/subgroups/study-design ideas] as optional, omitted, within-block terms, validated filters, or focused variants rather than mandatory AND blocks?
+```
+
+Use this only when a candidate concept could narrow the main strategy; do not ask it for ordinary synonyms that clearly belong inside an existing `OR` block.
+
 ## Pre-MeSH vocabulary/domain brainstorm
 
 Run this step after the concept gate and before MeSH lookup when a concept is social-science, psychosocial, behavioral, qualitative, health-services, or otherwise weakly covered by controlled vocabulary. For straightforward biomedical concepts with stable MeSH and terminology, keep the step brief and document why no extended brainstorm was needed.

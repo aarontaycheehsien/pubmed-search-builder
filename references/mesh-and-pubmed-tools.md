@@ -160,15 +160,18 @@ Run `filter-check` whenever the protocol, request, or strategy mentions a study-
 Use `scripts/audit_markdown.py` when structured audit notes are available. For completed strategy builds, first save the structured audit notes as a UTF-8 JSON file, preferably `audit_<topic>_<date>.json`, then render the Markdown from that file:
 
 ```bash
-python scripts/audit_markdown.py audit_adhd_bipolar_2026-05-18.json --output audit_2026-05-18.md --if-exists suffix
+python scripts/audit_markdown.py audit_adhd_bipolar_2026-05-18.json --output audit_2026-05-18.md
 ```
+
+Use `references/audit-example.json` as a starter input and `references/audit-json-schema.md` as the field reference for the JSON object consumed by `audit_markdown.py`.
 
 The default command output is a compact JSON receipt rather than the full audit
 Markdown. It includes the saved path, byte count, placeholder count, and section
 count. Use `--print-report` only when the terminal output itself must include
 the full report. The tool refuses unresolved placeholder-like text by default
-and refuses to overwrite existing files unless `--if-exists overwrite` or
-`--if-exists suffix` is selected.
+and refuses to overwrite existing files unless `--if-exists overwrite` is
+selected. When a matching output file exists, it writes to a clear numeric
+suffix by default; use `--if-exists fail` when a collision should stop the run.
 
 Stdin input (`python scripts/audit_markdown.py - ...`) is acceptable only for tiny smoke tests. Do not pipe large structured audit objects from shells such as PowerShell `ConvertTo-Json | python scripts/audit_markdown.py -`; file-based JSON avoids stdin buffering, quoting, and timeout failures. If rendering times out or fails, keep the audit JSON, rerun the renderer from the saved file, and use direct Markdown from `references/audit-template.md` only as a final fallback. Document any fallback in Reporting notes.
 

@@ -562,8 +562,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--if-exists",
         choices=["fail", "suffix", "overwrite"],
-        default="fail",
-        help="How to handle an existing output path. Default: fail.",
+        default="suffix",
+        help="How to handle an existing output path. Default: suffix.",
     )
     parser.add_argument("--allow-placeholders", action="store_true", help="Allow unresolved placeholder-like text.")
     parser.add_argument("--print-report", action="store_true", help="Print the full Markdown report instead of the compact JSON receipt.")

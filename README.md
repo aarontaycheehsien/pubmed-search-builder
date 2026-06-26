@@ -131,13 +131,19 @@ printing the whole report into the terminal.
 
 ```bash
 python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md
-python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md --if-exists suffix
+python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md --if-exists fail
+python scripts/audit_markdown.py references/audit-example.json --output audit_example.md
 ```
 
 By default, the tool writes the full audit report to disk and prints only a
 small JSON receipt with the output path, byte count, placeholder count, and
-section count. Use `--print-report` only when the full Markdown should be
-printed.
+section count. If the output path already exists, it chooses a clear numeric
+suffix by default; use `--if-exists fail` when a collision should stop the run.
+Use `--print-report` only when the full Markdown should be printed.
+
+Use [`references/audit-example.json`](references/audit-example.json) as a
+starter input and [`references/audit-json-schema.md`](references/audit-json-schema.md)
+for the minimal field contract.
 
 ---
 

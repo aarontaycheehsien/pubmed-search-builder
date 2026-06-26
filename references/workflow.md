@@ -55,7 +55,7 @@ If seed PMIDs are supplied, limited fetch/mining of those PMIDs is allowed after
 
 ## 3. Run formal concept analysis and the concept gate
 
-Use `concept-analysis-and-gating.md` as the canonical procedure for the detailed ledger, seed/no-seed branches, role definitions, sensitivity-dangerous concept handling, and concept-gate pilot-test protocol. Use `goal-tracking.md` for `/goal` pre-creation rules and active-goal behavior.
+Use `concept-analysis-and-gating.md` as the canonical procedure for the detailed ledger, seed/no-seed branches, role definitions, sensitivity-dangerous concept handling, canonical concept-gate question, and concept-gate pilot-test protocol. Use `goal-tracking.md` for `/goal` pre-creation rules and active-goal behavior.
 
 Run this step after the seed PMID decision is resolved and, when seed PMIDs were supplied, after limited seed fetch/mining for concept evidence. Run it before MeSH lookup, broad PubMed exploration, or concept-block drafting. The goal is to decide which concepts become essential `AND` blocks, which remain inside existing `OR` blocks, which are omitted for sensitivity, and which require a methodological/filter decision.
 
@@ -226,7 +226,7 @@ Final output uses the template in `audit-template.md`. Use `prisma-s-reporting.m
 
 For every completed strategy build, create a Markdown audit file in the user's working/output folder, preferably `audit_YYYY-MM-DD.md` or `audit_<topic-slug>_YYYY-MM-DD.md`. The file must contain the final strategy audit report and a decision ledger. If a matching audit file already exists, do not overwrite it silently; use a clear suffix or ask when overwriting is ambiguous. Report the saved audit Markdown path in the final response. If a structured audit JSON artifact was created, also report that JSON path in the final response and Reporting notes. The optional `.xlsx` audit workbook is a supplement, not a replacement for the Markdown audit file.
 
-When possible, collect the audit facts into a structured JSON object, save that object to a UTF-8 audit JSON file such as `audit_<topic-slug>_YYYY-MM-DD.json`, and render the report from that file with `scripts/audit_markdown.py`. The tool writes the full Markdown report to disk and prints only a compact JSON receipt by default, which keeps token use low during long strategy builds. Use `--if-exists suffix` when an automatic clear suffix is preferred over failing on an existing file. Avoid large shell pipelines such as PowerShell `ConvertTo-Json | python scripts/audit_markdown.py -`; for completed strategy builds, file-based JSON input is the reliable path.
+When possible, collect the audit facts into a structured JSON object, save that object to a UTF-8 audit JSON file such as `audit_<topic-slug>_YYYY-MM-DD.json`, and render the report from that file with `scripts/audit_markdown.py`. The tool writes the full Markdown report to disk, chooses a clear numeric suffix by default when a matching Markdown path exists, and prints only a compact JSON receipt, which keeps token use low during long strategy builds. Use `--if-exists fail` only when a collision should stop the run. Avoid large shell pipelines such as PowerShell `ConvertTo-Json | python scripts/audit_markdown.py -`; for completed strategy builds, file-based JSON input is the reliable path.
 
 Record:
 

@@ -1,4 +1,3 @@
-````markdown
 ## Search structure
 
 - **Concept 1:** [name and scope; MeSH + tiab / tiab-only / MeSH-only]
@@ -172,4 +171,3 @@ Do not imply that PRESS peer review has occurred unless it actually has.
 - **Other databases:** Database-specific strategies for Ovid MEDLINE, Embase, CENTRAL, CINAHL, EconLit, grey literature, or other sources were [not requested / not built / built separately]. Do not present them unless separately constructed.
 
 For PRISMA-S 2021 reporting items applicable to this skill, see `references/prisma-s-reporting.md`.
-````
