@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,10 +77,22 @@ class AuditMarkdownTests(unittest.TestCase):
             self.assertIn("## Decision ledger", text)
             self.assertIn(f"**Audit Markdown file:** {output}", text)
 
-    def test_existing_output_fails_by_default_and_suffixes_when_requested(self):
+    def test_existing_output_suffixes_by_default_and_explicit_fail_remains_available(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "audit.md"
             output.write_text("existing", encoding="utf-8")
+
+            args = audit_markdown.build_parser().parse_args(["audit.json", "--output", str(output)])
+            self.assertEqual(args.if_exists, "suffix")
+
+            summary = audit_markdown.write_audit_markdown(
+                data=sample_data(),
+                output=str(output),
+                if_exists=args.if_exists,
+                allow_placeholders=False,
+            )
+            self.assertEqual(summary["output_path"], str(Path(tmpdir) / "audit_2.md"))
+            self.assertEqual(output.read_text(encoding="utf-8"), "existing")
 
             with self.assertRaises(audit_markdown.AuditMarkdownError):
                 audit_markdown.write_audit_markdown(
@@ -88,14 +101,6 @@ class AuditMarkdownTests(unittest.TestCase):
                     if_exists="fail",
                     allow_placeholders=False,
                 )
-
-            summary = audit_markdown.write_audit_markdown(
-                data=sample_data(),
-                output=str(output),
-                if_exists="suffix",
-                allow_placeholders=False,
-            )
-            self.assertEqual(summary["output_path"], str(Path(tmpdir) / "audit_2.md"))
 
     def test_rejects_unresolved_placeholder_like_text_outside_strategy(self):
         data = sample_data()
@@ -114,6 +119,24 @@ class AuditMarkdownTests(unittest.TestCase):
         data["final_strategy"] = '("Asthma"[Mesh] OR asthma[Title/Abstract] OR child*[tiab])'
         markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
         self.assertEqual(audit_markdown.unresolved_placeholders(markdown), [])
+
+    def test_reference_audit_example_renders_without_placeholders(self):
+        data = json.loads((ROOT / "references" / "audit-example.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "audit_example.md"
+            summary = audit_markdown.write_audit_markdown(
+                data=data,
+                output=str(output),
+                if_exists="fail",
+                allow_placeholders=False,
+            )
+
+            self.assertEqual(summary["placeholder_count"], 0)
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("# Asthma self-management education for children", text)
+            self.assertIn("## Decision ledger", text)
+            self.assertIn("## Reporting notes", text)
+            self.assertIn("No seed PMIDs were available", text)
 
 
 if __name__ == "__main__":
