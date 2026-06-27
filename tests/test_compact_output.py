@@ -332,25 +332,27 @@ class EmitIntegrationTests(unittest.TestCase):
         self.assertIn("bottleneck_block", data)
         self.assertNotIn("retrieved_pmids", data)
 
-    def test_record_content_commands_require_output_and_reject_summary(self):
+    def test_record_content_commands_require_output_and_tolerate_summary(self):
         parser = pubmed_tool.build_parser()
         valid_cases = [
             ["fetch", "--pmids", "1", "--output", "fetch.json"],
             ["mine", "--pmids", "1", "--output", "mine.json"],
             ["sample", "robot[tiab]", "--output", "sample.json"],
+            # --summary is tolerated (no-op note), not a hard parse error.
+            ["fetch", "--pmids", "1", "--summary", "--output", "fetch.json"],
+            ["mine", "--pmids", "1", "--summary", "--output", "mine.json"],
+            ["sample", "robot[tiab]", "--summary", "--output", "sample.json"],
         ]
         for argv in valid_cases:
             with self.subTest(argv=argv):
                 args = parser.parse_args(argv)
                 self.assertTrue(args.output)
 
+        # --output is still required for record-content commands.
         invalid_cases = [
             ["fetch", "--pmids", "1"],
             ["mine", "--pmids", "1"],
             ["sample", "robot[tiab]"],
-            ["fetch", "--pmids", "1", "--summary", "--output", "fetch.json"],
-            ["mine", "--pmids", "1", "--summary", "--output", "mine.json"],
-            ["sample", "robot[tiab]", "--summary", "--output", "sample.json"],
         ]
         for argv in invalid_cases:
             with self.subTest(argv=argv):
@@ -405,19 +407,23 @@ class EmitIntegrationTests(unittest.TestCase):
             self.assertNotIn(forbidden, receipt)
         self.assertNotIn("Abstract for", json.dumps(receipt))
 
-    def test_record_content_summary_is_rejected_by_main(self):
+    def test_record_content_summary_is_tolerated_by_main(self):
         cases = [
-            ["fetch", "--pmids", "1", "--summary", "--output", "fetch.json"],
-            ["mine", "--pmids", "1", "--summary", "--output", "mine.json"],
-            ["sample", "robot[tiab]", "--summary", "--output", "sample.json"],
+            ["fetch", "--pmids", "1"],
+            ["mine", "--pmids", "1"],
+            ["sample", "robot[tiab]"],
         ]
         for argv in cases:
             with self.subTest(argv=argv):
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
-                    pubmed_tool.main(argv)
-                self.assertEqual(raised.exception.code, 2)
-                self.assertIn("--summary", err.getvalue())
+                out_path = str(Path(self.tmp.name) / "rc.json")
+                rc, receipt = self.run_main(argv + ["--summary", "--output", out_path])
+                # Tolerated: runs cleanly, stays receipt-only, notes the ignored flag,
+                # and still writes the full JSON to --output.
+                self.assertEqual(rc, 0)
+                self.assertEqual(receipt["stdout_role"], "receipt_only")
+                self.assertIn("tolerated_flag", receipt)
+                self.assertIn("--summary ignored", receipt["tolerated_flag"])
+                self.assertTrue(Path(out_path).exists())
 
 
 class ZeroHitCompactTests(unittest.TestCase):

@@ -117,67 +117,6 @@ class AuditMarkdownTests(unittest.TestCase):
             self.assertIn("**Run manifest:** run_manifest.json", text)
             self.assertNotIn("[decision caveat]", text)
 
-    def test_validate_only_checks_without_writing_markdown(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "audit.md"
-            summary = audit_markdown.validate_audit_markdown(
-                data=sample_data(),
-                output=str(output),
-                allow_placeholders=False,
-            )
-
-            self.assertTrue(summary["ok"])
-            self.assertEqual(summary["operation"], "audit-markdown-validate")
-            self.assertEqual(summary["output_path"], str(output))
-            self.assertEqual(summary["placeholder_count"], 0)
-            self.assertFalse(output.exists())
-
-    def test_validate_only_reports_placeholders_and_line_set_drift(self):
-        data = sample_data()
-        data["rationale"] = {"mesh_choices": "Review [reason] before final handoff."}
-        data["concept_blocks"] = [{"label": "Other", "query": "other[tiab]", "count": 1}]
-
-        summary = audit_markdown.validate_audit_markdown(
-            data=data,
-            output="audit.md",
-            allow_placeholders=False,
-        )
-
-        self.assertFalse(summary["ok"])
-        self.assertGreater(summary["placeholder_count"], 0)
-        self.assertGreater(summary["line_set_issue_count"], 0)
-        self.assertTrue(any("line-set drift" in issue or "not present" in issue for issue in summary["issues"]))
-
-    def test_validate_only_cli_respects_overlay(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_path = Path(tmpdir) / "audit.json"
-            overlay_path = Path(tmpdir) / "overlay.json"
-            output = Path(tmpdir) / "audit.md"
-            data = sample_data()
-            data["reporting_notes"]["remaining_caveats"] = "[decision caveat]"
-            audit_path.write_text(json.dumps(data), encoding="utf-8")
-            overlay_path.write_text(
-                json.dumps({"reporting_notes": {"remaining_caveats": "not peer reviewed"}}),
-                encoding="utf-8",
-            )
-
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-                rc = audit_markdown.main(
-                    [
-                        str(audit_path),
-                        "--overlay-json",
-                        str(overlay_path),
-                        "--output",
-                        str(output),
-                        "--validate-only",
-                    ]
-                )
-
-            self.assertEqual(rc, 0)
-            self.assertFalse(output.exists())
-            self.assertTrue(json.loads(out.getvalue())["ok"])
-
     def test_known_empty_lists_render_as_none(self):
         data = sample_data()
         data["seed_validation"] = {
@@ -262,6 +201,37 @@ class AuditMarkdownTests(unittest.TestCase):
         data["final_strategy"] = '("Asthma"[Mesh] OR asthma[Title/Abstract] OR child*[tiab])'
         markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
         self.assertEqual(audit_markdown.unresolved_placeholders(markdown), [])
+
+    def test_morphology_review_rows_render_in_tiab_expansion_log(self):
+        data = sample_data()
+        data["tiab_expansion"] = {
+            "morphology_review": [
+                {
+                    "phrase_family": "immune checkpoint inhibitor(s)",
+                    "explicit_forms": ['"immune checkpoint inhibitor"[tiab]', '"immune checkpoint inhibitors"[tiab]'],
+                    "wildcard_candidate": '"immune checkpoint inhibitor*"[tiab]',
+                    "tested": "yes",
+                    "decision": "explicit forms retained",
+                    "rationale": "wildcard added no recall-relevant records in block test",
+                }
+            ],
+            "zero_hit_terms_removed": "none",
+            "zero_hit_terms_kept": "none",
+        }
+
+        markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
+
+        self.assertIn("Morphology review for singular/plural `[tiab]` phrase families", markdown)
+        self.assertIn("Phrase-anchored/concept-specific wildcard candidate", markdown)
+        self.assertIn("| immune checkpoint inhibitor(s) |", markdown)
+        self.assertIn('"immune checkpoint inhibitor*"[tiab]', markdown)
+        self.assertIn("explicit forms retained", markdown)
+
+    def test_missing_morphology_review_renders_default_row(self):
+        markdown = audit_markdown.render_audit_markdown(sample_data(), Path("audit.md"))
+
+        self.assertIn("Morphology review for singular/plural `[tiab]` phrase families", markdown)
+        self.assertIn("| not performed | not performed | not performed | not performed | not performed | not performed |", markdown)
 
     def test_press_coverage_renders_with_defaults_and_no_placeholder_error(self):
         markdown = audit_markdown.render_audit_markdown(sample_data(), Path("audit.md"))

@@ -1,6 +1,9 @@
 ---
 name: pubmed-search-builder
 description: "Build high-sensitivity PubMed/MEDLINE Boolean search strategies for systematic reviews, scoping reviews, rapid reviews, evidence maps, narrative/evidence syntheses, and other evidence-synthesis searches. When invoked, interpret topic questions as strategy-building requests, require a plain-language research/review question before asking for optional seed PMIDs, and do not answer the evidence question by searching PubMed. Never accept user-entered Boolean syntax, PubMed line sets, field-tagged queries, or strategy fragments as build input. Use for MeSH and free-text expansion, seed PMID validation, PRESS-style QA, PRISMA-S reporting, and audit-ledger documentation."
+license: MIT
+metadata:
+  version: "1.0.0"
 ---
 
 # PubMed High-Sensitivity Search Builder
@@ -59,7 +62,7 @@ Read `references/concept-analysis-and-gating.md` before MeSH lookup for concept 
 
 ## Build, Test, And Validate
 
-Read `references/workflow.md` for the build/test/validate flow; load the specific tool, tiab, wildcard, filter, and seed-validation references when those steps are reached. `fetch`, `mine`, and `sample` are record-content commands: they require `--output`, do not support `--summary`, and print only a receipt. Inspect the saved JSON, including abstracts where available, before recording any relevance, scope, noise, term-discovery, or concept-role decision. Compact output is appropriate for count, translation, validation, recall, variant, related-record, and term-rank dashboards.
+Read `references/workflow.md` for the build/test/validate flow; load the specific tool, tiab, wildcard, Bramer gap-analysis, filter, and seed-validation references when those steps are reached. `fetch`, `mine`, and `sample` are record-content commands: they require `--output` and print only a receipt; a stray `--summary` is tolerated as a no-op (noted in the receipt), not a hard error. Inspect the saved JSON, including abstracts where available, before recording any relevance, scope, noise, term-discovery, or concept-role decision. Compact output is appropriate for count, translation, validation, recall, variant, related-record, and term-rank dashboards.
 
 ## Stop Condition
 
@@ -69,7 +72,9 @@ Use the stop criteria in `references/workflow.md`; explicitly mark incomplete ch
 
 For every completed strategy build, save the audit report as a Markdown file in the user's working/output folder, preferably named `audit_YYYY-MM-DD.md` or `audit_<topic-slug>_YYYY-MM-DD.md`. If a file with that name already exists, do not overwrite it silently; choose a clear suffix or ask. The audit must include a decision ledger of the user/protocol and search-design decisions made during the build; do not invent audit details, and mark untested or unsupported items as `not performed`, `not available`, or `not applicable`. Prefer `scripts/audit_markdown.py` (optionally seeded by `pubmed_tool.py audit-scaffold`) to render the report from a saved audit JSON file, and read `references/audit-template.md` for the audit structure. With a `concept_blocks` list the renderer also emits a numbered PubMed line set and a PRISMA-S appendix; `--emit-appendix <path>` writes those as a standalone paste-ready file.
 
-Also save a canonical `run_manifest.json` with `scripts/manifest_tool.py`: an append-only provenance ledger that records every command run, its output path, the date, the result count, and any superseded file. Run `manifest_tool.py show --validate --check-files --require-ready` before finishing - the binding handoff gate that exits non-zero unless the build-state concept gate is resolved and no user question is pending - then report both the saved audit Markdown path and the `run_manifest.json` path in the final response.
+Final-strategy handoff rule: whenever a final PubMed search strategy has been generated or presented, explicitly offer the complete Markdown audit file if it has not already been generated. For completed builds, generate and save the audit Markdown by default rather than leaving it as an offer. If the user asked only for the strategy or the workflow is paused before audit output, ask one concise question offering to generate the complete audit Markdown documenting every workflow stage, user/protocol decision, search-design decision, evidence file reviewed, and rationale. Do not claim the audit file exists until it has been saved.
+
+Also save a canonical `run_manifest.json` with `scripts/manifest_tool.py`: an append-only provenance ledger that records every command run, its output path, the date, the result count, and any superseded file. Run `manifest_tool.py show --validate --check-files --require-ready` before finishing - the binding handoff gate that exits non-zero unless the build-state concept gate is resolved and no user question is pending - then report both the saved audit Markdown path and the `run_manifest.json` path in the final response. Also run the opt-in per-block coverage check (`state coverage` / `show --require-coverage`) so every essential block has a recorded MeSH sweep and block count, or a reasoned waiver; see `references/mesh-and-pubmed-tools.md`. On a no-seed build, offer the optional heuristic recall check at the Validation stage and record its outcome (`state resolve-recall-offer`; opt-in gate `show --require-recall-offer`); see `references/no-seed-recall-estimation.md`.
 
 ## References
 
@@ -81,7 +86,9 @@ Also save a canonical `run_manifest.json` with `scripts/manifest_tool.py`: an ap
 - `references/mesh-and-pubmed-tools.md` - bundled script usage and the tool-to-stage map.
 - `references/tiab-expansion.md` - title/abstract expansion and objective term ranking.
 - `references/wildcard-and-truncation.md` - wildcard safety and the 600-variant cap.
+- `references/bramer-reciprocal-gap-analysis.md` - conditional controlled-vocabulary/text-word gap analysis.
 - `references/seed-pmid-validation.md` - seed PMID validation workflow.
+- `references/no-seed-recall-estimation.md` - optional no-seed heuristic recall check (pilot → related → recall).
 - `references/validated-methodological-filters-and-hedges.md` - validated filters and hedges.
 - `references/prisma-s-reporting.md` - PRISMA-S reporting notes.
 - `references/audit-template.md` - complete audit report Markdown template.

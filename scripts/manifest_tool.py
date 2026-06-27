@@ -24,7 +24,7 @@ Schema (manifest_version 1.0)::
       "working_dir": "<cwd when first written>",
       "entries": [
         {"seq": 1, "timestamp_utc": "...Z", "kind": "search", "label": "main strategy",
-         "command": "python scripts/pubmed_tool.py search --query-file q.txt --retmax 0",
+         "block": "", "command": "python scripts/pubmed_tool.py search --query-file q.txt --retmax 0",
          "output_path": null, "count": 1234, "supersedes": null, "note": "topic-only count",
          "open_decision": false}
       ],
@@ -134,137 +134,27 @@ STAGE_NAMES = (
 )
 GATE_NAMES = ("framework", "seed", "concept", "filter")
 UNRESOLVED_GATE_VALUES = {"", "pending"}
-STAGE_REPORTS = {
-    "question-intake": {
-        "label": "Question intake",
-        "level": "full",
-        "references": ["SKILL.md", "references/workflow.md"],
-        "doing_now": "Confirm an independently stated plain-language research/review question.",
-        "allowed_now": "Clarify the research/review question and reject pasted Boolean syntax as build input.",
-        "not_doing_yet": "Seed intake, MeSH/PubMed exploration, block construction, validation, final QA, and audit output.",
-        "user_decision_needed": "plain-language research/review question if not already supplied",
-    },
-    "seed-intake": {
-        "label": "Seed intake",
-        "level": "full",
-        "references": ["SKILL.md", "references/workflow.md"],
-        "doing_now": "Ask once whether known relevant seed PMIDs are available.",
-        "allowed_now": "Accept seed PMIDs, no-seed status, or an explicit proceed-without-seeds decision.",
-        "not_doing_yet": "MeSH/PubMed exploration, concept gate, block testing, validation, variants, final QA, and audit output.",
-        "user_decision_needed": "seed PMID status",
-    },
-    "limited-seed-evidence": {
-        "label": "Limited seed evidence",
-        "level": "marker",
-        "references": [
-            "references/workflow.md",
-            "references/concept-analysis-and-gating.md",
-            "references/seed-pmid-validation.md",
-        ],
-        "doing_now": "Fetch/mine usable seed PMIDs only to inform concept analysis.",
-        "allowed_now": "Normalize seeds, document malformed or missing PMIDs, and inspect saved seed JSON for concept evidence.",
-        "not_doing_yet": "Broad PubMed exploration, block testing, variants, validation, final QA, and audit output.",
-        "user_decision_needed": "none unless a fetched seed is retracted or materially out of scope",
-    },
-    "concept-gate": {
-        "label": "Concept gate",
-        "level": "full",
-        "references": [
-            "references/framework-selection.md",
-            "references/concept-analysis-and-gating.md",
-            "references/anti-patterns.md",
-        ],
-        "doing_now": "Choose the framework and decide which candidate concepts may become required AND blocks.",
-        "allowed_now": "Run formal concept analysis and ask only unresolved framework, optional-block, filter, or limit decisions.",
-        "not_doing_yet": "MeSH/PubMed exploration, block construction, optional-block testing, variants, validation, final QA, and audit output.",
-        "user_decision_needed": "none unless a sensitivity-dangerous concept, filter, limit, or framework ambiguity is unresolved",
-    },
-    "pre-mesh-brainstorm": {
-        "label": "Pre-MeSH brainstorm",
-        "level": "marker",
-        "references": ["references/concept-analysis-and-gating.md", "references/tiab-expansion.md"],
-        "doing_now": "Brainstorm vocabulary/domain frames for weak-MeSH or social-science concepts.",
-        "allowed_now": "Accept, reject, or defer vocabulary families as within-block candidates.",
-        "not_doing_yet": "MeSH lookup until any material domain-framing question is resolved.",
-        "user_decision_needed": "none unless domain framing can materially change the strategy",
-    },
-    "mesh-exploration": {
-        "label": "MeSH/PubMed exploration",
-        "level": "marker",
-        "references": ["references/mesh-and-pubmed-tools.md", "references/workflow.md"],
-        "doing_now": "Run MeSH sweeps, tree/details checks, and PubMed ATM/count exploration for admitted concepts.",
-        "allowed_now": "Explore controlled vocabulary and candidate terms for gate-authorized essential concepts.",
-        "not_doing_yet": "Unauthorized optional-block tests, variants, final QA, and audit output.",
-        "user_decision_needed": "none",
-    },
-    "text-word-expansion": {
-        "label": "Text-word expansion",
-        "level": "marker",
-        "references": ["references/tiab-expansion.md", "references/wildcard-and-truncation.md"],
-        "doing_now": "Generate and test title/abstract, proximity, acronym, spelling, and wildcard candidates.",
-        "allowed_now": "Use seed, pilot, MeSH-entry, ATM, and sample evidence for within-block term candidates.",
-        "not_doing_yet": "Final strategy handoff before block testing and QA.",
-        "user_decision_needed": "none unless a term family should become a separate optional concept",
-    },
-    "block-testing": {
-        "label": "Block testing",
-        "level": "marker",
-        "references": [
-            "references/workflow.md",
-            "references/concept-analysis-and-gating.md",
-            "references/mesh-and-pubmed-tools.md",
-        ],
-        "doing_now": "Test concept blocks, pairwise blocks, full strategies, filters, and authorized variants.",
-        "allowed_now": "Run count checks and authorized sensitivity/workload comparisons.",
-        "not_doing_yet": "Promoting unauthorized optional blocks, filters, or focused variants.",
-        "user_decision_needed": "none unless observed evidence creates a new material trade-off",
-    },
-    "validation": {
-        "label": "Validation",
-        "level": "marker",
-        "references": ["references/seed-pmid-validation.md", "references/workflow.md"],
-        "doing_now": "Validate known-item seed retrieval and optional relative recall.",
-        "allowed_now": "Diagnose missed PMIDs and bottleneck blocks using saved outputs.",
-        "not_doing_yet": "Final handoff before revisions and final QA are complete.",
-        "user_decision_needed": "none unless a seed must be excluded, replaced, or retained specially",
-    },
-    "revision": {
-        "label": "Revision",
-        "level": "marker",
-        "references": ["references/workflow.md"],
-        "doing_now": "Revise weak blocks, noisy terms, missed-seed causes, or filter problems.",
-        "allowed_now": "Change the draft strategy based on documented evidence and rerun affected checks.",
-        "not_doing_yet": "Audit handoff until final QA and validation reflect the revised strategy.",
-        "user_decision_needed": "none unless a revision would narrow recall beyond prior authorization",
-    },
-    "final-qa": {
-        "label": "Final QA",
-        "level": "marker",
-        "references": ["references/workflow.md", "references/mesh-and-pubmed-tools.md"],
-        "doing_now": "Run final parse, query-translation, duplicate, zero-hit, and recall-risk checks.",
-        "allowed_now": "Fix errors, remove recall-neutral duplicates/zero-hit terms, and document remaining warnings.",
-        "not_doing_yet": "Audit handoff before the final delivered query count is rerun.",
-        "user_decision_needed": "none unless offer-only cleanup or recall-reducing changes need approval",
-    },
-    "audit-output": {
-        "label": "Audit output",
-        "level": "marker",
-        "references": ["references/audit-template.md", "references/prisma-s-reporting.md"],
-        "doing_now": "Render the audit Markdown, PRISMA-S appendix, and validated run manifest.",
-        "allowed_now": "Assemble scaffold/overlay artifacts and validate the final handoff files.",
-        "not_doing_yet": "Claiming PRESS peer review or non-PubMed coverage that was not performed.",
-        "user_decision_needed": "none",
-    },
-    "peer-review-handoff": {
-        "label": "Peer-review handoff",
-        "level": "marker",
-        "references": ["references/audit-template.md", "references/prisma-s-reporting.md"],
-        "doing_now": "Hand off the draft strategy and audit for human PRESS peer review.",
-        "allowed_now": "Report saved audit, appendix, manifest paths, and caveats.",
-        "not_doing_yet": "Representing the strategy as final or peer-reviewed.",
-        "user_decision_needed": "none",
-    },
-}
+
+# Per-essential-block evidence requirements (Phase 1, opt-in via `state register-blocks` +
+# `show --require-coverage`). Each registered block must, before final handoff, either have
+# matching manifest evidence (a MeSH sweep and at least one block count test) or a reasoned
+# waiver. This turns the workflow's "aggressive sweep + count-test per concept" prose into a
+# machine-checked precondition instead of a model self-attestation.
+BLOCK_REQUIREMENTS = ("mesh_sweep", "block_count")
+MESH_SWEEP_COMMAND_RE = re.compile(r"mesh_tool\.py[\"']?\s+sweep\b", re.IGNORECASE)
+
+# No-seed heuristic recall offer (opt-in via `state resolve-recall-offer` + `show --require-recall-offer`).
+# On a no-seed build the optional heuristic recall check must be offered once at the Validation stage;
+# this records whether the user was given the choice. `pending` means not yet offered/resolved. See
+# `references/no-seed-recall-estimation.md`.
+RECALL_OFFER_VALUES = ("declined", "done", "not-applicable")
+RECALL_OFFER_RESOLVED = set(RECALL_OFFER_VALUES)
+
+# Canonical seed-gate values. The seed gate stays free-form (like the other gates), but recording it
+# as one of these lets the tool auto-detect a no-seed build and remind that the no-seed recall offer
+# applies. Casefolded synonyms below are all treated as "no seeds supplied".
+SEED_GATE_VALUES = ("provided", "none", "partial")
+NO_SEED_GATE_VALUES = {"none", "no", "no-seed", "no-seeds", "no_seeds", "none-supplied", "noseed"}
 
 
 class ManifestError(Exception):
@@ -516,6 +406,8 @@ def new_build_state() -> dict[str, object]:
         "gates": {gate: "pending" for gate in GATE_NAMES},
         "pending_user_question": "",
         "open_decisions": [],
+        "blocks": {},
+        "recall_offer": "pending",
         "updated_utc": utc_now(),
     }
 
@@ -535,6 +427,8 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
     else:
         for gate in GATE_NAMES:
             state["gates"].setdefault(gate, "pending")
+    if not isinstance(state.get("blocks"), dict):
+        state["blocks"] = {}
     return state
 
 
@@ -553,39 +447,153 @@ def build_state_readiness(state: dict[str, object]) -> list[str]:
     return issues
 
 
-def stage_report(stage: str, *, level: str = "auto", decision_needed: str | None = None) -> dict[str, object]:
-    if stage not in STAGE_REPORTS:
-        raise ManifestError(f"Unknown stage {stage!r}. Choose from: {', '.join(STAGE_NAMES)}.")
-    item = dict(STAGE_REPORTS[stage])
-    if decision_needed is not None:
-        item["user_decision_needed"] = decision_needed
-    requested_level = item["level"] if level == "auto" else level
-    if requested_level not in {"full", "marker"}:
-        raise ManifestError("--level must be one of: auto, full, marker")
-    if requested_level == "marker":
-        text = f"Stage: {item['label']}. References in force: {', '.join(item['references'])}."
-    else:
-        text = "\n".join(
-            [
-                f"Stage: {item['label']}",
-                f"Reference(s) in force: {', '.join(item['references'])}",
-                f"Doing now: {item['doing_now']}",
-                f"Allowed now: {item['allowed_now']}",
-                f"Not doing yet: {item['not_doing_yet']}",
-                f"User decision needed: {item['user_decision_needed']}",
-            ]
+def recall_offer_readiness(state: dict[str, object]) -> list[str]:
+    """Return reasons the no-seed recall offer is unresolved; empty list means resolved.
+
+    Opt-in gate for no-seed builds: the optional heuristic recall check must have been offered and
+    its outcome recorded (`done`/`declined`/`not-applicable`). `pending` means the user was never
+    given the choice. See `references/no-seed-recall-estimation.md`."""
+    value = state.get("recall_offer", "pending")
+    if value in RECALL_OFFER_RESOLVED:
+        return []
+    return [
+        "no-seed recall offer unresolved: offer the optional heuristic recall check, then record the "
+        "outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`"
+    ]
+
+
+def seed_gate_is_no_seed(state: dict[str, object]) -> bool:
+    """True when the seed gate was resolved to a no-seed value (e.g. `none`)."""
+    value = str((state.get("gates") or {}).get("seed", "")).strip().lower()
+    return value in NO_SEED_GATE_VALUES
+
+
+def build_state_reminders(state: dict[str, object]) -> list[str]:
+    """Non-blocking nudges surfaced in read-only views. Currently: on a no-seed build whose recall
+    offer is still pending, remind the agent to offer the heuristic recall check and gate handoff
+    with `--require-recall-offer`. Reminders never affect exit codes."""
+    reminders: list[str] = []
+    if seed_gate_is_no_seed(state) and state.get("recall_offer", "pending") not in RECALL_OFFER_RESOLVED:
+        reminders.append(
+            "no-seed build: offer the optional heuristic recall check and run "
+            "`show --require-recall-offer` at handoff (see references/no-seed-recall-estimation.md)"
         )
-    return {
-        "stage": stage,
-        "stage_label": item["label"],
-        "level": requested_level,
-        "references": item["references"],
-        "doing_now": item["doing_now"],
-        "allowed_now": item["allowed_now"],
-        "not_doing_yet": item["not_doing_yet"],
-        "user_decision_needed": item["user_decision_needed"],
-        "text": text,
-    }
+    return reminders
+
+
+def normalize_block_key(value: object) -> str:
+    """Casefold + collapse whitespace so block labels match regardless of case/spacing."""
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def entry_matches_block(entry: dict[str, object], block_key: str) -> bool:
+    """An entry is evidence for a block if it carries an explicit matching ``block`` tag, or
+    (when untagged) its free-text ``label`` contains the block key. Explicit tags are canonical;
+    the label fallback keeps existing labelling habits working."""
+    if not block_key:
+        return False
+    explicit = normalize_block_key(entry.get("block"))
+    if explicit:
+        return explicit == block_key
+    label = normalize_block_key(entry.get("label"))
+    return bool(label) and block_key in label
+
+
+def requirement_satisfied(requirement: str, entries: list[object], block_key: str) -> bool:
+    """True when at least one manifest entry supplies the given evidence for the block."""
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry_matches_block(entry, block_key):
+            continue
+        kind = str(entry.get("kind", ""))
+        command = str(entry.get("command", ""))
+        if requirement == "mesh_sweep":
+            if kind == "mesh" or MESH_SWEEP_COMMAND_RE.search(command):
+                return True
+        elif requirement == "block_count":
+            if kind in ("search", "batch"):
+                return True
+    return False
+
+
+def derive_block_coverage(
+    state: dict[str, object], entries: list[object]
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Compute per-block requirement status from registered blocks + recorded entries.
+
+    Status per requirement is ``waived`` (an explicit reason was recorded), ``satisfied``
+    (matching evidence exists), or ``pending`` (neither). Derived fresh each call so it never
+    drifts from the actual manifest entries.
+    """
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    coverage: dict[str, dict[str, dict[str, str]]] = {}
+    for label, spec in blocks.items():
+        block_key = normalize_block_key(label)
+        spec = spec if isinstance(spec, dict) else {}
+        waivers = spec.get("waivers") if isinstance(spec.get("waivers"), dict) else {}
+        reqs: dict[str, dict[str, str]] = {}
+        for requirement in BLOCK_REQUIREMENTS:
+            waiver_reason = str(waivers.get(requirement, "")).strip()
+            if waiver_reason:
+                reqs[requirement] = {"status": "waived", "reason": waiver_reason}
+            elif requirement_satisfied(requirement, entries, block_key):
+                reqs[requirement] = {"status": "satisfied"}
+            else:
+                reqs[requirement] = {"status": "pending"}
+        coverage[str(label)] = reqs
+    return coverage
+
+
+def block_coverage_readiness(state: dict[str, object], entries: list[object]) -> list[str]:
+    """Return reasons block coverage is incomplete; empty list means every registered block has
+    each requirement satisfied or waived. No registered blocks is itself an issue, because an
+    explicit coverage check with nothing to check would be meaningless."""
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    if not blocks:
+        return [
+            "no essential blocks registered for coverage; run "
+            "`manifest_tool.py state register-blocks --blocks-file <blocks.json>`"
+        ]
+    issues: list[str] = []
+    for label, reqs in derive_block_coverage(state, entries).items():
+        for requirement, info in reqs.items():
+            if info["status"] == "pending":
+                issues.append(f"block {label!r} missing evidence: {requirement}")
+    return issues
+
+
+def load_block_labels(path_str: str) -> list[str]:
+    """Extract block labels from a ``--blocks-file`` (the same ``[{label, query}]`` list or
+    ``{label: query}`` map used by ``recall``/``audit-scaffold``). Only labels are read, so the
+    query values — and the PowerShell ``ConvertTo-Json`` blob pitfall — are irrelevant here."""
+    path = Path(path_str)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ManifestError(f"Could not read blocks file: {path} ({exc})") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ManifestError(f"Blocks file is not valid JSON: {path} ({exc})") from exc
+    labels: list[str] = []
+    if isinstance(data, dict):
+        labels = [str(key) for key in data.keys()]
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("label"):
+                labels.append(str(item["label"]))
+            elif isinstance(item, str) and item.strip():
+                labels.append(item.strip())
+    else:
+        raise ManifestError("Blocks file must be a list of {label, query} objects or a {label: query} map.")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for label in labels:
+        if label and label not in seen:
+            seen.add(label)
+            ordered.append(label)
+    if not ordered:
+        raise ManifestError("Blocks file contained no usable block labels.")
+    return ordered
 
 
 def cmd_state(args: argparse.Namespace) -> dict[str, object]:
@@ -593,21 +601,22 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
     action = args.state_action
 
     # Read-only actions never lock or write.
-    if action == "banner":
-        receipt = {
-            "ok": True,
-            "operation": "state-banner",
-            "manifest_path": str(path),
-        }
-        receipt.update(stage_report(args.stage, level=args.level, decision_needed=args.decision_needed))
-        return receipt
-    if action in ("show", "check-ready"):
+    if action in ("show", "check-ready", "coverage"):
         data = load_manifest(path)
         state = ensure_build_state(data)
         receipt = base_receipt(f"state-{action}", path, data)
         receipt["build_state"] = state
+        reminders = build_state_reminders(state)
+        if reminders:
+            receipt["reminders"] = reminders
         if action == "check-ready":
             issues = build_state_readiness(state)
+            receipt["ok"] = not issues
+            receipt["issues"] = issues
+        elif action == "coverage":
+            entries = data.get("entries", [])
+            receipt["coverage"] = derive_block_coverage(state, entries)
+            issues = block_coverage_readiness(state, entries)
             receipt["ok"] = not issues
             receipt["issues"] = issues
         return receipt
@@ -638,6 +647,44 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             state["pending_user_question"] = args.text
         elif action == "clear-question":
             state["pending_user_question"] = ""
+        elif action == "resolve-recall-offer":
+            if args.value not in RECALL_OFFER_VALUES:
+                raise ManifestError(
+                    f"Unknown recall-offer value {args.value!r}. Choose from: {', '.join(RECALL_OFFER_VALUES)}."
+                )
+            state["recall_offer"] = args.value
+        elif action == "register-blocks":
+            blocks = state["blocks"]
+            for label in load_block_labels(args.blocks_file):
+                if label not in blocks:
+                    blocks[label] = {"waivers": {}}
+        elif action == "register-block":
+            blocks = state["blocks"]
+            if args.label not in blocks:
+                blocks[args.label] = {"waivers": {}}
+        elif action == "waive-requirement":
+            if args.requirement not in BLOCK_REQUIREMENTS:
+                raise ManifestError(
+                    f"Unknown requirement {args.requirement!r}. Choose from: {', '.join(BLOCK_REQUIREMENTS)}."
+                )
+            reason = (args.reason or "").strip()
+            if not reason:
+                raise ManifestError("waive-requirement requires a non-empty reason (every skipped requirement must be justified).")
+            blocks = state["blocks"]
+            if args.label not in blocks:
+                raise ManifestError(
+                    f"Unknown block {args.label!r}; register it first with "
+                    "`state register-block`/`register-blocks`."
+                )
+            block_spec = blocks[args.label]
+            if not isinstance(block_spec, dict):
+                block_spec = {}
+                blocks[args.label] = block_spec
+            waivers = block_spec.get("waivers")
+            if not isinstance(waivers, dict):
+                waivers = {}
+                block_spec["waivers"] = waivers
+            waivers[args.requirement] = reason
         else:  # pragma: no cover - argparse restricts choices
             raise ManifestError(f"Unknown state action: {action}")
         state["updated_utc"] = now
@@ -678,6 +725,7 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
                 "timestamp_utc": now,
                 "kind": args.kind,
                 "label": args.label or "",
+                "block": args.block or "",
                 "command": args.command,
                 "output_path": output_path,
                 "count": count,
@@ -707,8 +755,15 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
     path = Path(args.manifest)
     data = load_manifest(path)
     receipt = base_receipt("manifest-show", path, data)
+    state_for_reminders = data.get("build_state")
+    if isinstance(state_for_reminders, dict):
+        reminders = build_state_reminders(state_for_reminders)
+        if reminders:
+            receipt["reminders"] = reminders
     require_ready = getattr(args, "require_ready", False)
-    if args.validate or args.check_files or require_ready:
+    require_coverage = getattr(args, "require_coverage", False)
+    require_recall_offer = getattr(args, "require_recall_offer", False)
+    if args.validate or args.check_files or require_ready or require_coverage or require_recall_offer:
         issues = (
             validate_manifest(data, check_files=args.check_files, manifest_path=path)
             if (args.validate or args.check_files)
@@ -726,6 +781,29 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
                 )
             else:
                 issues.extend(f"not ready for handoff: {reason}" for reason in build_state_readiness(state))
+        if require_coverage:
+            # Opt-in per-block evidence gate (Phase 1): every registered essential block must have
+            # each requirement satisfied by recorded evidence or carry a reasoned waiver.
+            state = data.get("build_state")
+            if not isinstance(state, dict):
+                issues.append(
+                    "build_state not initialized: register essential blocks with "
+                    "`manifest_tool.py state register-blocks` before the coverage check"
+                )
+            else:
+                entries = data.get("entries", [])
+                issues.extend(f"coverage gap: {reason}" for reason in block_coverage_readiness(state, entries))
+        if require_recall_offer:
+            # Opt-in no-seed gate: the optional heuristic recall check must have been offered and its
+            # outcome recorded. Pass this flag only on no-seed builds at handoff.
+            state = data.get("build_state")
+            if not isinstance(state, dict):
+                issues.append(
+                    "build_state not initialized: offer the optional no-seed recall check and record it "
+                    "with `manifest_tool.py state resolve-recall-offer` before the no-seed handoff check"
+                )
+            else:
+                issues.extend(f"not ready for handoff: {reason}" for reason in recall_offer_readiness(state))
         receipt["ok"] = not issues
         receipt["issues"] = issues
     return receipt
@@ -772,6 +850,9 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
         if isinstance(item, dict)
     ]
 
+    state = data.get("build_state")
+    block_coverage = derive_block_coverage(state, entries) if isinstance(state, dict) else {}
+
     receipt = base_receipt("manifest-report", path, data)
     receipt.update(
         {
@@ -780,8 +861,12 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "audit_path": audit_path,
             "open_decisions": open_decisions,
             "superseded": superseded,
+            "block_coverage": block_coverage,
         }
     )
+    reminders = build_state_reminders(state) if isinstance(state, dict) else []
+    if reminders:
+        receipt["reminders"] = reminders
     return receipt
 
 
@@ -811,6 +896,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--supersedes", help="Path of a file that this entry's output replaces.")
     add_parser.add_argument("--note", default="", help="Short free-text note.")
     add_parser.add_argument("--label", default="", help="Short human label for this entry (e.g. 'main strategy', 'robopet block').")
+    add_parser.add_argument(
+        "--block",
+        default="",
+        help="Essential-block label this entry supplies evidence for (links sweeps/counts to a registered block for the coverage gate).",
+    )
     add_parser.add_argument("--open-decision", action="store_true", help="Flag this entry as an unresolved decision to surface in report.")
     add_parser.add_argument("--topic-slug", default="", help="Topic slug, used only when auto-creating the manifest.")
     add_parser.add_argument(
@@ -825,6 +915,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-ready",
         action="store_true",
         help="Final-handoff gate: also fail unless build_state shows the concept gate resolved and no user question pending.",
+    )
+    show_parser.add_argument(
+        "--require-coverage",
+        action="store_true",
+        help="Per-block evidence gate (opt-in): also fail unless every registered essential block has a MeSH sweep and a block count, or a reasoned waiver.",
+    )
+    show_parser.add_argument(
+        "--require-recall-offer",
+        action="store_true",
+        help="No-seed gate (opt-in): also fail unless the optional heuristic recall check was offered and its outcome recorded (resolve-recall-offer). Pass only on no-seed builds.",
     )
 
     report_parser = subparsers.add_parser("report", help="Read-only build dashboard from the manifest (no reruns).")
@@ -849,20 +949,47 @@ def build_parser() -> argparse.ArgumentParser:
     complete_stage.add_argument("stage", help="Stage name.")
     resolve_gate = add_state_action("resolve-gate", f"Record a gate decision, gate one of: {', '.join(GATE_NAMES)}.")
     resolve_gate.add_argument("gate", help="Gate name.")
-    resolve_gate.add_argument("value", help="Resolution value, e.g. a framework or 'resolved'.")
+    resolve_gate.add_argument(
+        "value",
+        help=f"Resolution value, e.g. a framework or 'resolved'. For the seed gate prefer {', '.join(SEED_GATE_VALUES)} "
+        "so a no-seed build is auto-detected for the recall-offer reminder.",
+    )
     set_question = add_state_action("set-question", "Record the one unresolved user/protocol question.")
     set_question.add_argument("text", help="The exact pending question.")
     add_state_action("clear-question", "Clear the pending user/protocol question.")
+
+    resolve_recall_offer = add_state_action(
+        "resolve-recall-offer",
+        f"Record the no-seed heuristic recall-offer outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.",
+    )
+    resolve_recall_offer.add_argument("value", help=f"Outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.")
+
+    register_blocks = add_state_action(
+        "register-blocks", "Register essential blocks for the coverage gate from a --blocks-file."
+    )
+    register_blocks.add_argument(
+        "--blocks-file",
+        required=True,
+        help="JSON list of {label, query} blocks (or a {label: query} map); only labels are read.",
+    )
+    register_block = add_state_action("register-block", "Register one essential block by label.")
+    register_block.add_argument("label", help="Block label.")
+    waive = add_state_action(
+        "waive-requirement", "Waive one requirement for a registered block, with a mandatory reason."
+    )
+    waive.add_argument("label", help="Registered block label.")
+    waive.add_argument("requirement", help=f"Requirement to waive, one of: {', '.join(BLOCK_REQUIREMENTS)}.")
+    waive.add_argument("reason", help="Why this requirement does not apply (required, non-empty).")
+
     add_state_action("show", "Print the current build-state block (read-only).", mutating=False)
     add_state_action(
         "check-ready", "Report whether the build is ready for final handoff (read-only; exit 1 if not).", mutating=False
     )
-    banner = add_state_action(
-        "banner", "Print the canonical stage banner or marker text (read-only).", mutating=False
+    add_state_action(
+        "coverage",
+        "Report per-block evidence coverage (read-only; exit 1 if any registered block has a pending requirement).",
+        mutating=False,
     )
-    banner.add_argument("stage", help="Stage name.")
-    banner.add_argument("--level", choices=["auto", "full", "marker"], default="auto")
-    banner.add_argument("--decision-needed", help="Override the default User decision needed field.")
 
     return parser
 

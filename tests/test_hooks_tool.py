@@ -19,6 +19,14 @@ def duplicate_evidence(result):
     return {issue["evidence"] for issue in result["issues"] if issue["code"] == "duplicate_term"}
 
 
+def wildcard_review_evidence(result):
+    return {
+        issue["evidence"]
+        for issue in result["issues"]
+        if issue["code"] == "singular_plural_wildcard_review"
+    }
+
+
 class SplitTopLevelOrTests(unittest.TestCase):
     def test_splits_on_top_level_or_only(self):
         parts = hooks_tool.split_top_level_or("a[tiab] OR b[tiab] OR (c[tiab] OR d[tiab])")
@@ -88,15 +96,46 @@ class DuplicateTermTests(unittest.TestCase):
         ).lower()
         self.assertNotIn("duplicate_term", followups)
 
-    def test_zero_hit_terms_have_stable_cleanup_code(self):
+
+class SingularPluralWildcardReviewTests(unittest.TestCase):
+    def test_flags_quoted_tiab_singular_plural_phrase_pair(self):
         result = hooks_tool.final_qa(
-            '("Asthma"[Mesh] OR asthma[tiab])',
-            zero_hit_terms=['"robocat"', "teleseal"],
+            '("immune checkpoint inhibitor"[tiab] OR "immune checkpoint inhibitors"[tiab])'
         )
-        codes = issue_codes(result)
-        self.assertEqual(codes.count("zero_hit_cleanup_candidate"), 2)
-        followups = " ".join(result["required_followups"])
-        self.assertIn("zero_hit_cleanup_candidate", followups)
+
+        self.assertIn("singular_plural_wildcard_review", issue_codes(result))
+        evidence = " ".join(wildcard_review_evidence(result))
+        self.assertIn('"immune checkpoint inhibitor*"[tiab]', evidence)
+
+    def test_does_not_flag_when_equivalent_wildcard_is_present(self):
+        result = hooks_tool.final_qa(
+            '("immune checkpoint inhibitor"[tiab] OR "immune checkpoint inhibitors"[tiab] '
+            'OR "immune checkpoint inhibitor*"[tiab])'
+        )
+
+        self.assertNotIn("singular_plural_wildcard_review", issue_codes(result))
+
+    def test_does_not_flag_hyphenation_only_variants(self):
+        result = hooks_tool.final_qa('("long-term care"[tiab] OR "long term care"[tiab])')
+
+        self.assertNotIn("singular_plural_wildcard_review", issue_codes(result))
+
+    def test_does_not_flag_single_token_drug_names_or_acronyms(self):
+        result = hooks_tool.final_qa(
+            '(pembrolizumab[tiab] OR pembrolizumabs[tiab] OR ICI[tiab] OR ICIs[tiab])'
+        )
+
+        self.assertNotIn("singular_plural_wildcard_review", issue_codes(result))
+
+    def test_followup_explains_review_not_auto_replacement(self):
+        followups = " ".join(
+            hooks_tool.final_qa(
+                '("checkpoint inhibitor"[tiab] OR "checkpoint inhibitors"[tiab])'
+            )["required_followups"]
+        ).lower()
+
+        self.assertIn("test the phrase-final, phrase-anchored/concept-specific wildcard candidate", followups)
+        self.assertIn("document why explicit singular/plural forms were retained", followups)
 
 
 if __name__ == "__main__":

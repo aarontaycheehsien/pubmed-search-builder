@@ -51,7 +51,6 @@ python evals/run_eval.py CD011926                       # by topic id
 python evals/run_eval.py evals/datasets/clef-tar-2018/CD011926.json   # by path
 python evals/run_eval.py CD011926 --output evals/results/CD011926.json
 python evals/run_eval.py CD011926 --json               # machine-readable
-python evals/run_suite.py --cached-only                 # aggregate cached scorecards only
 ```
 
 Requires the same NCBI env as the rest of the skill (`.env`; check with
@@ -214,24 +213,12 @@ artifacts (strategy, blocks, audit, manifest), and `scorecard.json`. The gold
 PMIDs are **not** in the prompt (no leakage). If your shell caps command time,
 launch it in the background.
 
-### Suite runner and cache
-
-`run_suite.py` runs score-only fixtures in aggregate and stores completed
-scorecards under `evals/.cache/scorecards/`, keyed by fixture, strategy, blocks,
-and tool content. Use `--cached-only` for deterministic offline summaries that
-never call NCBI; omit it to score cache misses with `run_eval.py`.
-
-```bash
-python evals/run_suite.py --topic CD011926
-python evals/run_suite.py --cached-only --json
-python evals/run_suite.py --refresh --output evals/results/suite.json
-```
-
 ### Still to build
 
-- `run_suite.py --runs N` variance summaries and saved regression diffs.
-- A lower-level NCBI response cache for `run_eval.py` fetches, separate from
-  scorecard caching.
+- `run_suite.py`: `--runs N` variance (mean ± sd recall/NNR), multi-fixture
+  aggregate scorecard, `Δ vs last run` regression diff, and a `--topic`
+  selector to run one or all fixtures.
+- An NCBI response cache to keep repeated generations affordable.
 - Retry logic around the driver (transient `windows sandbox: ... runner
   pipe-in` timeouts have been observed at the tail of a build).
 

@@ -164,6 +164,15 @@ class BuildScaffoldTests(unittest.TestCase):
         self.assertIn("tiab_expansion", audit)
         self.assertTrue(str(audit["tiab_expansion"]["zero_hit_terms_removed"]).startswith("["))
 
+    def test_tiab_morphology_review_placeholder_is_scaffolded(self):
+        audit, _ = self.build()
+        review = audit["tiab_expansion"]["morphology_review"][0]
+
+        self.assertIn("phrase_family", review)
+        self.assertIn("decision", str(review["decision"]).lower())
+        self.assertIn("wildcard", str(review["wildcard_candidate"]).lower())
+        self.assertIn("phrase-anchored/concept-specific", str(review["wildcard_candidate"]).lower())
+
     def test_seed_fetch_populates_pre_gate_seed_triage_without_attesting_review(self):
         fetch_data = {
             "operation": "fetch",
@@ -304,53 +313,6 @@ class ScaffoldCliTests(unittest.TestCase):
         audit = json.loads(ap.read_text(encoding="utf-8"))
         self.assertEqual(audit["date_searched"], "2026-06-02")
 
-    def test_scaffold_cli_writes_overlay_template(self):
-        ap = self.dir / "audit.json"
-        overlay = self.dir / "audit_overlay.json"
-        rc, receipt = self.run_main(
-            [
-                "audit-scaffold",
-                "--output",
-                str(ap),
-                "--overlay-template",
-                str(overlay),
-                "--topic-slug",
-                "demo",
-                "--seed-status",
-                "no",
-            ]
-        )
-        self.assertEqual(rc, 0)
-        self.assertEqual(receipt["overlay_template"], str(overlay))
-        self.assertTrue(ap.exists())
-        self.assertTrue(overlay.exists())
-        data = json.loads(overlay.read_text(encoding="utf-8"))
-        self.assertIn("decision_ledger", data)
-        self.assertIn("rationale", data)
-        self.assertIn("zero_hit_terms_removed", data["tiab_expansion"])
-
-    def test_overlay_template_if_exists_respects_suffix_policy(self):
-        ap = self.dir / "audit.json"
-        overlay = self.dir / "audit_overlay.json"
-        overlay.write_text("existing", encoding="utf-8")
-        rc, receipt = self.run_main(
-            [
-                "audit-scaffold",
-                "--output",
-                str(ap),
-                "--overlay-template",
-                str(overlay),
-                "--topic-slug",
-                "demo",
-                "--seed-status",
-                "no",
-                "--if-exists",
-                "suffix",
-            ]
-        )
-        self.assertEqual(rc, 0)
-        self.assertTrue(receipt["overlay_template"].endswith("audit_overlay_2.json"))
-
     def test_scaffold_cli_accepts_seed_related_and_recall_sources(self):
         fetch_path = self.dir / "seed_fetch.json"
         related_path = self.dir / "related.json"
@@ -472,6 +434,60 @@ class ScaffoldConceptBlocksTests(unittest.TestCase):
         self.assertIn("## Search strategy (numbered line set)", md)
         self.assertIn("a[tiab]", md)
         self.assertIn("100", md)
+
+
+class NoSeedRecallScaffoldTests(unittest.TestCase):
+    """The relative-recall scaffold block reflects the no-seed heuristic offer outcome."""
+
+    def build(self, **kw):
+        defaults = dict(
+            topic_slug="", manifest_data=None, date_searched=None, final_search_data=None,
+            strategy_text=None, validate_data=None, variants_data=None, seed_fetch_data=None,
+            seed_mine_data=None, related_data=None, recall_data=None, seed_status="unknown",
+            audit_workbook=None, sources={},
+        )
+        defaults.update(kw)
+        return pubmed_tool.build_audit_scaffold(**defaults)
+
+    def _recall(self):
+        return {
+            "benchmark_source": "benchmark-json",
+            "benchmark_size": 40,
+            "relative_recall_percent": 88.0,
+            "retrieved_count": 35,
+            "missed_count": 5,
+            "block_recall": [{"label": "A", "recall_percent": 70, "bottleneck": True}],
+            "note": "heuristic note",
+        }
+
+    def test_no_seed_done_labels_benchmark_as_heuristic(self):
+        m = manifest([], build_state={"recall_offer": "done"})
+        audit, _ = self.build(recall_data=self._recall(), seed_status="no", manifest_data=m)
+        rr = audit["relative_recall"]
+        self.assertEqual(rr["check_run"], "Yes (no-seed heuristic)")
+        self.assertIn("no-seed pilot-expansion heuristic", rr["benchmark_source"])
+        self.assertEqual(rr["bottleneck_block"], "A")
+
+    def test_no_seed_declined_renders_as_deliberate_choice(self):
+        m = manifest([], build_state={"recall_offer": "declined"})
+        audit, _ = self.build(recall_data=None, seed_status="no", manifest_data=m)
+        self.assertEqual(audit["relative_recall"]["check_run"], "Offered; declined by user")
+
+    def test_no_seed_not_applicable(self):
+        m = manifest([], build_state={"recall_offer": "not-applicable"})
+        audit, _ = self.build(recall_data=None, seed_status="no", manifest_data=m)
+        self.assertIn("Not applicable", audit["relative_recall"]["check_run"])
+
+    def test_no_seed_pending_leaves_no_block(self):
+        m = manifest([], build_state={"recall_offer": "pending"})
+        audit, _ = self.build(recall_data=None, seed_status="no", manifest_data=m)
+        self.assertNotIn("relative_recall", audit)
+
+    def test_seeded_build_unaffected(self):
+        audit, _ = self.build(recall_data=self._recall(), seed_status="yes")
+        rr = audit["relative_recall"]
+        self.assertEqual(rr["check_run"], "Yes")
+        self.assertEqual(rr["benchmark_source"], "benchmark-json")
 
 
 if __name__ == "__main__":

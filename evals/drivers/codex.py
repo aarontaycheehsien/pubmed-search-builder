@@ -59,6 +59,28 @@ def find_codex() -> str:
     )
 
 
+# Codex sandbox runner occasionally fails to start with a transient pipe/timeout
+# error (observed: "windows sandbox: timed out ... connecting runner pipe-in").
+# These are infrastructure hiccups, not build failures, so a failed run carrying
+# one of these signatures is safe to relaunch. Kept deliberately specific so a
+# genuine build failure (e.g. the skill stalling at a gate) is never masked.
+TRANSIENT_SANDBOX_SIGNATURES = (
+    "connecting runner pipe-in",
+    "windows sandbox: timed out",
+    "sandbox: timed out",
+    "runner pipe",
+)
+
+
+def is_transient_sandbox_failure(returncode: int, stderr: str) -> bool:
+    """True only for a *failed* run whose stderr matches a known transient
+    sandbox-startup signature. A returncode of 0 is never transient-failure."""
+    if returncode == 0:
+        return False
+    low = (stderr or "").lower()
+    return any(sig in low for sig in TRANSIENT_SANDBOX_SIGNATURES)
+
+
 def run_skill(
     prompt: str,
     *,
@@ -68,6 +90,7 @@ def run_skill(
     reasoning_effort: str = "medium",
     timeout: int = 1800,
     codex_bin: str | None = None,
+    max_attempts: int = 2,
 ) -> dict:
     """Drive the skill headlessly for one generation run.
 
@@ -76,6 +99,11 @@ def run_skill(
     the return code and those artifact paths. The skill is expected (per the
     prompt's protocol) to write its final strategy into ``run_dir`` so the
     scorer can pick it up.
+
+    A failed run whose stderr matches a transient sandbox-startup signature is
+    relaunched, up to ``max_attempts`` total. Successful runs and non-transient
+    failures (e.g. a gate stall) are never retried. The returned dict includes
+    ``attempts``.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     last_message = run_dir / "last_message.txt"
@@ -98,21 +126,30 @@ def run_skill(
     if model:
         cmd[2:2] = ["-m", model]  # insert after "exec"
 
-    with events.open("w", encoding="utf-8") as ev:
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            stdout=ev,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-
-    return {
-        "returncode": proc.returncode,
-        "events_path": str(events),
-        "last_message_path": str(last_message),
-        "last_message": last_message.read_text(encoding="utf-8") if last_message.exists() else "",
-        "stderr": proc.stderr or "",
-    }
+    result: dict = {}
+    for attempt in range(1, max(1, max_attempts) + 1):
+        with events.open("w", encoding="utf-8") as ev:
+            proc = subprocess.run(
+                cmd,
+                input=prompt,
+                stdout=ev,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        stderr = proc.stderr or ""
+        result = {
+            "returncode": proc.returncode,
+            "events_path": str(events),
+            "last_message_path": str(last_message),
+            "last_message": last_message.read_text(encoding="utf-8") if last_message.exists() else "",
+            "stderr": stderr,
+            "attempts": attempt,
+        }
+        # Success, or a non-transient failure, or out of attempts: stop here.
+        if not is_transient_sandbox_failure(proc.returncode, stderr) or attempt >= max(1, max_attempts):
+            return result
+        # Transient sandbox-startup failure with attempts left: relaunch.
+    return result

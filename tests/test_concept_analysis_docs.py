@@ -296,7 +296,7 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         ]:
             self.assertIn(phrase, audit)
 
-    def test_frontmatter_has_strong_triggers_and_no_release_metadata(self):
+    def test_frontmatter_has_strong_triggers_and_metadata(self):
         skill = read_doc("SKILL.md")
         frontmatter = skill.split("---", 2)[1].lower()
         agent_metadata = read_doc("agents/openai.yaml").lower()
@@ -315,8 +315,9 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         ]:
             self.assertIn(trigger, frontmatter)
 
-        self.assertNotIn("license:", frontmatter)
-        self.assertNotIn("metadata:", frontmatter)
+        self.assertIn("license: mit", frontmatter)
+        self.assertIn("metadata:", frontmatter)
+        self.assertIn('  version: "1.0.0"', frontmatter)
         self.assertNotIn("\nversion:", frontmatter)
         self.assertIn("plain-language research/review question", agent_metadata)
         self.assertLess(agent_metadata.index("plain-language research/review question"), agent_metadata.index("seed pmids"))
@@ -406,6 +407,7 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
             "tiab-expansion.md",
             "mesh-and-pubmed-tools.md",
             "wildcard-and-truncation.md",
+            "bramer-reciprocal-gap-analysis.md",
             "validated-methodological-filters-and-hedges.md",
             "seed-pmid-validation.md",
             "audit-template.md",
@@ -501,6 +503,38 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         # The audit ledger captures the zero-hit/duplicate decision.
         self.assertIn("zero-hit", audit)
 
+    def test_singular_plural_morphology_guardrail_is_documented(self):
+        workflow = read_doc("references/workflow.md").lower()
+        tiab = read_doc("references/tiab-expansion.md").lower()
+        wildcard = read_doc("references/wildcard-and-truncation.md").lower()
+        audit = read_doc("references/audit-template.md").lower()
+        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
+
+        self.assertIn("morphology pass", workflow)
+        self.assertIn("phrase-final wildcard candidate", workflow)
+        self.assertIn("phrase-anchored or concept-specific", workflow)
+        self.assertIn("generic one-token wildcard stems require explicit testing/rationale", workflow)
+        self.assertIn("singular_plural_wildcard_review", workflow)
+        self.assertIn("explicit forms retained", workflow)
+
+        self.assertIn("document the morphology decision", tiab)
+        self.assertIn("tested or context-safe wildcard stem", tiab)
+        self.assertIn("phrase-anchored or concept-specific wildcard candidates", tiab)
+        self.assertIn("quoted `[tiab]` phrase family", tiab)
+        self.assertIn("explicit singular/plural forms", tiab)
+        self.assertNotIn("### 1. safe wildcard stem", tiab)
+
+        self.assertIn("usually reasonable candidate stems", wildcard)
+        self.assertIn("phrase-anchored or concept-specific stem", wildcard)
+        self.assertIn("broad single-token stems are candidates only", wildcard)
+        self.assertIn("phrase-final wildcard", wildcard)
+        self.assertIn('"immune checkpoint inhibitor*"[tiab]', wildcard)
+        self.assertIn("explicit singular/plural phrase variants remain acceptable", wildcard)
+
+        self.assertIn("morphology review for singular/plural", audit)
+        self.assertIn("phrase-anchored/concept-specific wildcard candidate", audit)
+        self.assertIn("singular_plural_wildcard_review", tools_doc)
+
     def test_final_validation_cleanup_step_is_documented(self):
         workflow = read_doc("references/workflow.md").lower()
 
@@ -514,6 +548,45 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         self.assertIn("confirm the delivered count", workflow)
         # It is also a stop condition.
         self.assertIn("final validation and cleanup offer has been presented", workflow)
+
+    def test_bramer_reciprocal_gap_analysis_is_conditional_and_documented(self):
+        ref_path = ROOT / "references" / "bramer-reciprocal-gap-analysis.md"
+        self.assertTrue(ref_path.exists(), "bramer-reciprocal-gap-analysis.md reference must exist")
+        ref = ref_path.read_text(encoding="utf-8").lower()
+        skill = read_doc("SKILL.md").lower()
+        workflow = read_doc("references/workflow.md").lower()
+        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
+        audit = read_doc("references/audit-template.md").lower()
+
+        for phrase in [
+            "when to run",
+            "(mesh/scr layer) not (text-word layer)",
+            "(text-word layer) not (mesh/scr layer)",
+            "reasoned waiver",
+            "counts alone are not enough",
+            "temporary diagnostic gap queries",
+            "do not copy diagnostic `not` into the final strategy",
+        ]:
+            self.assertIn(phrase, ref)
+
+        self.assertIn("references/bramer-reciprocal-gap-analysis.md", skill)
+        self.assertIn("bramer-reciprocal-gap-analysis.md", workflow)
+        self.assertIn("conditional reciprocal gap analysis", workflow)
+        self.assertIn("temporary checks, not final-strategy exclusions", workflow)
+
+        self.assertIn("bramer reciprocal gap analysis", tools_doc)
+        self.assertIn("pubmed_tool.py batch bramer_gap_queries.json", tools_doc)
+        self.assertIn("do not copy them into the final strategy", tools_doc)
+
+        for phrase in [
+            "bramer reciprocal gap analysis",
+            "performed / waived / not applicable / not performed",
+            "mesh/scr not text-word",
+            "text-word not mesh/scr",
+            "gap samples inspected",
+            "waiver rationale",
+        ]:
+            self.assertIn(phrase, audit)
 
     def test_run_manifest_is_canonical_output(self):
         skill = read_doc("SKILL.md").lower()
@@ -546,6 +619,26 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         self.assertIn("run manifest", audit)
         self.assertIn("run_manifest.json", audit)
 
+    def test_final_strategy_handoff_offers_complete_audit_markdown(self):
+        skill = read_doc("SKILL.md").lower()
+        workflow = read_doc("references/workflow.md").lower()
+
+        output_format = skill.split("## output format", 1)[1]
+        self.assertIn("final-strategy handoff rule", output_format)
+        self.assertIn("whenever a final pubmed search strategy has been generated or presented", output_format)
+        self.assertIn("explicitly offer the complete markdown audit file", output_format)
+        self.assertIn("for completed builds, generate and save the audit markdown by default", output_format)
+        self.assertIn("every workflow stage", output_format)
+        self.assertIn("user/protocol decision", output_format)
+        self.assertIn("search-design decision", output_format)
+        self.assertIn("evidence file reviewed", output_format)
+        self.assertIn("rationale", output_format)
+        self.assertIn("do not claim the audit file exists until it has been saved", output_format)
+
+        self.assertIn("whenever a final pubmed search strategy is generated or presented", workflow)
+        self.assertIn("complete markdown audit file", workflow)
+        self.assertIn("explicitly offered when the user paused before audit output", workflow)
+
     def test_record_content_command_docs_require_saved_json(self):
         for path in markdown_docs():
             text = path.read_text(encoding="utf-8")
@@ -569,12 +662,49 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
             self.assertIn("mine", doc)
             self.assertIn("sample", doc)
             self.assertIn("record-content commands", doc)
-            self.assertIn("do not support `--summary`", doc)
+            self.assertIn("tolerated as a no-op", doc)
             self.assertIn("inspect the saved json", doc)
         self.assertIn("no reviewed json, no decision", workflow)
         self.assertIn("receipt-only stdout from `fetch`, `mine`, or `sample` cannot support", workflow)
         self.assertIn("record-content evidence reviewed", audit_template)
         self.assertIn("receipt-only stdout used as decision evidence", audit_template)
+
+    def test_no_seed_recall_offer_is_documented(self):
+        ref_path = ROOT / "references" / "no-seed-recall-estimation.md"
+        self.assertTrue(ref_path.exists(), "no-seed-recall-estimation.md reference must exist")
+        ref = ref_path.read_text(encoding="utf-8").lower()
+        skill = read_doc("SKILL.md").lower()
+        workflow = read_doc("references/workflow.md").lower()
+        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
+
+        # The reference owns the pipeline, the circularity warning, the heuristic label, and the offer.
+        self.assertIn("optional", ref)
+        self.assertIn("circularity", ref)
+        self.assertIn("not validated sensitivity", ref)
+        self.assertIn("related", ref)
+        self.assertIn("recall", ref)
+        self.assertIn("resolve-recall-offer", ref)
+        for outcome in ["done", "declined", "not-applicable"]:
+            self.assertIn(outcome, ref)
+
+        # SKILL.md lists the reference and names the offer + opt-in gate.
+        self.assertIn("references/no-seed-recall-estimation.md", skill)
+        self.assertIn("resolve-recall-offer", skill)
+        self.assertIn("--require-recall-offer", skill)
+
+        # workflow.md offers it at the Validation stage on a no-seed build and points to the reference.
+        self.assertIn("no-seed-recall-estimation.md", workflow)
+        self.assertIn("optional heuristic recall check", workflow)
+        self.assertIn("resolve-recall-offer", workflow)
+
+        # The tools reference documents the state command and the opt-in flag.
+        self.assertIn("resolve-recall-offer", tools_doc)
+        self.assertIn("--require-recall-offer", tools_doc)
+
+        # Seed-gate vocabulary (Task 8a): no-seed builds record `seed none` for auto-detection.
+        self.assertIn("resolve-gate seed none", workflow)
+        self.assertIn("`none`", tools_doc)
+        self.assertIn("reminders", tools_doc)
 
 
 if __name__ == "__main__":

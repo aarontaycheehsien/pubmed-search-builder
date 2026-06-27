@@ -828,6 +828,7 @@ class NcbiClient:
         self.rate_limit_per_second = 10 if self.api_key else 3
         self.min_interval = 1.0 / self.rate_limit_per_second
         self._last_request = 0.0
+        self.retries_performed = 0  # transient NCBI retries this run, surfaced in metadata()
 
     def common_params(self) -> dict[str, str]:
         params = {
@@ -886,6 +887,8 @@ class NcbiClient:
                     raise PubMedError(
                         f"NCBI request failed after {attempt + 1} attempt(s): {exc}"
                     ) from exc
+            # Reaching here means a transient error was caught and another attempt follows.
+            self.retries_performed += 1
             time.sleep(retry_delay(attempt))
 
         raise PubMedError("NCBI request failed: retries exhausted.")
@@ -896,6 +899,7 @@ class NcbiClient:
             "email_configured": bool(self.email),
             "api_key_used": bool(self.api_key),
             "rate_limit_per_second": self.rate_limit_per_second,
+            "retries_performed": self.retries_performed,
         }
 
 
@@ -2653,23 +2657,42 @@ def _scaffold_bottleneck_block(block_recall: object) -> str:
     return ""
 
 
-def _scaffold_relative_recall(recall_data: dict[str, object] | None) -> dict[str, object] | None:
-    if not recall_data:
-        return None
-    return {
-        "check_run": "Yes",
-        "benchmark_source": recall_data.get("benchmark_source"),
-        "benchmark_size": recall_data.get("benchmark_size"),
-        "relative_recall_percent": recall_data.get("relative_recall_percent"),
-        "retrieved_count": recall_data.get("retrieved_count"),
-        "missed_count": recall_data.get("missed_count"),
-        "retrieved_pmids": recall_data.get("retrieved_pmids") or [],
-        "missed_pmids": recall_data.get("missed_pmids") or [],
-        "block_recall": recall_data.get("block_recall") or [],
-        "bottleneck_block": _scaffold_bottleneck_block(recall_data.get("block_recall")),
-        "miss_diagnosis": recall_data.get("miss_diagnosis") or [],
-        "caveat": recall_data.get("note") or RELATIVE_RECALL_NOTE,
-    }
+def _scaffold_relative_recall(
+    recall_data: dict[str, object] | None,
+    seed_status: str = "unknown",
+    recall_offer: str = "",
+) -> dict[str, object] | None:
+    """Build the relative-recall audit block.
+
+    On a no-seed build the benchmark is a pilot-expansion heuristic; label it as such and reflect the
+    recorded recall-offer outcome (done / declined / not-applicable) so a declined offer reads as a
+    deliberate choice rather than `not performed`. See `references/no-seed-recall-estimation.md`."""
+    no_seed = seed_status == "no"
+    if recall_data:
+        source = recall_data.get("benchmark_source")
+        if no_seed:
+            label = "no-seed pilot-expansion heuristic"
+            source = f"{source} ({label})" if source and label not in str(source) else (source or label)
+        return {
+            "check_run": "Yes (no-seed heuristic)" if no_seed else "Yes",
+            "benchmark_source": source,
+            "benchmark_size": recall_data.get("benchmark_size"),
+            "relative_recall_percent": recall_data.get("relative_recall_percent"),
+            "retrieved_count": recall_data.get("retrieved_count"),
+            "missed_count": recall_data.get("missed_count"),
+            "retrieved_pmids": recall_data.get("retrieved_pmids") or [],
+            "missed_pmids": recall_data.get("missed_pmids") or [],
+            "block_recall": recall_data.get("block_recall") or [],
+            "bottleneck_block": _scaffold_bottleneck_block(recall_data.get("block_recall")),
+            "miss_diagnosis": recall_data.get("miss_diagnosis") or [],
+            "caveat": recall_data.get("note") or RELATIVE_RECALL_NOTE,
+        }
+    # No recall JSON. On a no-seed build, still record a resolved offer as a deliberate outcome.
+    if no_seed and recall_offer == "declined":
+        return {"check_run": "Offered; declined by user", "caveat": RELATIVE_RECALL_NOTE}
+    if no_seed and recall_offer == "not-applicable":
+        return {"check_run": "Not applicable (no-seed build)", "caveat": RELATIVE_RECALL_NOTE}
+    return None
 
 
 def _scaffold_concept_blocks(blocks_raw: object, cli_checks: dict[str, object]) -> list[dict[str, object]]:
@@ -2892,7 +2915,11 @@ def build_audit_scaffold(
         filled.append("seed_set_expansion")
         placeholders.append("seed_set_expansion.how_related_set_evidence_was_used")
 
-    relative_recall = _scaffold_relative_recall(recall_data)
+    manifest_state = (manifest_data or {}).get("build_state")
+    recall_offer = ""
+    if isinstance(manifest_state, dict):
+        recall_offer = str(manifest_state.get("recall_offer") or "")
+    relative_recall = _scaffold_relative_recall(recall_data, seed_status=seed_status, recall_offer=recall_offer)
     if relative_recall:
         audit["relative_recall"] = relative_recall
         filled.append("relative_recall")
@@ -2956,9 +2983,20 @@ def build_audit_scaffold(
     else:
         removed = audit_placeholder("zero-hit phrases removed + documented during final hygiene, or none (record the decision)")
     audit["tiab_expansion"] = {
+        "morphology_review": [
+            {
+                "phrase_family": audit_placeholder("singular/plural phrase family reviewed, or none"),
+                "explicit_forms": audit_placeholder("explicit singular/plural forms present, or none"),
+                "wildcard_candidate": audit_placeholder("phrase-final, phrase-anchored/concept-specific wildcard candidate tested, or not applicable"),
+                "tested": audit_placeholder("yes/no/not applicable"),
+                "decision": audit_placeholder("morphology decision: wildcard retained / explicit forms retained / wildcard not applicable"),
+                "rationale": audit_placeholder("reason for morphology decision"),
+            }
+        ],
         "zero_hit_terms_removed": removed,
         "zero_hit_terms_kept": audit_placeholder("zero-hit terms kept by user choice as intentional, or none"),
     }
+    placeholders.append("tiab_expansion.morphology_review (decision)")
     placeholders.append("tiab_expansion.zero_hit_terms (decision)")
 
     # Omit reporting_notes.date_searched: the renderer falls back to top-level date_searched,
@@ -2981,84 +3019,6 @@ def build_audit_scaffold(
         "note": AUDIT_SCAFFOLD_NOTE,
     }
     return audit, receipt
-
-
-def build_audit_overlay_template(audit: dict[str, object]) -> dict[str, object]:
-    """Return a compact judgment overlay template for an audit scaffold.
-
-    The scaffold owns mechanical fields. This overlay owns authored decisions and rationale,
-    so agents can preserve scaffold-filled counts, dates, strategy text, and evidence paths while
-    filling the human judgment fields that audit_markdown.py intentionally blocks as placeholders.
-    """
-    overlay: dict[str, object] = {
-        "search_structure": {
-            "framework": audit_placeholder("decision: framework, question type, and reason"),
-            "concept_gate_status": "completed",
-            "and_block_admission_summary": audit_placeholder("decision: AND-block admission summary"),
-            "concepts_inside_or_blocks": audit_placeholder("summary: concepts kept inside OR blocks, or not applicable"),
-            "omitted_or_reserve_concepts": audit_placeholder("summary: omitted/reserve concepts and recall-risk reasons"),
-            "methodological_filters_or_limits": audit_placeholder("decision: none, or filter source/version/interface/adaptation"),
-        },
-        "decision_ledger": [
-            {
-                "decision_point": audit_placeholder("decision point"),
-                "options_considered": audit_placeholder("options considered"),
-                "evidence_or_test_used": audit_placeholder("evidence or test used"),
-                "decision_made": audit_placeholder("decision made"),
-                "rationale_or_recall_risk_note": audit_placeholder("rationale and recall-risk reason"),
-                "reflected_in_strategy_or_report": audit_placeholder("where reflected"),
-            }
-        ],
-        "rationale": {
-            "mesh_choices": audit_placeholder("summary: MeSH descriptor decisions"),
-            "text_word_choices": audit_placeholder("summary: text-word decisions"),
-            "pre_mesh_vocabulary_domain_choices": audit_placeholder("summary: pre-MeSH vocabulary/domain decisions"),
-            "concept_gate_and_omitted_block_choices": audit_placeholder("summary: concept gate and omitted-block decisions"),
-            "methodological_filters_or_limits": audit_placeholder("summary: filter/limit decisions"),
-            "sensitivity_vs_precision": audit_placeholder("summary: chosen design and workload/recall trade-off"),
-            "qa": audit_placeholder("summary: query translation drift, final-qa, and filter-check"),
-        },
-        "peer_review_attention_points": [
-            audit_placeholder("summary: peer-review attention point"),
-        ],
-        "tiab_expansion": {
-            "zero_hit_terms_removed": audit_placeholder("decision: zero-hit terms removed and documented, or none"),
-            "zero_hit_terms_kept": audit_placeholder("decision: zero-hit terms kept intentionally, or none"),
-        },
-        "reporting_notes": {
-            "remaining_caveats": audit_placeholder("summary: remaining caveats and recall-risk reasons"),
-        },
-    }
-    if "pre_gate_seed_triage" in audit:
-        overlay["pre_gate_seed_triage"] = {
-            "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
-            "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
-            "decision_supported": audit_placeholder("decision supported: yes/no"),
-            "retracted_seeds": audit_placeholder("decision: retracted seeds, or none"),
-            "likely_out_of_scope_seeds": audit_placeholder("decision: likely out-of-scope seeds, or none"),
-            "user_protocol_decision_when_paused": audit_placeholder("decision: seed triage user/protocol decision, or not applicable"),
-        }
-    if "seed_set_expansion" in audit:
-        overlay["seed_set_expansion"] = {
-            "how_related_set_evidence_was_used": audit_placeholder(
-                "decision: related-set use, e.g. term-rank / recall heuristic / not used"
-            )
-        }
-    if "record_content_evidence" in audit:
-        overlay["record_content_evidence"] = [
-            {
-                "decision_point": audit_placeholder("decision this record-content JSON supports"),
-                "evidence_file_reviewed": row.get("evidence_file_reviewed", "")
-                if isinstance(row, dict)
-                else audit_placeholder("source path"),
-                "record_content_reviewed": audit_placeholder("record content reviewed: yes/no"),
-                "abstracts_reviewed": audit_placeholder("abstracts reviewed: yes/no/not available"),
-                "receipt_only_stdout_used_as_decision_evidence": "no",
-                "decision_supported": audit_placeholder("decision supported: yes/no"),
-            }
-            for row in audit.get("record_content_evidence", [])
-        ]
-    return overlay
 
 
 def run_audit_scaffold(args: argparse.Namespace) -> dict[str, object]:
@@ -3125,10 +3085,6 @@ def run_audit_scaffold(args: argparse.Namespace) -> dict[str, object]:
     output = scaffold_resolve_output(Path(args.output), args.if_exists)
     dump_json_to_path(output, audit)
     receipt["output"] = str(output)
-    if args.overlay_template:
-        overlay_output = scaffold_resolve_output(Path(args.overlay_template), args.if_exists)
-        dump_json_to_path(overlay_output, build_audit_overlay_template(audit))
-        receipt["overlay_template"] = str(overlay_output)
     return receipt
 
 
@@ -3546,6 +3502,11 @@ def emit_record_content_receipt(command: str, result: dict[str, object], args: a
     }
     if precmd_codes:
         receipt["precmd_codes"] = precmd_codes
+    if getattr(args, "summary", False):
+        receipt["tolerated_flag"] = (
+            "--summary ignored: record-content commands are always receipt-only; "
+            "full JSON is in --output."
+        )
 
     if command == "fetch":
         requested = result.get("requested_pmids") or []
@@ -3616,6 +3577,12 @@ def add_record_output_arguments(command_parser: argparse.ArgumentParser) -> None
         required=True,
         help="Write full record-content JSON to this path. Stdout prints only a minimal receipt.",
     )
+    command_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Accepted but ignored: record-content commands (fetch/mine/sample) are always receipt-only; "
+        "full data is written to --output. Tolerated so a stray --summary does not hard-fail a build.",
+    )
 
 
 def add_query_input_arguments(command_parser: argparse.ArgumentParser) -> None:
@@ -3656,6 +3623,101 @@ def parse_related_links(value: str, parser: argparse.ArgumentParser) -> list[str
     if not links:
         parser.error(f"Provide at least one --links value ({', '.join(RELATED_LINKNAMES)}).")
     return links
+
+
+def run_selftest() -> dict[str, object]:
+    """Offline robustness self-checks (no network).
+
+    Guards the improvement-1 hardening invariants so they cannot silently regress
+    in a deployed copy of the skill: record-content commands tolerate a stray
+    --summary (and still require --output), query files decode across encodings,
+    and NCBI retries are surfaced. Returns a structured report; exit code is set
+    by the caller from ``ok``.
+    """
+    import contextlib
+    import io
+    import tempfile
+
+    checks: list[dict[str, object]] = []
+
+    def record(name: str, fn) -> None:
+        try:
+            checks.append({"name": name, "ok": True, "detail": fn() or "ok"})
+        except Exception as exc:  # report any failure as a failed check, never raise
+            checks.append({"name": name, "ok": False, "detail": f"{type(exc).__name__}: {exc}"})
+
+    parser = build_parser()
+
+    def _summary_tolerated_parse() -> str:
+        for argv in (
+            ["fetch", "--pmids", "1", "--output", "o.json", "--summary"],
+            ["mine", "--pmids", "1", "--output", "o.json", "--summary"],
+            ["sample", "robot[tiab]", "--output", "o.json", "--summary"],
+        ):
+            assert parser.parse_args(argv).summary is True
+        return "fetch/mine/sample accept --summary"
+
+    def _output_still_required() -> str:
+        for argv in (["fetch", "--pmids", "1"], ["mine", "--pmids", "1"], ["sample", "robot[tiab]"]):
+            with contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    parser.parse_args(argv)
+                except SystemExit:
+                    continue
+            raise AssertionError(f"{argv} should require --output")
+        return "--output still required on record-content commands"
+
+    def _summary_receipt_note() -> str:
+        result = {
+            "requested_pmids": ["1"], "found_pmids": ["1"], "missing_pmids": [],
+            "records": [{"pmid": "1"}],
+            "pre_command_hook": {"name": "pre_pubmed_command", "ok": True, "issues": []},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "rc.json"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                emit_record_content_receipt("fetch", result, argparse.Namespace(output=str(out), summary=True))
+            receipt = json.loads(buf.getvalue())
+            assert receipt.get("stdout_role") == "receipt_only"
+            assert "tolerated_flag" in receipt
+            assert out.exists()
+        return "receipt notes tolerated --summary; full JSON still saved"
+
+    def _encoding_tolerance() -> str:
+        sample = "café tumour[tiab] OR ulcer*[tiab]"
+        done: list[str] = []
+        with tempfile.TemporaryDirectory() as d:
+            for enc, label in (("utf-8-sig", "utf-8-bom"), ("utf-16", "utf-16")):
+                p = Path(d) / f"{label}.txt"
+                p.write_bytes(sample.encode(enc))
+                assert read_text_source(str(p)).strip() == sample, label
+                done.append(label)
+            p = Path(d) / "crlf.txt"
+            p.write_bytes(sample.replace(" ", "\r\n").encode("utf-8"))
+            got = read_text_source(str(p))
+            assert "café" in got and "tumour[tiab]" in got
+            done.append("crlf")
+        return "decodes " + ", ".join(done)
+
+    def _retry_visibility() -> str:
+        assert "retries_performed" in NcbiClient().metadata()
+        return "metadata() exposes retries_performed"
+
+    record("tolerated_summary_parse", _summary_tolerated_parse)
+    record("record_output_required", _output_still_required)
+    record("tolerated_summary_receipt", _summary_receipt_note)
+    record("query_encoding_tolerance", _encoding_tolerance)
+    record("ncbi_retry_visibility", _retry_visibility)
+
+    return {
+        "operation": "selftest",
+        "ok": all(c["ok"] for c in checks),
+        "network": False,
+        "passed": sum(1 for c in checks if c["ok"]),
+        "total": len(checks),
+        "checks": checks,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3771,11 +3833,49 @@ def build_parser() -> argparse.ArgumentParser:
     recall_source.add_argument("--benchmark-pmids", nargs="+", help="Benchmark relevant PMIDs (e.g. an independent gold standard).")
     recall_source.add_argument("--benchmark-json", help="JSON from related/mine, or a bare PMID list, defining the benchmark set.")
     recall_source.add_argument("--benchmark-query-file", help="UTF-8 file with a query defining the benchmark set. Use '-' for stdin.")
+    recall_source.add_argument(
+        "--pilot-query-file",
+        help="No-seed convenience: UTF-8 file with a high-precision pilot query. Its top results are the benchmark "
+        "anchors; add --auto-expand to expand them via `related` into a strategy-independent candidate set. Use '-' for stdin.",
+    )
+    recall_parser.add_argument(
+        "--auto-expand",
+        action="store_true",
+        help="With --pilot-query-file, expand the pilot anchors via PubMed similar/citation links (the recommended, "
+        "less-circular benchmark) instead of using the pilot's own hits directly.",
+    )
+    recall_parser.add_argument(
+        "--pilot-retmax",
+        type=int,
+        default=30,
+        help="With --pilot-query-file, maximum pilot anchors to retrieve (default: %(default)s).",
+    )
+    recall_parser.add_argument(
+        "--links",
+        default="similar,citedin,refs",
+        help="With --pilot-query-file --auto-expand, comma-separated link types to expand: similar, citedin, refs (default: %(default)s).",
+    )
+    recall_parser.add_argument(
+        "--max-per-seed",
+        type=int,
+        default=RELATED_MAX_PER_SEED,
+        help="With --auto-expand, max neighbors kept per anchor per link type (default: %(default)s).",
+    )
+    recall_parser.add_argument(
+        "--max-total",
+        type=int,
+        default=RELATED_MAX_TOTAL,
+        help="With --auto-expand, hard cap on the deduplicated candidate set (default: %(default)s).",
+    )
+    recall_parser.add_argument(
+        "--anchor-sample-output",
+        help="With --pilot-query-file, also fetch a small sample of the pilot anchors to this JSON path so they can be inspected (anchors are probably-relevant, not validated).",
+    )
     recall_parser.add_argument(
         "--min-seed-overlap",
         type=int,
         default=1,
-        help="When --benchmark-json is a related run, keep only candidates with at least this seed_overlap_count (default: %(default)s).",
+        help="When --benchmark-json or --pilot-query-file --auto-expand resolves a related candidate set, keep only candidates with at least this seed_overlap_count (default: %(default)s).",
     )
     recall_parser.add_argument(
         "--benchmark-retmax",
@@ -3846,13 +3946,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="fail",
         help="How to handle an existing --output. Default: fail (protects an audit you have already filled in).",
     )
-    scaffold_parser.add_argument(
-        "--overlay-template",
-        help="Also write a compact authored-judgment overlay template for audit_markdown.py --overlay-json.",
-    )
 
     doctor_parser = subparsers.add_parser("doctor", help="Check NCBI environment settings and run a tiny PubMed test.")
     doctor_parser.add_argument("--test-query", default="asthma[tiab]")
+
+    subparsers.add_parser("selftest", help="Run offline robustness self-checks (no network).")
 
     for compact_parser in (
         search_parser,
@@ -3995,7 +4093,11 @@ def main(argv: list[str] | None = None) -> int:
                 raw_blocks = load_benchmark_or_blocks_json(args.blocks_file)
                 validate_recall_blocks(raw_blocks)
                 blocks = parse_variant_items(raw_blocks)
+            if args.auto_expand and not args.pilot_query_file:
+                parser.error("--auto-expand only applies to --pilot-query-file.")
             benchmark_query: str | None = None
+            pilot_query: str | None = None
+            pilot_meta: dict[str, object] | None = None
             benchmark_source = ""
             benchmark_seed_pmids: list[str] = []
             if args.benchmark_pmids:
@@ -4006,14 +4108,23 @@ def main(argv: list[str] | None = None) -> int:
                 benchmark_seed_pmids = extract_benchmark_pmids(payload, min_seed_overlap=max(0, args.min_seed_overlap))
                 assert_numeric_pmids(benchmark_seed_pmids, source=f"--benchmark-json {args.benchmark_json}")
                 benchmark_source = f"benchmark-json:{args.benchmark_json}"
-            else:
+            elif args.benchmark_query_file:
                 benchmark_query = normalize_query(read_text_source(args.benchmark_query_file))
                 if not benchmark_query:
                     parser.error("Benchmark query file is empty.")
                 benchmark_source = "benchmark-query"
+            else:
+                pilot_query = normalize_query(read_text_source(args.pilot_query_file))
+                if not pilot_query:
+                    parser.error("Pilot query file is empty.")
+                benchmark_source = (
+                    f"pilot-expansion:{args.pilot_query_file}" if args.auto_expand else f"pilot-query:{args.pilot_query_file}"
+                )
             scan_queries: list[dict[str, object]] = [{"label": "strategy", "query": query}]
             if benchmark_query:
                 scan_queries.append({"label": "benchmark-query", "query": benchmark_query})
+            if pilot_query:
+                scan_queries.append({"label": "pilot-query", "query": pilot_query})
             for block in blocks or []:
                 scan_queries.append({"label": str(block.get("label", "")), "query": str(block.get("query", ""))})
             preflight = pre_command_hook(client, args, query=query, queries=scan_queries)
@@ -4023,6 +4134,40 @@ def main(argv: list[str] | None = None) -> int:
             if benchmark_query is not None:
                 benchmark_search = esearch(client, benchmark_query, max(1, args.benchmark_retmax), 0, None)
                 benchmark_seed_pmids = [str(pmid) for pmid in benchmark_search.get("pmids", [])]
+            if pilot_query is not None:
+                pilot_search = esearch(client, pilot_query, max(1, args.pilot_retmax), 0, None)
+                anchors = dedup_preserving_order([str(pmid) for pmid in pilot_search.get("pmids", [])])
+                if not anchors:
+                    write_json({"error": "Pilot query returned no anchors for no-seed recall estimation.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                    return 1
+                pilot_meta = {
+                    "pilot_query_file": args.pilot_query_file,
+                    "auto_expand": bool(args.auto_expand),
+                    "anchor_count": len(anchors),
+                    "anchors": anchors[:50],
+                    "note": (
+                        "Pilot anchors are probably-relevant, not validated — inspect them before trusting this benchmark. "
+                        "No-seed recall is a heuristic, not absolute search sensitivity."
+                    ),
+                }
+                if args.anchor_sample_output:
+                    anchor_records = efetch(client, anchors[: min(len(anchors), 10)])
+                    Path(args.anchor_sample_output).write_text(json.dumps(anchor_records, indent=2), encoding="utf-8")
+                    pilot_meta["anchor_sample_output"] = args.anchor_sample_output
+                if args.auto_expand:
+                    links = parse_related_links(args.links, parser)
+                    related_result = related_pmids(
+                        client,
+                        anchors,
+                        links=links,
+                        max_per_seed=max(1, args.max_per_seed),
+                        max_total=max(1, args.max_total),
+                    )
+                    benchmark_seed_pmids = extract_benchmark_pmids(related_result, min_seed_overlap=max(0, args.min_seed_overlap))
+                    pilot_meta["links_used"] = links
+                    pilot_meta["candidate_count"] = len(benchmark_seed_pmids)
+                else:
+                    benchmark_seed_pmids = anchors
             exclude_list = [str(pmid) for pmid in (args.exclude_pmids or [])]
             only_list = [str(pmid) for pmid in (args.only_pmids or [])]
             pre_filter = dedup_preserving_order([str(pmid) for pmid in benchmark_seed_pmids])
@@ -4041,6 +4186,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if excluded_present:
                 result["excluded_pmids"] = excluded_present
+            if pilot_meta is not None:
+                result["pilot_expansion"] = pilot_meta
             emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "batch":
             queries = parse_batch_queries(read_text_source(args.queries_file))
@@ -4095,6 +4242,10 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             write_json(attach_hook(doctor(client, test_query), preflight))
+        elif args.command == "selftest":
+            report = run_selftest()
+            write_json(report)
+            return 0 if report["ok"] else 1
         else:
             parser.error(f"Unknown command: {args.command}")
     except PubMedError as exc:

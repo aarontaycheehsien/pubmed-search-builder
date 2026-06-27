@@ -6,7 +6,7 @@ Use this detailed workflow when constructing a new high-sensitivity PubMed strat
 
 Use this numbered stage map as the canonical sequence. Each transition needs a user-facing stage report per `SKILL.md` at one of two levels: a `full banner required` at decision gates (naming the stage, the exact reference files in force, work being done now, work allowed now, work not being done yet, and any user/protocol decision needed), or a one-line `stage marker` (stage name plus governing reference files) elsewhere. Promote a `stage marker` to a full banner whenever a user/protocol decision arises.
 
-Track build progress in the manifest rather than re-deriving it from the conversation each turn: record the current stage, gate decisions, and any open user question with `scripts/manifest_tool.py state` (see `references/mesh-and-pubmed-tools.md`), use `state banner <stage>` for canonical stage reports instead of hand-composing them, and run `state check-ready` before final handoff.
+Track build progress in the manifest rather than re-deriving it from the conversation each turn: record the current stage, gate decisions, and any open user question with `scripts/manifest_tool.py state` (see `references/mesh-and-pubmed-tools.md`), and run `state check-ready` before final handoff.
 
 1. **Question intake**: plain-language research/review question. `full banner required` at the start of a new task. References: `SKILL.md`, `references/workflow.md`.
 2. **Seed intake**: seed PMID decision. `full banner required` before asking for or accepting seed status. References: `SKILL.md`, `references/workflow.md`.
@@ -15,8 +15,8 @@ Track build progress in the manifest rather than re-deriving it from the convers
 5. **Pre-MeSH brainstorm**: pre-MeSH vocabulary/domain brainstorm for weak-MeSH or social-science concepts. `stage marker`. References: `references/concept-analysis-and-gating.md`, `references/tiab-expansion.md`.
 6. **MeSH/PubMed exploration**: MeSH/PubMed exploration. `stage marker` before any MeSH lookup, ATM check, broad PubMed exploration, or sample-record work. References: `references/mesh-and-pubmed-tools.md`, `references/workflow.md`.
 7. **Text-word expansion**: text-word, proximity, and wildcard candidate generation. `stage marker`. References: `references/tiab-expansion.md`, `references/wildcard-and-truncation.md`.
-8. **Block testing**: concept-block construction and testing. `stage marker` before concept-block counts, pairwise counts, optional block tests, filter checks, or focused variant tests; promote to a full banner when an optional block, filter, or focused-variant decision arises. References: `references/workflow.md`, `references/concept-analysis-and-gating.md`, `references/mesh-and-pubmed-tools.md`.
-9. **Validation**: seed PMID validation, if seeds were provided, plus optional relative-recall estimation against a benchmark set. `stage marker` before known-item validation, relative-recall estimation, or variant validation. References: `references/seed-pmid-validation.md`, `references/workflow.md`.
+8. **Block testing**: concept-block construction and testing. `stage marker` before concept-block counts, pairwise counts, optional block tests, filter checks, or focused variant tests; promote to a full banner when an optional block, filter, or focused-variant decision arises. References: `references/workflow.md`, `references/concept-analysis-and-gating.md`, `references/mesh-and-pubmed-tools.md`, `references/bramer-reciprocal-gap-analysis.md`.
+9. **Validation**: seed PMID validation, if seeds were provided, plus optional relative-recall estimation against a benchmark set. On a **no-seed build**, offer the optional heuristic recall check here (full banner, `User decision needed`); see `references/no-seed-recall-estimation.md`. `stage marker` before known-item validation, relative-recall estimation, or variant validation; promote to a full banner when the no-seed recall offer is made. References: `references/seed-pmid-validation.md`, `references/no-seed-recall-estimation.md`, `references/workflow.md`.
 10. **Revision**: revision. `stage marker`. References: `references/workflow.md`.
 11. **Final QA**: final query hygiene and QA. `stage marker` before final parse checks, hygiene reruns, or `final-qa`. References: `references/workflow.md`, `references/mesh-and-pubmed-tools.md`.
 12. **Audit output**: save audit Markdown file with decision ledger, then save the canonical `run_manifest.json` recording every command, output path, date, count, and superseded file. `stage marker` before rendering or saving the audit file. References: `references/audit-template.md`, `references/prisma-s-reporting.md`.
@@ -59,7 +59,7 @@ Ask the user once whether they have known relevant seed PMIDs. Make clear that s
 
 Pause and wait for the user's answer before running MeSH/PubMed exploration, drafting the strategy, searching PubMed for substantive answers, or asking the concept-gate question. Continue only after the user supplies seed PMIDs, says they have no seeds, or explicitly asks to proceed without seeds.
 
-If the user supplies no seeds or asks to proceed without seeds, treat seed status as resolved and continue under the no-seed workflow. State that true seed-derived MeSH, seed-derived text words, and known-item recall will be `not available - no seed PMIDs supplied`.
+If the user supplies no seeds or asks to proceed without seeds, treat seed status as resolved and continue under the no-seed workflow; record the seed gate as `none` (`manifest_tool.py state resolve-gate seed none`) so the build is auto-detected as no-seed. State that true seed-derived MeSH, seed-derived text words, and known-item recall will be `not available - no seed PMIDs supplied`. Add that an **optional heuristic recall check** is available and will be offered at the Validation stage once a draft strategy exists; do not ask about it now (it cannot run before a draft and concept blocks exist). See `references/no-seed-recall-estimation.md`. When seeds are supplied, record the seed gate as `provided` (or `partial` when only some PMIDs are usable).
 
 If seed PMIDs are supplied, normalize and deduplicate numeric PMIDs before limited pre-gate seed fetch/mining. Record malformed entries separately and do not pass them to PubMed. If fetch/mining reports missing or not-found PMIDs, document them, exclude them from seed evidence and later known-item validation unless corrected, and continue with any found records.
 
@@ -137,6 +137,8 @@ Before any MeSH lookup, ATM check, broad PubMed exploration, or sample-record wo
 
 Before selecting MeSH headings, run the pre-MeSH brainstorm where required, then run an aggressive MeSH sweep. Do not rely on a single descriptor lookup. Use `mesh-and-pubmed-tools.md` for the bundled `mesh_tool.py` and `pubmed_tool.py` commands referenced in this workflow.
 
+Register the essential blocks for coverage tracking once the concept gate fixes them (`manifest_tool.py state register-blocks --blocks-file blocks.json`), and tag each MeSH sweep and block count with `--block <label>` when recording it in the manifest, so the per-block coverage gate can confirm every essential concept was actually swept and count-tested rather than skipped. Record a reasoned waiver for any requirement that genuinely does not apply (e.g. a concept with no MeSH descriptor). See *Per-block evidence coverage* in `mesh-and-pubmed-tools.md`.
+
 For each essential concept:
 
 1. Create a variant list from the user phrase, pre-MeSH brainstormed vocabulary, synonyms, acronyms, spelling variants, hyphenation variants, older/newer terminology, seed-paper title/abstract terms, seed-paper MeSH headings, and PubMed ATM/query translation clues. When seed PMIDs or a pilot relevant set exist, run `pubmed_tool.py term-rank` to rank candidate `[tiab]` and MeSH terms by enrichment (coverage and lift) against PubMed background and prioritise high-coverage, high-lift candidates over raw frequency; see `tiab-expansion.md`. When no seeds were supplied, you can still reach `term-rank` here by building a small, high-precision pilot relevant-set query and passing it via `--relevant-query-file` (favor precision, treat results as candidates not recall); this is post-gate block-building work, never pre-gate exploration.
@@ -151,6 +153,7 @@ For each essential concept:
   - Run separate sweeps for important subtypes, procedures, devices, drugs, acronyms, older terms, and newer terms, or state why they were not needed.
   - Test accepted descriptors in PubMed; test plausible rejected descriptors when the decision affects recall or noise.
   - Test MeSH-only, text-word-only, and combined concept-block counts.
+  - Use `bramer-reciprocal-gap-analysis.md` for conditional reciprocal gap analysis when layer complementarity or term discovery needs deeper checking; otherwise record a reasoned waiver when the check is not needed.
   - Resolve or document all MeSH/SCR mappings surfaced by PubMed ATM before finalising the block.
 4. Draft the concept block only after the candidate ledger is complete.
 
@@ -170,6 +173,8 @@ Each block should usually include:
 - wildcard stems where useful
 
 Use `wildcard-and-truncation.md` before accepting proximity expressions or wildcard stems, especially when a stem may be short, ambiguous, or likely to retrieve unrelated concepts.
+
+Run a morphology pass for quoted `[tiab]` phrase families before finalising the text-word layer. Identify explicit singular/plural phrase pairs, generate phrase-final, phrase-anchored or concept-specific wildcard candidates when the morphology is predictable, test candidates with `pubmed_tool.py batch` or `search` when they may affect recall, and record the decision as `wildcard retained`, `explicit forms retained`, or `wildcard not applicable` in the title/abstract expansion log. Generic one-token wildcard stems require explicit testing/rationale before retention.
 
 Pattern:
 
@@ -209,7 +214,7 @@ See `validated-methodological-filters-and-hedges.md`.
 
 Before concept-block counts, pairwise counts, full-strategy counts, optional secondary block checks, filter checks, or focused variant checks, emit the **Block testing** stage marker (references per the stage map above). If an optional secondary `AND` block, filter, or focused variant was not already authorized by the user or protocol at the concept gate, ask before testing it and stop. If counts, seed behavior, or noise patterns later reveal a meaningful optional-block or filter trade-off that was not obvious earlier, pause and ask before testing or promoting that focused/filter variant. Do not re-ask when the user already answered unless the observed evidence materially changes the decision context.
 
-Use `mesh-and-pubmed-tools.md` for PubMed count, sample, batch, validation, and variant commands used during iterative testing.
+Use `mesh-and-pubmed-tools.md` for PubMed count, sample, batch, validation, and variant commands used during iterative testing. Use `bramer-reciprocal-gap-analysis.md` when a diagnostic controlled-vocabulary/text-word gap check is triggered or waived.
 
 Test:
 
@@ -218,14 +223,16 @@ Test:
 3. each major text-word cluster
 4. each proximity expression that may affect recall, including exact phrase comparisons, multiple `N` values where useful, concept-block with/without comparisons, and seed PMID impact when seeds exist
 5. each wildcard stem that may affect recall
+5a. each phrase-final wildcard candidate from the morphology pass when explicit quoted `[tiab]` singular/plural pairs may affect recall
 6. each concept block
+6a. Bramer reciprocal gap analysis for concept blocks where layer complementarity or term discovery needs deeper checking; diagnostic `NOT` queries must be recorded as temporary checks, not final-strategy exclusions
 7. each pair of blocks
 8. the full topic-only strategy
 9. the full topic-plus-filter strategy, if a filter is used
 10. the strategy against seed PMIDs, if provided
 11. whether adding the filter causes seed PMIDs to be lost
 12. labelled search design alternatives with `pubmed_tool.py variants` when sensitivity/precision or workload trade-offs matter
-13. relative recall against a benchmark relevant set with `pubmed_tool.py recall` when an objective sensitivity check beyond known-item seeds is warranted, passing the concept blocks via `--blocks-file` to find the bottleneck block
+13. relative recall against a benchmark relevant set with `pubmed_tool.py recall` when an objective sensitivity check beyond known-item seeds is warranted, passing the concept blocks via `--blocks-file` to find the bottleneck block. On a **no-seed build**, this is the optional heuristic check: offer it once (full banner), and if accepted build the benchmark by pilot query → `related` expansion → `recall`, then record the outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`. See `references/no-seed-recall-estimation.md`.
 
 When seed PMIDs were provided, use `seed-pmid-validation.md` for known-item validation, missed-seed diagnosis, topic-only versus topic-plus-filter seed retrieval checks, and optional relative-recall estimation. Relative recall is relative to the benchmark, not absolute sensitivity; against a seed-expansion benchmark it is a heuristic.
 
@@ -253,7 +260,9 @@ Final output uses the template in `audit-template.md`. Use `prisma-s-reporting.m
 
 For every completed strategy build, create a Markdown audit file in the user's working/output folder, preferably `audit_YYYY-MM-DD.md` or `audit_<topic-slug>_YYYY-MM-DD.md`. The file must contain the final strategy audit report and a decision ledger. If a matching audit file already exists, do not overwrite it silently; use a clear suffix or ask when overwriting is ambiguous. Report the saved audit Markdown path in the final response. If a structured audit JSON artifact was created, also report that JSON path in the final response and Reporting notes. The optional `.xlsx` audit workbook is a supplement, not a replacement for the Markdown audit file.
 
-When possible, collect the audit facts into a structured JSON object, save that object to a UTF-8 audit JSON file such as `audit_<topic-slug>_YYYY-MM-DD.json`, and render the report from that file with `scripts/audit_markdown.py`. The tool writes the full Markdown report to disk and prints only a compact JSON receipt by default, which keeps token use low during long strategy builds. Use `--if-exists suffix` when an automatic clear suffix is preferred over failing on an existing file. When completing an `audit-scaffold` file, save authored decisions as a small overlay JSON and render with `--overlay-json <decisions.json>` so mechanical scaffold fields stay intact; `audit-scaffold --overlay-template <path>` creates a starting overlay. Run `audit_markdown.py --validate-only` on the scaffold/overlay pair before writing the final Markdown. Avoid large shell pipelines such as PowerShell `ConvertTo-Json | python scripts/audit_markdown.py -`; for completed strategy builds, file-based JSON input is the reliable path.
+When possible, collect the audit facts into a structured JSON object, save that object to a UTF-8 audit JSON file such as `audit_<topic-slug>_YYYY-MM-DD.json`, and render the report from that file with `scripts/audit_markdown.py`. The tool writes the full Markdown report to disk and prints only a compact JSON receipt by default, which keeps token use low during long strategy builds. Use `--if-exists suffix` when an automatic clear suffix is preferred over failing on an existing file. When completing an `audit-scaffold` file, save authored decisions as a small overlay JSON and render with `--overlay-json <decisions.json>` so mechanical scaffold fields stay intact. Avoid large shell pipelines such as PowerShell `ConvertTo-Json | python scripts/audit_markdown.py -`; for completed strategy builds, file-based JSON input is the reliable path.
+
+Whenever a final PubMed search strategy is generated or presented before the audit Markdown exists, explicitly offer to generate the complete Markdown audit file. For completed builds, proceed to audit output and save the Markdown by default; do not make the audit optional at final handoff. If the user asked only for the strategy or pauses before audit output, ask one concise question offering the complete audit Markdown that documents every workflow stage, user/protocol decision, search-design decision, evidence file reviewed, and rationale. Do not claim the audit file exists until it has been rendered and saved.
 
 Keep a canonical `run_manifest.json` alongside the audit files using `scripts/manifest_tool.py`. As material commands run and as files are written, append entries with `manifest_tool.py add` so the manifest records every command, its output path, the date, the result count, and any superseded file; when an audit or query file is re-rendered with a clear suffix instead of being overwritten, record the old path as superseded by the new one. Before finishing, run `manifest_tool.py show --validate --check-files --require-ready`; `--require-ready` is the binding handoff gate and exits non-zero unless the build-state concept gate is resolved and no user question is pending. Resolve any reported issue, then report the saved `run_manifest.json` path in the final response and Reporting notes. See `references/mesh-and-pubmed-tools.md`.
 
@@ -267,7 +276,7 @@ Record:
 - seed or sample record evidence: seed-derived MeSH only when seed PMIDs were supplied; otherwise label any fetched-record MeSH as sample-record patterns. When the seed set was expanded with `related`, record the expansion provenance (link types used, per-link counts, caps, high-overlap candidate PMIDs) and keep related-set evidence labelled separately from user-confirmed seed-derived evidence
 - pre-MeSH brainstorm evidence: vocabulary families considered, domain-framing question and answer when asked, and accepted/rejected/deferred brainstorm terms
 - PubMed query translation observations: free-text exploratory queries, ATM mappings, parse warnings, and whether any mapping was added explicitly
-- PubMed count checks: MeSH-only, text-word-only, combined concept blocks, pairwise blocks when useful, final topic-only strategy, topic-plus-filter strategy, focused/reserve variants, and differential/noise samples when run
+- PubMed count checks: MeSH-only, text-word-only, combined concept blocks, Bramer reciprocal gap counts/samples when performed, pairwise blocks when useful, final topic-only strategy, topic-plus-filter strategy, focused/reserve variants, and differential/noise samples when run
 - title/abstract expansion decisions: MeSH-entry-derived terms, seed-derived terms, sample-record-derived terms, acronyms added or rejected, singular/plural forms, spelling and hyphenation variants, proximity expressions added or rejected, and wildcard stems added or rejected
 - sample inspection notes: number inspected, sampling method or sort, observed relevance/noise patterns, and whether records were formally labelled
 - relative-recall estimation: benchmark source (independent gold standard vs. seed-expansion heuristic), benchmark size, relative recall, per-block recall and bottleneck block, and `not performed` when no benchmark recall check was run; keep distinct from known-item seed validation
@@ -313,6 +322,8 @@ Before presenting the final draft:
 5a. For each zero-hit term reported by `phrases_not_found`, first check spelling, hyphenation, and spacing variants in case it is a typo for a real term rather than genuinely absent; fix typos instead of removing them. For genuinely zero-hit terms, the default is to **remove and document** them as removed zero-hit terms, because they match no records and removal is recall-neutral in the current index; offer the user the option to keep any as an intentional zero-hit term for future-proofing, and promote this stage to a full banner with `User decision needed` while the choice is open. Record each removed and each kept zero-hit term, with reasons, in the audit decision ledger and PRISMA-S notes.
 6. If variants were tested, rerun the selected final variant after hygiene so the reported count matches the delivered strategy.
 7. Run `hooks_tool.py final-qa --strategy-file ...` after the final query text stabilizes.
+8. Treat `singular_plural_wildcard_review` findings as documentation warnings: test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained, then record the morphology-review decision in the audit.
+9. Run the per-block coverage check (`manifest_tool.py state coverage`, or `show --require-coverage` alongside `--require-ready`). Resolve any `coverage gap` by recording the missing MeSH sweep / block count against the block, or a reasoned waiver, before handoff. See *Per-block evidence coverage* in `mesh-and-pubmed-tools.md`.
 
 ### Final validation and cleanup offer
 
@@ -321,7 +332,8 @@ This is a required closing gate for every completed strategy build. Do not silen
 - **Errors to fix:** unbalanced parentheses/quotes, truncation inside a proximity expression, and `fields_not_found` (an unrecognized field tag). These break or mis-scope the search and must be fixed.
 - **Duplicate terms (`duplicate_term`):** remove by default. An exact repeated atom is logically redundant (`(A OR A)` is identical to `(A)`), so removal is recall-neutral and nobody benefits from keeping a literal duplicate; it also clears repeated `not found in PubMed` notices from a duplicated zero-hit term. Surface it in the report rather than stripping silently for two reasons: you must drop the *redundant-context* copy (e.g. the one nested inside a narrower `MeSH AND (...)` sub-clause) and never the broad standalone copy, which would narrow retrieval; and the duplication usually signals a wider redundancy worth reviewing.
 - **Zero-hit terms (`phrases_not_found`):** **remove + document** by default, because they match no records and removal is recall-neutral; offer the user the option to keep any as an intentional zero-hit term. Check spelling/hyphenation/spacing variants first and fix typos rather than removing them (see step 5a).
-- **Recall-reducing warnings:** `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, and short wildcards. Flag each and either justify it against the protocol or remove it with the user.
+- **Singular/plural wildcard review (`singular_plural_wildcard_review`):** test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit quoted `[tiab]` singular/plural phrase variants are safer. This is a morphology-review warning, not an automatic replacement instruction.
+- **Recall-reducing warnings:** `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, and short wildcards. Flag each and either justify it against the protocol or remove it with the user. Diagnostic Bramer reciprocal gap queries may use `NOT` during block testing only when documented under `bramer-reciprocal-gap-analysis.md`; final-strategy `NOT` still requires separate protocol justification.
 
 Then ask once whether to apply the offered cleanups. Apply only the approved changes, re-save the query file, and re-run `search --query-file ... --retmax 0` to confirm the delivered count matches what you report. Promote this stage to a full banner with `User decision needed` whenever the report contains anything in an offer-only category.
 
@@ -338,11 +350,15 @@ Stop when:
 - essential concepts have MeSH and text-word coverage after an aggressive MeSH sweep
 - accepted and rejected plausible MeSH descriptors/supplementary concepts are documented
 - important variants have been considered
+- Bramer reciprocal gap analysis has been performed, waived with rationale, or marked `not applicable` for each concept where the check was considered
 - any methodological filter has been chosen from a validated source where available
 - the topic-only and topic-plus-filter versions have been compared when a filter is used
 - final query hygiene has removed exact duplicates and dead PubMed phrases, or remaining warnings are documented, and the required final validation and cleanup offer has been presented with the user's include/exclude/remove decisions applied or recorded
 - further expansion mainly adds unrelated noise
+- if a final strategy was generated or presented before audit output, the complete Markdown audit file was generated for a completed build or explicitly offered when the user paused before audit output
 - audit Markdown file with decision ledger has been saved and its path is reported
 - the run manifest (`run_manifest.json`) has been saved and its path is reported, and `manifest_tool.py show --validate --check-files --require-ready` passes (concept gate resolved, no user question pending)
+- per-block evidence coverage has been checked (`state coverage` / `show --require-coverage`): every essential block has a MeSH sweep and a block count recorded against it, or a reasoned waiver; any `coverage gap` is resolved or documented
+- on a no-seed build, the optional heuristic recall check was offered and its outcome recorded (`state resolve-recall-offer <done|declined|not-applicable>`; `show --require-recall-offer` passes); see `references/no-seed-recall-estimation.md`
 - caveats are documented
 - the strategy is flagged as a draft pending human peer review (PRESS, McGowan et al., 2016)

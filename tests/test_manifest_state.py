@@ -122,34 +122,6 @@ class ManifestStateTests(unittest.TestCase):
         self.assertTrue(receipt["ok"])
         self.assertEqual(receipt["issues"], [])
 
-    def test_banner_prints_canonical_full_stage_report_without_writing_manifest(self):
-        rc, receipt = self.state("banner", "concept-gate")
-        self.assertEqual(rc, 0)
-        self.assertEqual(receipt["operation"], "state-banner")
-        self.assertEqual(receipt["level"], "full")
-        self.assertIn("references/framework-selection.md", receipt["references"])
-        self.assertIn("Stage: Concept gate", receipt["text"])
-        self.assertIn("User decision needed:", receipt["text"])
-        self.assertFalse(Path(self.manifest).exists())
-
-    def test_banner_can_emit_marker_or_override_decision_text(self):
-        rc, marker = self.state("banner", "mesh-exploration", "--level", "marker")
-        self.assertEqual(rc, 0)
-        self.assertEqual(marker["level"], "marker")
-        self.assertIn("References in force:", marker["text"])
-        self.assertNotIn("Allowed now:", marker["text"])
-
-        rc, full = self.state(
-            "banner",
-            "final-qa",
-            "--level",
-            "full",
-            "--decision-needed",
-            "Whether to keep intentional zero-hit future-proofing terms",
-        )
-        self.assertEqual(rc, 0)
-        self.assertIn("intentional zero-hit", full["text"])
-
     # --- interop with existing validation -------------------------------------------------
 
     def test_show_validate_still_passes_with_build_state_present(self):
@@ -198,6 +170,89 @@ class ManifestStateTests(unittest.TestCase):
         self.assertEqual(state["current_stage"], "validation")
         self.assertEqual(state["gates"], {g: "pending" for g in manifest_tool.GATE_NAMES})
         self.assertEqual(state["stages_completed"], [])
+
+    # --- no-seed recall offer (opt-in handoff gate for no-seed builds) ---------------------
+
+    def test_recall_offer_defaults_pending(self):
+        self.state("set-stage", "validation")
+        self.assertEqual(self.load()["build_state"]["recall_offer"], "pending")
+
+    def test_resolve_recall_offer_valid_values(self):
+        for value in manifest_tool.RECALL_OFFER_VALUES:
+            rc, _ = self.state("resolve-recall-offer", value)
+            self.assertEqual(rc, 0)
+            self.assertEqual(self.load()["build_state"]["recall_offer"], value)
+
+    def test_resolve_recall_offer_rejects_unknown_value(self):
+        rc, _ = self.state("resolve-recall-offer", "maybe")
+        self.assertEqual(rc, 1)
+        self.assertFalse(Path(self.manifest).exists())  # rejected before any write
+
+    def test_require_recall_offer_blocks_then_passes(self):
+        self.state("set-stage", "validation")  # recall_offer still pending
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-recall-offer"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("no-seed recall offer unresolved" in i for i in receipt["issues"]))
+
+        self.state("resolve-recall-offer", "declined")
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-recall-offer"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["ok"])
+        self.assertEqual(receipt["issues"], [])
+
+    def test_require_recall_offer_fails_when_state_never_tracked(self):
+        self.run_cli(["add", "--manifest", self.manifest, "--kind", "search", "--command", "cmd", "--count", "1"])
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-recall-offer"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("build_state not initialized" in i for i in receipt["issues"]))
+
+    def test_require_ready_ignores_pending_recall_offer(self):
+        # The no-seed recall offer must stay separate from --require-ready: a resolved concept gate
+        # with no pending question is handoff-ready even while recall_offer is still pending.
+        self.state("resolve-gate", "concept", "resolved")
+        rc, receipt = self.run_cli(
+            ["show", "--manifest", self.manifest, "--validate", "--check-files", "--require-ready"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["ok"])
+        self.assertEqual(self.load()["build_state"]["recall_offer"], "pending")
+
+    def test_ensure_build_state_backfills_recall_offer(self):
+        legacy = manifest_tool.new_manifest("demo", "1.0.0")
+        legacy["build_state"] = {"current_stage": "validation"}  # pre-recall_offer manifest
+        state = manifest_tool.ensure_build_state(legacy)
+        self.assertEqual(state["recall_offer"], "pending")
+
+    # --- no-seed auto-detection + reminder (Task 8a) --------------------------------------
+
+    def test_no_seed_gate_triggers_recall_offer_reminder(self):
+        self.state("resolve-gate", "seed", "none")
+        _, receipt = self.state("show")
+        self.assertIn("reminders", receipt)
+        self.assertTrue(any("--require-recall-offer" in r for r in receipt["reminders"]))
+
+    def test_reminder_clears_after_resolving_offer(self):
+        self.state("resolve-gate", "seed", "none")
+        self.state("resolve-recall-offer", "declined")
+        _, receipt = self.state("show")
+        self.assertNotIn("reminders", receipt)
+
+    def test_seeded_gate_has_no_recall_reminder(self):
+        self.state("resolve-gate", "seed", "provided")
+        _, receipt = self.state("show")
+        self.assertNotIn("reminders", receipt)
+
+    def test_no_seed_synonyms_are_detected(self):
+        for value in ["none", "no", "no-seeds", "No-Seed"]:
+            state = {"gates": {"seed": value}, "recall_offer": "pending"}
+            self.assertTrue(manifest_tool.seed_gate_is_no_seed(state), value)
+        self.assertFalse(manifest_tool.seed_gate_is_no_seed({"gates": {"seed": "provided"}}))
+
+    def test_show_command_surfaces_reminder(self):
+        self.state("resolve-gate", "seed", "none")
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest])
+        self.assertEqual(rc, 0)
+        self.assertIn("reminders", receipt)
 
 
 if __name__ == "__main__":

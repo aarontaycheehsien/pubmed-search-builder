@@ -39,6 +39,7 @@ PROTOCOL_FIELDS = [
     ("methodological_filter", "Methodological filter"),
     ("limits", "Limits"),
     ("final_cleanup", "Final cleanup"),
+    ("no_seed_recall", "No-seed recall check"),
 ]
 
 
