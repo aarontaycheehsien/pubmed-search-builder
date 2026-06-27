@@ -118,16 +118,15 @@ Do not assume one exact phrase is enough.
 
 Do not assume PubMed will automatically handle plurals when terms are field-tagged with `[tiab]`.
 
-Use one of three approaches.
+Use one of three approaches, and document the morphology decision in the audit. For each important quoted `[tiab]` phrase family with singular/plural variants, default to phrase-anchored or concept-specific wildcard candidates where feasible; otherwise retain explicit singular/plural forms with a rationale, or combine phrase variants with wildcard stems. When a phrase-final wildcard may affect recall, test it before deciding.
 
-### 1. Safe wildcard stem
+### 1. Tested or context-safe wildcard stem
 
 ```text
-ulcer*[tiab]
-injur*[tiab]
-wound*[tiab]
-amputat*[tiab]
-intervention*[tiab]
+"pressure ulcer*"[tiab]
+"diabetic foot ulcer*"[tiab]
+"checkpoint inhibitor*"[tiab]
+postamputat*[tiab]
 ```
 
 ### 2. Explicit singular and plural phrase variants

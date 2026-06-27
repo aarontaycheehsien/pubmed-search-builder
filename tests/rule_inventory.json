@@ -109,11 +109,11 @@
     },
     {
       "id": "tools.record-content-saved-json",
-      "rule": "mesh-and-pubmed-tools.md owns the record-content rule: fetch/mine/sample require --output, no --summary, inspect saved JSON.",
+      "rule": "mesh-and-pubmed-tools.md owns the record-content rule: fetch/mine/sample require --output and inspect saved JSON; a stray --summary is tolerated as a no-op.",
       "canonical_owner": "references/mesh-and-pubmed-tools.md",
       "assertions": [
         "record-content commands",
-        "do not support `--summary`",
+        "tolerated as a no-op",
         "inspect the saved json"
       ],
       "pointer_locations": ["SKILL.md"],
@@ -143,6 +143,23 @@
       ],
       "pointer_locations": ["references/workflow.md"],
       "guarded_by": "none",
+      "status": "canonical"
+    },
+    {
+      "id": "bramer.reciprocal-gap-analysis",
+      "rule": "bramer-reciprocal-gap-analysis.md owns the conditional diagnostic controlled-vocabulary/text-word reciprocal gap analysis and final-strategy NOT guardrail.",
+      "canonical_owner": "references/bramer-reciprocal-gap-analysis.md",
+      "assertions": [
+        "bramer reciprocal gap analysis",
+        "(mesh/scr layer) not (text-word layer)",
+        "(text-word layer) not (mesh/scr layer)",
+        "reasoned waiver",
+        "counts alone are not enough",
+        "do not copy diagnostic `not` into the final strategy"
+      ],
+      "pointer_locations": ["SKILL.md", "README.md", "references/workflow.md", "references/mesh-and-pubmed-tools.md"],
+      "cross_links": [{"file": "references/audit-template.md", "must_contain": ["bramer reciprocal gap analysis", "mesh/scr not text-word", "text-word not mesh/scr"]}],
+      "guarded_by": "test_bramer_reciprocal_gap_analysis_is_conditional_and_documented",
       "status": "canonical"
     },
     {

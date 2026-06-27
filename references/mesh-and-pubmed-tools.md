@@ -142,6 +142,26 @@ Use inline query arguments only for short single-concept checks, simple descript
 
 Use `batch` for count tables when comparing concept blocks, acronym variants, outcome filters, topic-only strategies, and topic-plus-filter strategies. Use `variants` when the comparison is between labelled alternative full strategies, especially sensitive/main versus focused/precision-supporting versions. Rich variant JSON can preserve role, hypothesis, changes from baseline, recall risk, workload rationale, decision status, and decision reason. Each `query` value in a batch or variants JSON file must be plain text; the parsers fail fast with a clear error if a query is a serialized object/file-metadata blob (a PowerShell `ConvertTo-Json` pitfall), and `recall --benchmark-json` likewise rejects non-numeric PMIDs. Add `--seed-pmids` to attach known-item retrieval to each design, and `--labelled-samples` to estimate pilot precision and NNR from relevance-labelled PMIDs. Use `audit-workbook` when a spreadsheet handoff will help peer review or documentation; it includes a Design Ledger sheet when variants output is supplied. The workbook is optional: always create the required audit Markdown file structured by `audit-template.md` and required by `workflow.md`, even when an `.xlsx` workbook is also exported.
 
+### Bramer reciprocal gap analysis
+
+Use existing `search`, `sample`, and `batch` commands for the conditional diagnostic checks described in `references/bramer-reciprocal-gap-analysis.md`. Keep the controlled-vocabulary layer and text-word layer in separate query files, then create temporary gap-query files:
+
+```text
+(<mesh_or_scr_layer>) NOT (<text_word_layer>)
+(<text_word_layer>) NOT (<mesh_or_scr_layer>)
+```
+
+Count both directions, and sample only when record inspection will inform term discovery or rejection:
+
+```bash
+python scripts/pubmed_tool.py search --query-file concept_mesh_not_text.txt --retmax 0 --summary
+python scripts/pubmed_tool.py search --query-file concept_text_not_mesh.txt --retmax 0 --summary
+python scripts/pubmed_tool.py sample --query-file concept_mesh_not_text.txt --retmax 5 --output sample_concept_mesh_not_text.json
+python scripts/pubmed_tool.py batch bramer_gap_queries.json --summary
+```
+
+These `NOT` queries are temporary diagnostics. Do not copy them into the final strategy unless the protocol independently requires an exclusion and final QA documents the recall risk.
+
 ### Windows and PowerShell input
 
 On Windows, pass the file *path*, not the file contents: use `--query-file query.txt` (or `--query-stdin`), and do not read a query into a variable to splice onto the command line. PowerShell re-parses inline arguments, so long Boolean strategies lose brackets, parentheses, and wildcards (`[tiab]`, `(...)`, `*`), and Windows PowerShell 5.1 can corrupt non-ASCII characters the same way.
@@ -156,7 +176,7 @@ Compact output controls context. Record-content commands preserve evidence.
 
 Compact output is appropriate for count, translation, validation, recall, variant, related-record, and term-rank dashboards. For `search`, `batch`, `variants`, `validate`, `recall`, `related`, and `term-rank`, use `--summary` for compact stdout or `--output <path>` to save the full JSON while stdout shows the compact summary. When PubMed reports zero-hit or quoted phrases not found, the compact summary lists the actual phrases in `phrases_not_found` (with per-issue `drift_details`), so the §9 cleanup can remove or fix them without rerunning full output; the audit scaffold also records dropped zero-hit phrases for documentation.
 
-`fetch`, `mine`, and `sample` are record-content commands. They do not support `--summary`. They require `--output`, always save full JSON, and print only a receipt. Use the receipt only to confirm execution, counts/status, and output path. Inspect the saved JSON before making relevance, scope, noise, term-discovery, or concept-role decisions.
+`fetch`, `mine`, and `sample` are record-content commands. They require `--output`, always save full JSON, and print only a receipt; a stray `--summary` is tolerated as a no-op (record-content output is always receipt + saved JSON) and noted in the receipt rather than aborting with a parse error. Use the receipt only to confirm execution, counts/status, and output path. Inspect the saved JSON before making relevance, scope, noise, term-discovery, or concept-role decisions.
 
 ```bash
 python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0 --summary
@@ -213,7 +233,7 @@ python scripts/hooks_tool.py final-qa --strategy-file final_strategy.txt
 python scripts/hooks_tool.py filter-check --text-file protocol_or_strategy.txt
 ```
 
-Run `final-qa` before presenting a draft strategy. It flags recall risks such as `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, short wildcards, proximity with truncation, and missing MeSH or `[tiab]` layers, and reports exact duplicate terms as `duplicate_term` (recall-neutral cleanup; it detects an atom repeated across the flat `OR` list and nested `MeSH AND (...)` sub-clauses, which is the usual source of duplicated zero-hit terms). When the final PubMed search reports phrases not found, pass them with `--zero-hit-terms` so the linter emits stable `zero_hit_cleanup_candidate` issues for the cleanup ledger. For multi-block strategies, it checks top-level concept blocks separately so one block's MeSH does not hide another block's missing controlled-vocabulary layer.
+Run `final-qa` before presenting a draft strategy. It flags recall risks such as `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, short wildcards, proximity with truncation, missing MeSH or `[tiab]` layers, and unreviewed quoted `[tiab]` singular/plural phrase pairs as `singular_plural_wildcard_review`; resolve that warning by testing the phrase-final, phrase-anchored/concept-specific wildcard candidate or documenting explicit-form retention. It reports exact duplicate terms as `duplicate_term` (recall-neutral cleanup; it detects an atom repeated across the flat `OR` list and nested `MeSH AND (...)` sub-clauses, which is the usual source of duplicated zero-hit terms). For multi-block strategies, it checks top-level concept blocks separately so one block's MeSH does not hide another block's missing controlled-vocabulary layer.
 
 Run `filter-check` whenever the protocol, request, or strategy mentions a study-design/evidence-type intent such as RCTs, systematic reviews, qualitative studies, diagnostic accuracy, prognosis, observational studies, or economic evaluations. If it reports that validated filter review is needed, read `validated-methodological-filters-and-hedges.md`, use `pubmed_tool.py batch` for topic-only versus topic-plus-filter counts, and validate seed PMID impact when seeds exist.
 
@@ -222,12 +242,12 @@ Run `filter-check` whenever the protocol, request, or strategy mentions a study-
 Use `scripts/pubmed_tool.py audit-scaffold` to assemble most of the audit JSON from files the build already wrote - the per-command `--output` JSONs and `run_manifest.json` - instead of re-transcribing counts and lists by hand. It makes no network calls and prints a receipt listing the source files used.
 
 ```bash
-python scripts/pubmed_tool.py audit-scaffold --manifest run_manifest.json --final-search-json final_search.json --strategy-file full_strategy.txt --validate-json seed_validation.json --seed-fetch-json seed_fetch.json --seed-mine-json seed_mine.json --related-json related.json --recall-json recall.json --date-searched 2026-05-31 --output audit_pressure-ulcer_2026-05-31.json --overlay-template audit_pressure-ulcer_decisions.json
+python scripts/pubmed_tool.py audit-scaffold --manifest run_manifest.json --final-search-json final_search.json --strategy-file full_strategy.txt --validate-json seed_validation.json --seed-fetch-json seed_fetch.json --seed-mine-json seed_mine.json --related-json related.json --recall-json recall.json --date-searched 2026-05-31 --output audit_pressure-ulcer_2026-05-31.json
 ```
 
 It fills mechanical fields from the saved outputs: result count and final strategy (from `--final-search-json`/`--strategy-file`), the PubMed CLI-checks table and search date (from the manifest's labelled `search`/`batch` entries, or `--date-searched` when local/reporting date alignment matters), seed retrieved/missed (from `--validate-json`), pre-gate seed triage facts (from `--seed-fetch-json` or `--seed-mine-json`), seed-set expansion counts and candidate labels (from `--related-json`), relative-recall metrics and block diagnosis (from `--recall-json`), the ATM translation, the run manifest path, and the chosen/focused variant (from `--variants-json`). Pass `--blocks-file` (the same `{label, query}` JSON used by `recall`) to populate `concept_blocks` for the numbered line set; per-block counts are matched from labelled manifest `search` entries and the combination defaults to all blocks AND-ed (override in an overlay for non-trivial logic). Counts come from the saved `--output` file content, not the manifest's hand-typed `--count`. `result_count` and the final strategy are filled only from an explicitly supplied final/post-hygiene search; with none supplied the scaffold leaves a placeholder rather than guess the headline count.
 
-It leaves every judgment field - the decision ledger, rationale, peer-review points, the search-structure framing, seed-scope/retraction judgments, record-content review attestations, and related-set use decisions - as bracketed placeholders that `audit_markdown.py` refuses to render until you author them, so the scaffold never invents reasoning. Use `--overlay-template <path>` to write a compact judgment overlay skeleton that can be filled and passed to `audit_markdown.py --overlay-json`; keep the scaffold as the mechanical base. For `fetch`, `mine`, and `sample` evidence it records only that the saved JSON file exists and that receipt-only stdout was not used; it never fills `record content reviewed` or `decision supported`, because you must inspect the saved JSON yourself (No reviewed JSON, no decision). `related` evidence is labelled separately from user-confirmed seed evidence and is not validated recall; `recall` output is reported as relative recall, not absolute sensitivity. It defaults to `--if-exists fail` so a re-run never clobbers an audit you have already filled in. Then complete the remaining `audit-template.md` sections, fill the placeholders, and render with `audit_markdown.py`.
+It leaves every judgment field - the decision ledger, rationale, peer-review points, the search-structure framing, seed-scope/retraction judgments, record-content review attestations, and related-set use decisions - as bracketed placeholders that `audit_markdown.py` refuses to render until you author them, so the scaffold never invents reasoning. For `fetch`, `mine`, and `sample` evidence it records only that the saved JSON file exists and that receipt-only stdout was not used; it never fills `record content reviewed` or `decision supported`, because you must inspect the saved JSON yourself (No reviewed JSON, no decision). `related` evidence is labelled separately from user-confirmed seed evidence and is not validated recall; `recall` output is reported as relative recall, not absolute sensitivity. It defaults to `--if-exists fail` so a re-run never clobbers an audit you have already filled in. Then complete the remaining `audit-template.md` sections, fill the placeholders, and render with `audit_markdown.py`.
 
 ## Audit Markdown Tool
 
@@ -236,7 +256,6 @@ Use `scripts/audit_markdown.py` when structured audit notes are available. For c
 ```bash
 python scripts/audit_markdown.py audit_adhd_bipolar_2026-05-18.json --output audit_2026-05-18.md --if-exists suffix
 python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --overlay-json audit_pressure-ulcer_decisions.json --output audit_pressure-ulcer_2026-05-31.md --if-exists suffix
-python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --overlay-json audit_pressure-ulcer_decisions.json --output audit_pressure-ulcer_2026-05-31.md --validate-only
 ```
 
 The default command output is a compact JSON receipt rather than the full audit
@@ -245,8 +264,6 @@ count. Use `--print-report` only when the terminal output itself must include
 the full report. The tool refuses unresolved placeholder-like text by default
 and refuses to overwrite existing files unless `--if-exists overwrite` or
 `--if-exists suffix` is selected.
-
-Use `--validate-only` before final rendering when completing a scaffold/overlay pair. It deep-merges the overlay, checks unresolved placeholders, record-content evidence attestations, numbered-line-set drift, and PRISMA-S appendix readiness, then prints a compact JSON receipt without writing Markdown.
 
 Supply a `concept_blocks` list (`[{label, query, count}]`, plus an optional `combination` like `"1 AND 2"` and a `methodological_filter` object) to render a submission-ready **numbered line set** (PubMed Advanced Search history style) inside the audit report; `audit_markdown.py` numbers the lines, adds the combination/filter lines, and flags any block whose query is absent from `final_strategy`. A **PRISMA-S appendix** block (Items 1-16, in-scope items filled from reporting fields) is always rendered. Pass `--emit-appendix <path>` to also write just the line set + PRISMA-S appendix as a standalone paste-ready file for a manuscript:
 
@@ -272,7 +289,7 @@ python scripts/manifest_tool.py show --manifest run_manifest.json --validate --c
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
 
-`add` auto-creates the manifest if it is missing, stamps each entry with a UTC timestamp and a sequence number, and, when `--supersedes` is given, records the old path as superseded by the new `--output`. `--kind` is one of `search`, `fetch`, `related`, `mine`, `sample`, `term-rank`, `recall`, `batch`, `variants`, `validate`, `qa`, `mesh`, `artifact`, or `other`; tag entries with `--label` (e.g. `main strategy`, `robopet block`) so main/block/variant counts are distinguishable, and flag unresolved choices with `--open-decision`. For record-content commands, prefer the matching `fetch`, `mine`, or `sample` kind and record the saved JSON with manifest-level `--output`. Record material commands (count checks, block and full-strategy tests, validate, recall, variants, audit render) and every artifact write or supersession; exploratory throwaway lookups may be summarized or omitted, and entries must reflect commands that were actually run. `show --validate` checks the manifest is well-formed (valid JSON, required keys, integer-or-null counts, known kinds, no duplicate sequence numbers); add `--check-files` before final handoff to flag recorded output paths that do not exist. `report` prints a read-only build dashboard from the manifest (entries grouped by kind, the current audit path, superseded files, and open decisions) and never reruns searches. Report the saved `run_manifest.json` path with the audit files. Adds are normally sequential, but `add` is safe under accidental concurrency: each writes atomically and holds a short-lived `run_manifest.json.lock`, so parallel adds get unique sequence numbers and never corrupt the ledger.
+`add` auto-creates the manifest if it is missing, stamps each entry with a UTC timestamp and a sequence number, and, when `--supersedes` is given, records the old path as superseded by the new `--output`. `--kind` is one of `search`, `fetch`, `related`, `mine`, `sample`, `term-rank`, `recall`, `batch`, `variants`, `validate`, `qa`, `mesh`, `artifact`, or `other`; tag entries with `--label` (e.g. `main strategy`, `robopet block`) so main/block/variant counts are distinguishable, tag sweeps and block counts with `--block <label>` to feed the per-block coverage gate (see *Per-block evidence coverage* below), and flag unresolved choices with `--open-decision`. For record-content commands, prefer the matching `fetch`, `mine`, or `sample` kind and record the saved JSON with manifest-level `--output`. Record material commands (count checks, block and full-strategy tests, validate, recall, variants, audit render) and every artifact write or supersession; exploratory throwaway lookups may be summarized or omitted, and entries must reflect commands that were actually run. `show --validate` checks the manifest is well-formed (valid JSON, required keys, integer-or-null counts, known kinds, no duplicate sequence numbers); add `--check-files` before final handoff to flag recorded output paths that do not exist. `report` prints a read-only build dashboard from the manifest (entries grouped by kind, the current audit path, superseded files, and open decisions) and never reruns searches. Report the saved `run_manifest.json` path with the audit files. Adds are normally sequential, but `add` is safe under accidental concurrency: each writes atomically and holds a short-lived `run_manifest.json.lock`, so parallel adds get unique sequence numbers and never corrupt the ledger.
 
 ### Build-state tracking
 
@@ -284,13 +301,49 @@ python scripts/manifest_tool.py state resolve-gate framework PECO
 python scripts/manifest_tool.py state resolve-gate concept resolved
 python scripts/manifest_tool.py state set-question "Promote outcome to an AND block?"
 python scripts/manifest_tool.py state clear-question
-python scripts/manifest_tool.py state banner concept-gate
-python scripts/manifest_tool.py state banner mesh-exploration --level marker
 python scripts/manifest_tool.py state show          # read-only
 python scripts/manifest_tool.py state check-ready    # exit 1 until the concept gate is resolved and no question is pending
 ```
 
-Stages are the workflow stage slugs (`question-intake`, `seed-intake`, `concept-gate`, `mesh-exploration`, `block-testing`, `validation`, `final-qa`, `audit-output`, ...); gates are `framework`, `seed`, `concept`, and `filter`. `state banner` prints the canonical user-facing full banner or one-line marker for a stage from the embedded stage map; use it instead of hand-composing banners. The same readiness check is folded into the final manifest validation: `manifest_tool.py show --validate --check-files --require-ready` is the binding handoff gate and exits non-zero while the concept gate is unresolved or a user question is still pending (`state check-ready` runs it standalone).
+Stages are the workflow stage slugs (`question-intake`, `seed-intake`, `concept-gate`, `mesh-exploration`, `block-testing`, `validation`, `final-qa`, `audit-output`, ...); gates are `framework`, `seed`, `concept`, and `filter`. The same readiness check is folded into the final manifest validation: `manifest_tool.py show --validate --check-files --require-ready` is the binding handoff gate and exits non-zero while the concept gate is unresolved or a user question is still pending (`state check-ready` runs it standalone).
+
+Gate values are free-form, but record the **seed gate** as one of `provided`, `none`, or `partial` (`state resolve-gate seed none`). A `none` (no-seed) build is then auto-detected: read-only views (`state show`, `show`, `report`) surface a non-blocking `reminders` entry telling you to offer the optional heuristic recall check and gate handoff with `--require-recall-offer`. The reminder never affects exit codes; it just prevents the no-seed recall offer from being forgotten.
+
+### Per-block evidence coverage
+
+Beyond the stage/gate readiness check, `build_state` also tracks **per-essential-block evidence coverage**, so the manifest can confirm each essential concept actually got an aggressive MeSH sweep and a block count rather than relying on the model's recollection. Register the essential blocks once (reuse the same `--blocks-file` built for `recall`/`audit-scaffold`), tag each sweep/count entry with `--block <label>`, and check coverage before handoff:
+
+```bash
+python scripts/manifest_tool.py state register-blocks --blocks-file blocks.json   # seed blocks from the blocks-file labels
+python scripts/manifest_tool.py state register-block "malaria"                    # or register one label at a time
+python scripts/manifest_tool.py add --kind mesh   --block "malaria" --command "python scripts/mesh_tool.py sweep --concept malaria --output sweep_malaria.json" --output sweep_malaria.json
+python scripts/manifest_tool.py add --kind search --block "malaria" --command "python scripts/pubmed_tool.py search --query-file malaria_block.txt --retmax 0" --count 192246
+python scripts/manifest_tool.py state coverage                                    # read-only; exit 1 while any block has a pending requirement
+python scripts/manifest_tool.py show --require-coverage --validate               # opt-in coverage gate (exits non-zero on a coverage gap)
+```
+
+Each registered block needs two requirements satisfied: `mesh_sweep` (a `--kind mesh` entry, or any command containing `mesh_tool.py sweep`, tagged to the block) and `block_count` (a `--kind search` or `--kind batch` entry tagged to the block). Entry-to-block matching prefers the explicit `--block` tag and falls back to the free-text `--label` (so a label like `malaria block` still counts for block `malaria`). When a requirement genuinely does not apply — a concept with no MeSH descriptor, or one deliberately kept text-word-only — record a **reasoned waiver** instead of leaving it pending; the reason is mandatory and is surfaced in `state coverage`, `report`, and the audit:
+
+```bash
+python scripts/manifest_tool.py state waive-requirement "rapid diagnostic test" mesh_sweep "no MeSH descriptor exists; SCR/text-word coverage only"
+```
+
+The coverage gate is currently **opt-in** (`show --require-coverage` / `state coverage`); it is not yet part of `--require-ready`. Run it at Final QA alongside `--require-ready` so a block that was never swept or count-tested surfaces as a hard `coverage gap` before handoff rather than as a silent omission.
+
+### No-seed recall offer
+
+On a **no-seed build**, `build_state` also tracks whether the optional heuristic recall check was offered. The Validation stage must offer it once (see `references/no-seed-recall-estimation.md`); record the user's choice so handoff can confirm the offer was actually made:
+
+```bash
+python scripts/manifest_tool.py state resolve-recall-offer done            # accepted and run
+python scripts/manifest_tool.py state resolve-recall-offer declined        # user declined
+python scripts/manifest_tool.py state resolve-recall-offer not-applicable  # too few anchors/candidates to be meaningful
+python scripts/manifest_tool.py show --require-recall-offer                 # opt-in no-seed gate; exit 1 while recall_offer is pending
+```
+
+`recall_offer` defaults to `pending` and is only meaningful on no-seed builds. `--require-recall-offer` is **opt-in and separate from `--require-ready`**: pass it at handoff only when no seeds were supplied. Seeded builds use known-item validation and ignore this gate.
+
+If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-expand --blocks-file blocks.json` runs the pilot → `related` → recall pipeline in one call (add `--anchor-sample-output` to save anchors for inspection); without `--auto-expand` the pilot's own hits are the benchmark (weaker/circular). See `references/no-seed-recall-estimation.md` for the full pipeline, guardrails, and the manual three-step form.
 
 ## Tool-to-stage quick map
 
@@ -301,9 +354,9 @@ Stages are the workflow stage slugs (`question-intake`, `seed-intake`, `concept-
 | Limited seed evidence (pre-gate) | `pubmed_tool.py fetch` / `mine`; optional `related` → `term-rank` | Seed records only, to inform concept analysis. Label `related` output as related-set evidence, distinct from seed-derived; it is term-discovery support, not broad PubMed exploration or block testing. |
 | Concept gate | (no tools) | Resolve the Phase 1 concept gate before MeSH lookup, PubMed exploration, block construction, variants, final QA, or filter checks. |
 | MeSH/PubMed exploration | `pubmed_tool.py search` (ATM/translation clues); `mesh_tool.py sweep --details`, `tree` | Build variant lists from brainstormed vocabulary plus seed/user/ATM clues, then run an aggressive sweep per essential concept and complete the MeSH candidate ledger before drafting a block. Use `mesh_tool.py sparql` only for unusual follow-ups not covered by `tree`. |
-| Text-word / block testing | `pubmed_tool.py search`, `batch` | Test text-word clusters, proximity, and wildcard stems, then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
-| Validation | `pubmed_tool.py validate`; optional `recall --blocks-file` | Known-item seed retrieval; optionally estimate relative recall against a benchmark to find the bottleneck block (relative, not absolute). Diagnose missed seeds, including filter-caused misses. |
-| Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). |
+| Text-word / block testing | `pubmed_tool.py search`, `batch` | Test text-word clusters, proximity, wildcard stems, and conditional Bramer reciprocal gap queries, then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
+| Validation | `pubmed_tool.py validate`; optional `recall --blocks-file`; no-seed: `state resolve-recall-offer` | Known-item seed retrieval; optionally estimate relative recall against a benchmark to find the bottleneck block (relative, not absolute). Diagnose missed seeds, including filter-caused misses. On a no-seed build, offer the optional heuristic recall check (`references/no-seed-recall-estimation.md`) and record the outcome. |
+| Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`; `manifest_tool.py state coverage` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). Check per-block coverage so no essential block was left unswept or untested. |
 | Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-ready` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. `--require-ready` blocks handoff until the concept gate is resolved and no question is pending. |
 
 ## Do Not Fabricate

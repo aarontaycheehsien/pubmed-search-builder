@@ -34,6 +34,7 @@
 | Pre-MeSH vocabulary brainstorm | [vocabulary families and domain frames considered] | [user/protocol wording, seeds, brainstorm checklist, domain-framing question if asked] | [accepted / rejected / deferred / not needed] | [recall/noise or scope rationale] | [title/abstract expansion log / rationale] |
 | MeSH/SCR choice | [accepted, rejected, deferred candidates] | [sweep, details, tree, ATM, seed indexing, counts] | [decision] | [scope, explosion/noexp, duplicate/noise/wrong-sense reason] | [MeSH descriptors considered] |
 | Text-word/proximity/wildcard choice | [terms or expressions considered] | [MeSH entry terms, seeds, samples, counts, warnings] | [decision] | [recall/noise rationale] | [title/abstract expansion log] |
+| Bramer reciprocal gap analysis | [performed / waived / not applicable / not performed per concept] | [MeSH/SCR NOT text-word count; text-word NOT MeSH/SCR count; sample JSON if inspected] | [terms accepted/rejected, or waiver] | [term-discovery rationale or waiver reason] | [MeSH descriptors considered / title-abstract expansion log] |
 | Filter/limit/variant choice | [main, focused, precision, filter, reserve] | [counts, seeds, labelled samples if available, QA] | [chosen main design] | [sensitivity/workload rationale] | [final strategy / PubMed CLI checks] |
 | Zero-hit and duplicate terms | [zero-hit terms from `phrases_not_found`; exact duplicates from `duplicate_term`] | [per-term PubMed counts, spelling/hyphenation variant checks, `final-qa`] | [duplicates removed; each genuinely zero-hit term removed+documented by default, or kept by user choice] | [default is remove+document zero-hit terms (they match no records); reason if kept] | [final strategy / title-abstract expansion log] |
 | QA or caveat | [warning, limitation, or unresolved check] | [query translation, final-qa, filter-check, sample inspection] | [resolved / documented / not performed] | [remaining risk] | [rationale / reporting notes] |
@@ -92,6 +93,13 @@ PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; 
 - Entry terms harvested as `[tiab]`: [list, or none]
 - Entry terms omitted: [ambiguous/noisy/outside-scope terms with reason, or none]
 - Counts tested: MeSH-only [count or not performed]; text-word-only [count or not performed]; combined concept block [count or not performed]
+- Bramer reciprocal gap analysis: [performed / waived / not applicable / not performed]
+- `MeSH/SCR NOT text-word` count: [count or not performed/not applicable]
+- `text-word NOT MeSH/SCR` count: [count or not performed/not applicable]
+- Gap samples inspected: [sample size and saved JSON path(s), or not performed/not applicable]
+- Gap-derived terms/descriptors accepted: [list with rationale, or none]
+- Gap-derived terms/descriptors rejected: [list with rationale, or none]
+- Waiver rationale: [reason, or not applicable]
 
 **Concept 2 - [name]**
 - Sweep inputs: [concept phrase, variants, separate subtype/acronym/device/procedure/drug/older/newer-term sweeps, or not performed]
@@ -104,6 +112,13 @@ PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; 
 - Entry terms harvested as `[tiab]`: [list, or none]
 - Entry terms omitted: [ambiguous/noisy/outside-scope terms with reason, or none]
 - Counts tested: MeSH-only [count or not performed]; text-word-only [count or not performed]; combined concept block [count or not performed]
+- Bramer reciprocal gap analysis: [performed / waived / not applicable / not performed]
+- `MeSH/SCR NOT text-word` count: [count or not performed/not applicable]
+- `text-word NOT MeSH/SCR` count: [count or not performed/not applicable]
+- Gap samples inspected: [sample size and saved JSON path(s), or not performed/not applicable]
+- Gap-derived terms/descriptors accepted: [list with rationale, or none]
+- Gap-derived terms/descriptors rejected: [list with rationale, or none]
+- Waiver rationale: [reason, or not applicable]
 
 Repeat for additional essential concepts.
 
@@ -158,6 +173,8 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 |---|---:|
 | Concept 1 - MeSH only | [count or not performed] |
 | Concept 1 - tiab/proximity/wildcard only | [count or not performed] |
+| Concept 1 - MeSH/SCR NOT text-word diagnostic gap | [count or not performed/not applicable] |
+| Concept 1 - text-word NOT MeSH/SCR diagnostic gap | [count or not performed/not applicable] |
 | Concept 1 - combined | [count] |
 | Concept 2 - combined | [count] |
 | Final combined topic-only strategy | [count] |
@@ -194,6 +211,12 @@ For every row based on `fetch`, `mine`, or `sample` record content, record the s
 - **Acronyms and abbreviations added:** [list, or none retained]
 - **Acronyms and abbreviations tested but rejected:** [list with reason, or not performed]
 - **Singular/plural variants added:** [list]
+- **Morphology review for singular/plural `[tiab]` phrase families:**
+
+| Phrase family | Explicit forms | Phrase-anchored/concept-specific wildcard candidate | Tested? | Decision | Rationale |
+|---|---|---|---|---|---|
+| [phrase family] | [explicit singular/plural forms] | [phrase-final, phrase-anchored/concept-specific wildcard candidate, or not applicable] | [yes/no/not applicable] | [wildcard retained / explicit forms retained / wildcard not applicable] | [count/noise/recall rationale] |
+
 - **Spelling variants added:** [list]
 - **Hyphenation variants added:** [list]
 - **Proximity expressions added:** [list, or none]

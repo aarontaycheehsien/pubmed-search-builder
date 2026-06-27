@@ -1,0 +1,34 @@
+{
+  "id": "Medeiros-2022-School-based food and nutrition education interventions for adolescent food consumption",
+  "suite": "2022-custom",
+  "question": "School-based food and nutrition education interventions for adolescent food consumption",
+  "gold_relevant_pmids": [
+    17535489,
+    17411463,
+    17605839,
+    19781127,
+    29228946,
+    22625222,
+    12137237,
+    25797051,
+    23451237
+  ],
+  "source": "custom fixture; gold from DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
+  "gold_source": "DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
+  "protocol": {
+    "seeds": "none \u2014 proceed under the no-seed workflow",
+    "framework": "choose the appropriate framework yourself (PICO / PECO / PIRD / PCC / SPIDER) for this question",
+    "essential_concepts": "identify the essential concepts yourself; prefer fewer AND blocks per the skill's anti-pattern guidance",
+    "optional_blocks": "decline materially-optional secondary AND blocks (outcomes, comparators, reference standards) unless central to scope",
+    "methodological_filter": "none",
+    "limits": "none (no date, language, species, or age limits)",
+    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  },
+  "seed_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.1177/001789699705600204"
+  ],
+  "strategy_file": "Medeiros-2022-School-based food and nutrition education interventions for adolescent food consumption.strategy.txt"
+}

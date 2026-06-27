@@ -64,20 +64,30 @@ def build_prompt(fixture: dict, run_dir: Path) -> str:
         if seeds
         else f"Seed PMIDs: {p.get('seeds', 'none — proceed under the no-seed workflow')}."
     )
+    # The no-seed heuristic recall check is a user-decision gate the skill offers at the Validation
+    # stage on a no-seed build. Pre-resolve it here (default: skip) so an unattended generation run
+    # neither stalls asking nor spends extra time/tokens on it; the harness measures true recall
+    # against the held-back gold set independently. Override per fixture via protocol.no_seed_recall.
+    no_seed_recall = p.get(
+        "no_seed_recall",
+        "decline — do NOT run the optional heuristic recall estimation and do NOT ask; record it with "
+        "`manifest_tool.py state resolve-recall-offer declined`",
+    )
     lines = [
         "Follow the instructions in ./SKILL.md to build a high-sensitivity PubMed search",
         "strategy for an evidence synthesis, using the bundled scripts in ./scripts as it",
         "directs. Work fully autonomously and DO NOT ask me any questions: this message is",
         "the complete protocol and pre-resolves every decision gate in the skill (seed gate,",
-        "framework, concept gate, optional blocks, methodological filter, limits, and final",
-        "cleanup). Wherever SKILL.md says it may ask the user, treat the protocol below as the",
-        "user/protocol decision and proceed to completion.",
+        "framework, concept gate, optional blocks, methodological filter, limits, the no-seed",
+        "recall check, and final cleanup). Wherever SKILL.md says it may ask the user, treat the",
+        "protocol below as the user/protocol decision and proceed to completion.",
         "",
         "REVIEW QUESTION (plain language):",
         f"  {fixture['question']}",
         "",
         "PROTOCOL (resolves all gates — do not stop to ask):",
         f"  - {seed_line}",
+        f"  - No-seed heuristic recall check (applies only on a no-seed build): {no_seed_recall}",
         f"  - Framework: {p.get('framework', 'choose the appropriate framework yourself')}",
         f"  - Essential concepts: {p.get('essential_concepts', 'identify the essential concepts yourself; prefer fewer AND blocks')}",
         f"  - Optional blocks: {p.get('optional_blocks', 'decline materially-optional secondary AND blocks')}",
@@ -129,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         reasoning_effort=args.effort,
         timeout=args.timeout,
     )
+    if result.get("attempts", 1) > 1:
+        print(f"[generate] relaunched after transient sandbox failure (attempts={result['attempts']})")
     print(f"[generate] codex exit={result['returncode']}  last_message:\n{result['last_message'][:600]}")
     if result["stderr"].strip():
         print(f"[generate] stderr (tail): {result['stderr'][-400:]}")

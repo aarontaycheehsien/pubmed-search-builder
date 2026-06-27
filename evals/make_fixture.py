@@ -51,6 +51,7 @@ DEFAULT_PROTOCOL = {
     "methodological_filter": "none",
     "limits": "none (no date, language, species, or age limits)",
     "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking.",
+    "no_seed_recall": "decline — do NOT run the optional heuristic recall estimation and do NOT ask; record it with `manifest_tool.py state resolve-recall-offer declined`",
 }
 
 

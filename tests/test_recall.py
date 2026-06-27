@@ -273,5 +273,112 @@ class RecallBlockValidationTests(unittest.TestCase):
         self.assertEqual(calls, [])  # failed before any esearch was issued
 
 
+class PilotExpansionCliTests(unittest.TestCase):
+    """`recall --pilot-query-file [--auto-expand]` chains pilot search -> related -> recall."""
+
+    def _run(self, extra, *, anchors, candidates=None, strategy_hits=None, anchor_sample=None):
+        strategy_hits = set(strategy_hits or [])
+
+        def fake_esearch(client, query, retmax=0, retstart=0, sort=None):
+            if "PILOT" in query:  # the pilot anchor search
+                return {"count": len(anchors), "pmids": list(anchors), "query_translation_hook": {"issues": []}}
+            uids = set(re.findall(r"(\d+)\[uid\]", query))  # the strategy uid-block recall search
+            hit = sorted(strategy_hits & uids)
+            return {"count": len(hit), "pmids": hit, "query_translation_hook": {"issues": []}}
+
+        def fake_related(client, pmids, *, links, max_per_seed, max_total):
+            return {"candidate_pmids": list(candidates or [])}
+
+        captured = {}
+
+        def fake_efetch(client, pmids):
+            captured["efetch_pmids"] = list(pmids)
+            return {"records": [{"pmid": p} for p in pmids]}
+
+        orig = (pubmed_tool.esearch, pubmed_tool.related_pmids, pubmed_tool.efetch)
+        pubmed_tool.esearch, pubmed_tool.related_pmids, pubmed_tool.efetch = fake_esearch, fake_related, fake_efetch
+        buffer = io.StringIO()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                pilot = Path(tmp) / "pilot.txt"
+                pilot.write_text("PILOT QUERY", encoding="utf-8")
+                sample_args = []
+                if anchor_sample:
+                    sample_path = Path(tmp) / "anchors.json"
+                    sample_args = ["--anchor-sample-output", str(sample_path)]
+                with contextlib.redirect_stdout(buffer):
+                    rc = pubmed_tool.main(["recall", "STRATEGY", "--pilot-query-file", str(pilot), *sample_args, *extra])
+                payload = json.loads(buffer.getvalue())
+                if anchor_sample:
+                    captured["sample_exists"] = sample_path.exists()
+        finally:
+            pubmed_tool.esearch, pubmed_tool.related_pmids, pubmed_tool.efetch = orig
+        return rc, payload, captured
+
+    def test_auto_expand_uses_related_candidates_as_benchmark(self):
+        rc, payload, _ = self._run(
+            ["--auto-expand"],
+            anchors=["1", "2"],
+            candidates=[{"pmid": "10", "seed_overlap_count": 2}, {"pmid": "20", "seed_overlap_count": 2}, {"pmid": "30", "seed_overlap_count": 2}],
+            strategy_hits={"10", "20"},
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(payload["benchmark_source"].startswith("pilot-expansion:"))
+        self.assertEqual(payload["benchmark_size"], 3)
+        self.assertEqual(payload["relative_recall_percent"], 66.67)
+        pe = payload["pilot_expansion"]
+        self.assertTrue(pe["auto_expand"])
+        self.assertEqual(pe["anchor_count"], 2)
+        self.assertEqual(pe["candidate_count"], 3)
+        self.assertEqual(pe["links_used"], ["similar", "citedin", "refs"])
+        self.assertIn("inspect", pe["note"].lower())
+
+    def test_min_seed_overlap_filters_candidates(self):
+        rc, payload, _ = self._run(
+            ["--auto-expand", "--min-seed-overlap", "2"],
+            anchors=["1"],
+            candidates=[{"pmid": "10", "seed_overlap_count": 2}, {"pmid": "20", "seed_overlap_count": 1}],
+            strategy_hits={"10"},
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["benchmark_size"], 1)  # only the overlap>=2 candidate survives
+        self.assertEqual(payload["pilot_expansion"]["candidate_count"], 1)
+
+    def test_direct_pilot_without_expand_uses_pilot_hits(self):
+        rc, payload, _ = self._run(
+            [],
+            anchors=["1", "2", "3"],
+            strategy_hits={"1", "2"},
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(payload["benchmark_source"].startswith("pilot-query:"))
+        self.assertEqual(payload["benchmark_size"], 3)
+        self.assertFalse(payload["pilot_expansion"]["auto_expand"])
+
+    def test_anchor_sample_output_is_written(self):
+        rc, payload, captured = self._run(
+            [],
+            anchors=["1", "2"],
+            strategy_hits={"1"},
+            anchor_sample=True,
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(captured["sample_exists"])
+        self.assertEqual(captured["efetch_pmids"], ["1", "2"])
+        self.assertIn("anchor_sample_output", payload["pilot_expansion"])
+
+    def test_empty_pilot_anchors_errors(self):
+        rc, payload, _ = self._run(["--auto-expand"], anchors=[])
+        self.assertEqual(rc, 1)
+        self.assertIn("no anchors", payload["error"].lower())
+
+    def test_auto_expand_without_pilot_rejected(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            with self.assertRaises(SystemExit):
+                pubmed_tool.main(["recall", "STRATEGY", "--benchmark-pmids", "1", "--auto-expand"])
+        self.assertIn("--auto-expand", buffer.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

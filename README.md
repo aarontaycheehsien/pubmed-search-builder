@@ -93,6 +93,9 @@ python scripts/pubmed_tool.py batch queries.json
 
 # Check NCBI email/API-key configuration without exposing secrets
 python scripts/pubmed_tool.py doctor
+
+# Offline robustness self-checks (no network): tolerant flags, encoding, retry visibility
+python scripts/pubmed_tool.py selftest
 ```
 
 **Features:**
@@ -129,7 +132,6 @@ Pre-submission checks for recall hazards and methodological filter alignment.
 ```bash
 # Final QA: check for recall hazards, missing MeSH/[tiab] layers, etc.
 python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt
-python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt --zero-hit-terms '"future phrase"'
 
 # Check whether you should add a methodological filter
 python scripts/hooks_tool.py filter-check --text-file protocol.txt
@@ -143,14 +145,12 @@ printing the whole report into the terminal.
 ```bash
 python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md
 python scripts/audit_markdown.py audit.json --output audit_2026-05-18.md --if-exists suffix
-python scripts/audit_markdown.py audit.json --overlay-json decisions.json --output audit_2026-05-18.md --validate-only
 ```
 
 By default, the tool writes the full audit report to disk and prints only a
 small JSON receipt with the output path, byte count, placeholder count, and
 section count. Use `--print-report` only when the full Markdown should be
-printed. Use `--validate-only` to check an audit JSON/overlay pair without
-writing Markdown.
+printed.
 
 ### Run Manifest (`scripts/manifest_tool.py`)
 
@@ -161,7 +161,6 @@ count, and any superseded file. No network access.
 ```bash
 python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug demo
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "pubmed_tool.py search --query-file q.txt --retmax 0" --count 1234 --label "main strategy"
-python scripts/manifest_tool.py state banner concept-gate
 python scripts/manifest_tool.py show --manifest run_manifest.json --validate
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
@@ -276,6 +275,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and the tool-to-stage map
 - **[references/tiab-expansion.md](references/tiab-expansion.md)**: Title/abstract expansion sources and strategies
 - **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, the 600-variant cap, and testing
+- **[references/bramer-reciprocal-gap-analysis.md](references/bramer-reciprocal-gap-analysis.md)**: Conditional controlled-vocabulary/text-word gap analysis
 - **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Seed PMID validation workflow
 - **[references/validated-methodological-filters-and-hedges.md](references/validated-methodological-filters-and-hedges.md)**: Cochrane, McMaster, and other validated filters
 - **[references/anti-patterns.md](references/anti-patterns.md)**: Catalogued LLM failure modes with literature anchors

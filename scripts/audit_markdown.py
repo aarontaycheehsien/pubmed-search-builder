@@ -670,6 +670,39 @@ def render_tiab_expansion(data: dict[str, Any]) -> list[str]:
     lines = ["## Title/abstract, proximity, and wildcard expansion log", ""]
     for label, key in fields:
         lines.append(f"- **{label}:** {compact_text(expansion.get(key))}")
+    rows = []
+    for item in as_list(expansion.get("morphology_review")):
+        if isinstance(item, dict):
+            rows.append(
+                [
+                    item.get("phrase_family"),
+                    item.get("explicit_forms"),
+                    item.get("wildcard_candidate"),
+                    item.get("tested"),
+                    item.get("decision"),
+                    item.get("rationale"),
+                ]
+            )
+        else:
+            rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+    lines.extend(
+        [
+            "",
+            "Morphology review for singular/plural `[tiab]` phrase families:",
+            "",
+            markdown_table(
+                [
+                    "Phrase family",
+                    "Explicit forms",
+                    "Phrase-anchored/concept-specific wildcard candidate",
+                    "Tested?",
+                    "Decision",
+                    "Rationale",
+                ],
+                rows,
+            ),
+        ]
+    )
     lines.append("")
     return lines
 
@@ -1026,39 +1059,6 @@ def write_audit_markdown(
     }
 
 
-def validate_audit_markdown(
-    *,
-    data: dict[str, Any],
-    output: str | None,
-    allow_placeholders: bool,
-) -> dict[str, Any]:
-    path = output_path_from_data(data, output)
-    record_issues = record_content_evidence_issues(data)
-    markdown = render_audit_markdown(data, path)
-    placeholders = unresolved_placeholders(markdown)
-    appendix_markdown = render_appendix_document(data)
-    appendix_placeholders = unresolved_placeholders(appendix_markdown)
-    _, line_set_issues = build_line_set(data)
-    issues = []
-    issues.extend(record_issues)
-    issues.extend(line_set_issues)
-    if placeholders and not allow_placeholders:
-        issues.append(f"unresolved audit placeholders: {', '.join(placeholders[:5])}")
-    if appendix_placeholders and not allow_placeholders:
-        issues.append(f"unresolved appendix placeholders: {', '.join(appendix_placeholders[:5])}")
-    return {
-        "ok": not issues,
-        "operation": "audit-markdown-validate",
-        "output_path": str(path),
-        "placeholder_count": len(placeholders),
-        "appendix_placeholder_count": len(appendix_placeholders),
-        "section_count": markdown.count("\n## "),
-        "line_set_issue_count": len(line_set_issues),
-        "record_content_issue_count": len(record_issues),
-        "issues": issues,
-    }
-
-
 def write_json(data: dict[str, Any]) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1084,11 +1084,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional small authored JSON object to deep-merge into the audit scaffold before rendering.",
     )
     parser.add_argument("--allow-placeholders", action="store_true", help="Allow unresolved placeholder-like text.")
-    parser.add_argument(
-        "--validate-only",
-        action="store_true",
-        help="Validate merged audit JSON, placeholders, evidence attestations, line-set consistency, and appendix readiness without writing Markdown.",
-    )
     parser.add_argument("--print-report", action="store_true", help="Print the full Markdown report instead of the compact JSON receipt.")
     parser.add_argument(
         "--emit-appendix",
@@ -1104,14 +1099,6 @@ def main(argv: list[str] | None = None) -> int:
         data = load_json(args.audit_json)
         if args.overlay_json:
             data = merge_overlay(data, load_json(args.overlay_json))
-        if args.validate_only:
-            summary = validate_audit_markdown(
-                data=data,
-                output=args.output,
-                allow_placeholders=args.allow_placeholders,
-            )
-            write_json(summary)
-            return 0 if summary["ok"] else 1
         summary = write_audit_markdown(
             data=data,
             output=args.output,

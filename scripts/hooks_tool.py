@@ -204,6 +204,92 @@ def duplicate_term_issues(text: str) -> list[dict[str, str]]:
     return issues
 
 
+def quoted_tiab_phrase(atom: str) -> str | None:
+    value = strip_outer_parentheses(atom.strip())
+    match = re.fullmatch(r'"([^"*]+)"\[(?:tiab|title/abstract)\]', value, re.IGNORECASE)
+    if not match:
+        return None
+    phrase = " ".join(match.group(1).split())
+    return phrase or None
+
+
+def quoted_tiab_wildcard_stem(atom: str) -> str | None:
+    value = strip_outer_parentheses(atom.strip())
+    match = re.fullmatch(r'"([^"]*\*[^"]*)"\[(?:tiab|title/abstract)\]', value, re.IGNORECASE)
+    if not match:
+        return None
+    phrase = " ".join(match.group(1).split())
+    if phrase.count("*") != 1 or not phrase.endswith("*"):
+        return None
+    stem = phrase[:-1].strip()
+    return stem or None
+
+
+def normalized_phrase(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def singular_plural_pairs(text: str) -> list[dict[str, str]]:
+    """Find multi-word quoted [tiab] singular/plural phrase pairs that need morphology review.
+
+    This is intentionally conservative: it only handles the common final-s plural pattern,
+    because the hook should prompt review rather than attempt full linguistic stemming.
+    """
+    phrases: dict[str, str] = {}
+    wildcard_stems: set[str] = set()
+    order: list[str] = []
+    for atom in extract_leaf_atoms(text):
+        wildcard = quoted_tiab_wildcard_stem(atom)
+        if wildcard:
+            wildcard_stems.add(normalized_phrase(wildcard))
+            continue
+        phrase = quoted_tiab_phrase(atom)
+        if not phrase:
+            continue
+        key = normalized_phrase(phrase)
+        if key not in phrases:
+            phrases[key] = phrase
+            order.append(key)
+
+    pairs: list[dict[str, str]] = []
+    seen_candidates: set[str] = set()
+    for singular_key in order:
+        singular = phrases[singular_key]
+        words = singular_key.split()
+        if len(words) < 2:
+            continue
+        final_word = words[-1]
+        if len(final_word) < 3 or final_word.endswith("s"):
+            continue
+        plural_key = f"{singular_key}s"
+        if plural_key not in phrases or singular_key in wildcard_stems:
+            continue
+        if singular_key in seen_candidates:
+            continue
+        seen_candidates.add(singular_key)
+        pairs.append(
+            {
+                "singular": singular,
+                "plural": phrases[plural_key],
+                "wildcard": f'"{singular}*"[tiab]',
+            }
+        )
+    return pairs
+
+
+def singular_plural_wildcard_review_issues(text: str) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    for pair in singular_plural_pairs(text)[:10]:
+        add_issue(
+            issues,
+            "warning",
+            "singular_plural_wildcard_review",
+            "Quoted [tiab] singular/plural phrase pairs need a morphology review: test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit forms are safer.",
+            f'"{pair["singular"]}"[tiab] + "{pair["plural"]}"[tiab] -> consider {pair["wildcard"]}',
+        )
+    return issues
+
+
 def has_mesh_layer(text: str) -> bool:
     return bool(re.search(r"\[(?:mesh|mesh terms|mh|mesh:noexp)\]", text, re.IGNORECASE))
 
@@ -290,7 +376,7 @@ def detect_filter_fragments(text: str) -> list[str]:
     return found[:20]
 
 
-def final_qa(strategy: str, *, zero_hit_terms: list[str] | None = None) -> dict[str, object]:
+def final_qa(strategy: str) -> dict[str, object]:
     issues: list[dict[str, str]] = []
     text = strategy.strip()
     lower = text.lower()
@@ -326,18 +412,8 @@ def final_qa(strategy: str, *, zero_hit_terms: list[str] | None = None) -> dict[
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):
         add_issue(issues, "error", "proximity_with_truncation", "PubMed does not allow truncation inside proximity expressions.", value)
 
+    issues.extend(singular_plural_wildcard_review_issues(text))
     issues.extend(duplicate_term_issues(text))
-
-    for term in zero_hit_terms or []:
-        value = term.strip()
-        if value:
-            add_issue(
-                issues,
-                "warning",
-                "zero_hit_cleanup_candidate",
-                "This term was reported as not found in PubMed; remove and document it by default unless intentionally retained for future reruns.",
-                value,
-            )
 
     add_layer_balance_issues(issues, text)
 
@@ -361,9 +437,9 @@ def final_qa(strategy: str, *, zero_hit_terms: list[str] | None = None) -> dict[
         followups.append(
             "Remove the terms flagged as duplicate_term; this is recall-neutral cleanup, not a recall-reducing warning to justify."
         )
-    if any(issue["code"] == "zero_hit_cleanup_candidate" for issue in issues):
+    if any(issue["code"] == "singular_plural_wildcard_review" for issue in issues):
         followups.append(
-            "Remove and document zero_hit_cleanup_candidate terms by default after checking spelling, hyphenation, and spacing."
+            "For singular_plural_wildcard_review warnings, test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained."
         )
 
     return {
@@ -479,12 +555,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     qa_parser = subparsers.add_parser("final-qa", help="Run pre-final strategy QA checks.")
     add_text_args(qa_parser, "strategy", "strategy text")
-    qa_parser.add_argument(
-        "--zero-hit-terms",
-        nargs="*",
-        default=[],
-        help="Terms reported by PubMed as not found; emitted as zero_hit_cleanup_candidate issues.",
-    )
 
     filter_parser = subparsers.add_parser("filter-check", help="Check methodological filter requirements.")
     add_text_args(filter_parser, "text", "protocol/request/strategy text")
@@ -516,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
             parser=parser,
             label="strategy",
         )
-        write_json(final_qa(strategy, zero_hit_terms=args.zero_hit_terms))
+        write_json(final_qa(strategy))
     elif args.command == "filter-check":
         text = read_text_source(
             text=args.text,

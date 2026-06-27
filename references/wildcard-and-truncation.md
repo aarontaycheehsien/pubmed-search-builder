@@ -14,7 +14,9 @@ Do not treat wildcard expansion as automatically good. Treat it as a tool for di
 - UK and US spelling variants where feasible
 - older and newer word endings
 
-## Usually reasonable stems
+## Usually reasonable candidate stems
+
+These are candidate stems that are often reasonable after context and PubMed testing; they are not universally safe. By default, prefer the longest phrase-anchored or concept-specific stem feasible.
 
 ```text
 amputat*[tiab]
@@ -53,10 +55,12 @@ When considering truncation:
 
 1. Prefer the longest stem that captures the desired variants.
 2. Avoid very short stems unless unavoidable.
-3. Prefer concept-specific stems over generic stems.
+3. Prefer phrase-anchored or concept-specific stems over generic stems.
 4. Pair wildcard stems with phrase variants when needed.
 5. Consider both UK and US spelling when one stem cannot capture both safely.
 6. Use explicit singular/plural forms when wildcarding is unsafe.
+
+Broad single-token stems are candidates only. Test them in context before calling them safe or retaining them in a final strategy.
 
 Example:
 
@@ -79,6 +83,15 @@ OR "post amputation"[tiab]
 ```
 
 is better than relying on only one exact phrase.
+
+For quoted `[tiab]` phrases with predictable phrase-final singular/plural morphology, test a phrase-final wildcard candidate when it may affect recall:
+
+```text
+"immune checkpoint inhibitor*"[tiab]
+OR "triple negative breast cancer*"[tiab]
+```
+
+Explicit singular/plural phrase variants remain acceptable, but only after judgment or testing shows that wildcarding is unsafe, unnecessary, or no better than the explicit forms.
 
 ## Wildcard testing protocol
 

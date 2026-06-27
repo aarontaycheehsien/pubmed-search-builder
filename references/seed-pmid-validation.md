@@ -112,6 +112,8 @@ NOT
 
 Known-item validation only confirms the strategy finds papers you already have. To ask "is this strategy actually sensitive?", estimate **relative recall** against a larger benchmark relevant set with `pubmed_tool.py recall`.
 
+This section covers the **seeded** route. When no seeds were supplied, the same `recall` machinery can be driven from a high-precision pilot query expanded via `related`; that no-seed route is optional, user-offered, and documented separately in `references/no-seed-recall-estimation.md`.
+
 1. Choose a benchmark:
    - **Independent gold standard** (strongest): an externally defined relevant set, such as the included studies of a prior systematic review on the topic. Pass via `--benchmark-pmids` or `--benchmark-query-file`.
    - **Seed-expansion benchmark** (heuristic): the `related` candidate set from the "Expand the seed set" step, ideally filtered to high overlap. Pass the `related` JSON via `--benchmark-json --min-seed-overlap 2`.
