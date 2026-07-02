@@ -414,7 +414,7 @@ def final_qa(strategy: str) -> dict[str, object]:
             add_issue(issues, "warning", code, "Limits and filters can reduce recall; document the protocol justification and retrieval impact.", value)
 
     for value in snippets(r"\b[a-z][a-z0-9-]{0,3}\*", text):
-        add_issue(issues, "warning", "short_wildcard", "Short wildcard stems can exceed PubMed's expansion cap or add heavy noise; test or replace them.", value)
+        add_issue(issues, "warning", "short_wildcard", "Short wildcard stems can add heavy noise or unstable variants; test or replace them.", value)
 
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):
         add_issue(issues, "error", "proximity_with_truncation", "PubMed does not allow truncation inside proximity expressions.", value)

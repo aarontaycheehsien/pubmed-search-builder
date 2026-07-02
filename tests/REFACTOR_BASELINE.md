@@ -9,7 +9,7 @@ Captured before any Phase 1-4 deduplication. This is the "before" snapshot the
 
 | Doc | Words |
 |---|---|
-| references/wildcard-and-truncation.md | 663 |
+| references/wildcard-and-truncation.md | 769 |
 | references/framework-selection.md | 746 |
 | references/anti-patterns.md | 912 |
 | references/goal-tracking.md | 985 |
@@ -54,7 +54,7 @@ Recorded, not yet failed on. Lower is better after Phase 1-4 collapses each clus
 These reference docs had **no** doc-content test before Phase 0; they now have
 presence coverage in the inventory so Phase 1-4 cannot drop them silently:
 
-- `references/wildcard-and-truncation.md` (600-variant cap, truncation/proximity exclusion)
+- `references/wildcard-and-truncation.md` (current wildcard limits, truncation/proximity exclusion)
 - `references/validated-methodological-filters-and-hedges.md` (Cochrane HSSS, McMaster HIRU, ISSG, Ovid warning)
 - `references/prisma-s-reporting.md` (16-item mapping; Items 2, 8, 14)
 - `references/examples.md` (PICO/PECO/PCC walk-throughs)
