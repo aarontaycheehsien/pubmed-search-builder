@@ -195,6 +195,28 @@ Important behaviour:
 - Stopwords inside quoted proximity terms are searched as regular words.
 - A higher `N` increases recall but also noise. Test multiple values of `N`.
 
+## Proximity review pass
+
+Run a proximity review for phrase-like concepts before finalising the text-word layer. This is a review-and-test step, not an instruction to insert proximity automatically.
+
+Source-grounded triggers:
+
+- [PubMed Help](https://pubmed.ncbi.nlm.nih.gov/help/#proximity-searching): review proximity when terms need to appear in any order within `[ti]`, `[tiab]`, or `[ad]`, and compare `N` values because higher `N` broadens retrieval while lower `N` may miss records.
+- [NLM Tech Bull. 2022](https://www.nlm.nih.gov/pubs/techbull/nd22/nd22_pubmed_proximity_search_available.html): review proximity when a concept may be represented in multiple ways or by phrase variants; compare proximity with exact phrases and Boolean `AND`.
+- [Cochrane Technical Supplement / MECIR C33](https://www.cochrane.org/authors/handbooks-and-manuals/handbook/chapter04-tech-supplonlinepdfv65270924): use proximity operators appropriately because they can be more sensitive than direct adjacency or phrase searching and can replace many typed-out phrase variants.
+- [PRESS](https://work.cochrane.org/sites/work.cochrane.org/files/uploads/checklist_searches_for_editors_cochrane_work.pdf): review whether proximity could improve precision over `AND` and whether the chosen width is too narrow or too broad.
+
+Trigger a review when:
+
+- a concept uses multiple exact phrase variants with shared content words
+- phrase wording or word order varies in the literature
+- PubMed reports a quoted phrase as not found in the phrase index
+- loose same-field `[tiab] AND [tiab]` wording is used inside one concept block
+
+Do not retain proximity automatically. Test exact phrase(s), Boolean `AND`, and proximity variants, usually `~0`, `~1`, `~2`, and `~3`. Retain the narrowest proximity width that captures expected variants without unacceptable noise. Use `~0` specifically as PubMed's recommended fallback for quoted phrases that are not in the phrase index.
+
+Reject or mark proximity `not applicable` when terms need wildcard/truncation, exact order is essential, a stable named phrase is sufficient, the phrase variation is only singular/plural or hyphenation, or testing shows noise/no added recall. Record retained, rejected, and not-applicable proximity decisions in the audit.
+
 When to prefer proximity over loose Boolean:
 
 - distinctive multi-word concepts where word order varies in the literature (e.g. "shared decision making" / "decision making shared with patient")

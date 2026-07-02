@@ -27,6 +27,14 @@ def wildcard_review_evidence(result):
     }
 
 
+def proximity_review_evidence(result):
+    return {
+        issue["evidence"]
+        for issue in result["issues"]
+        if issue["code"] == "proximity_review_needed"
+    }
+
+
 class SplitTopLevelOrTests(unittest.TestCase):
     def test_splits_on_top_level_or_only(self):
         parts = hooks_tool.split_top_level_or("a[tiab] OR b[tiab] OR (c[tiab] OR d[tiab])")
@@ -136,6 +144,73 @@ class SingularPluralWildcardReviewTests(unittest.TestCase):
 
         self.assertIn("test the phrase-final, phrase-anchored/concept-specific wildcard candidate", followups)
         self.assertIn("document why explicit singular/plural forms were retained", followups)
+
+
+class ProximityReviewTests(unittest.TestCase):
+    def test_flags_reordered_phrase_family_without_proximity(self):
+        result = hooks_tool.final_qa(
+            '("patient physician relationship"[tiab] OR "physician patient relationship"[tiab])'
+        )
+
+        self.assertIn("proximity_review_needed", issue_codes(result))
+        evidence = " ".join(proximity_review_evidence(result))
+        self.assertIn("patient physician relationship", evidence)
+        self.assertIn("physician patient relationship", evidence)
+
+    def test_flags_variable_phrase_family_without_proximity(self):
+        result = hooks_tool.final_qa('("hip pain"[tiab] OR "hip joint pain"[tiab])')
+
+        self.assertIn("proximity_review_needed", issue_codes(result))
+
+    def test_flags_same_field_and_pair_inside_concept_block(self):
+        result = hooks_tool.final_qa('((patient[tiab] AND physician[tiab]) OR "doctor patient relationship"[tiab])')
+
+        self.assertIn("proximity_review_needed", issue_codes(result))
+        evidence = " ".join(proximity_review_evidence(result))
+        self.assertIn("patient[tiab] AND physician[tiab]", evidence)
+
+    def test_does_not_flag_when_matching_proximity_is_present(self):
+        result = hooks_tool.final_qa(
+            '("patient physician relationship"[tiab] OR "physician patient relationship"[tiab] '
+            'OR "patient physician relationship"[tiab:~0])'
+        )
+
+        self.assertNotIn("proximity_review_needed", issue_codes(result))
+
+    def test_does_not_flag_hyphenation_only_phrase_variants(self):
+        result = hooks_tool.final_qa('("patient-reported outcome"[tiab] OR "patient reported outcome"[tiab])')
+
+        self.assertNotIn("proximity_review_needed", issue_codes(result))
+
+    def test_does_not_flag_singular_plural_only_phrase_variants(self):
+        result = hooks_tool.final_qa(
+            '("immune checkpoint inhibitor"[tiab] OR "immune checkpoint inhibitors"[tiab])'
+        )
+
+        self.assertNotIn("proximity_review_needed", issue_codes(result))
+        self.assertIn("singular_plural_wildcard_review", issue_codes(result))
+
+    def test_does_not_flag_wildcarded_phrases(self):
+        result = hooks_tool.final_qa('("checkpoint inhibitor*"[tiab] OR "immune checkpoint inhibitor*"[tiab])')
+
+        self.assertNotIn("proximity_review_needed", issue_codes(result))
+
+    def test_does_not_flag_single_stable_named_phrase(self):
+        result = hooks_tool.final_qa(
+            '("Patient Reported Outcomes Measurement Information System"[tiab] OR PROMIS[tiab])'
+        )
+
+        self.assertNotIn("proximity_review_needed", issue_codes(result))
+
+    def test_followup_explains_test_or_document_not_auto_insertion(self):
+        followups = " ".join(
+            hooks_tool.final_qa(
+                '("patient physician relationship"[tiab] OR "physician patient relationship"[tiab])'
+            )["required_followups"]
+        ).lower()
+
+        self.assertIn("compare exact phrases, boolean and, and pubmed proximity widths", followups)
+        self.assertIn("document why it was rejected/not applicable", followups)
 
 
 class LowCountReviewTests(unittest.TestCase):

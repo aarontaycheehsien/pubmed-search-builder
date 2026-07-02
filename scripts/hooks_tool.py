@@ -236,6 +236,193 @@ def normalized_phrase(value: str) -> str:
     return " ".join(value.lower().split())
 
 
+PROXIMITY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def phrase_word_tokens(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", value.lower().replace("-", " "))
+
+
+def singularish_token(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def content_tokens(value: str) -> list[str]:
+    return [singularish_token(token) for token in phrase_word_tokens(value) if token not in PROXIMITY_STOPWORDS]
+
+
+def content_token_set(value: str) -> frozenset[str]:
+    return frozenset(content_tokens(value))
+
+
+def proximity_token_sets(text: str) -> list[frozenset[str]]:
+    sets = []
+    pattern = r'"([^"]+)"\[(?:ti|title|tiab|title/abstract|ad|affiliation):~\d+\]'
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        tokens = content_token_set(match.group(1))
+        if len(tokens) >= 2:
+            sets.append(tokens)
+    return sets
+
+
+def proximity_covers(tokens: set[str] | frozenset[str], proximity_sets: list[frozenset[str]]) -> bool:
+    return any(tokens.issubset(proximity_tokens) for proximity_tokens in proximity_sets)
+
+
+def quoted_phrase_candidates(text: str) -> list[dict[str, object]]:
+    candidates = []
+    for atom in extract_leaf_atoms(text):
+        phrase = quoted_tiab_phrase(atom)
+        if not phrase:
+            continue
+        tokens = content_tokens(phrase)
+        token_set = frozenset(tokens)
+        if len(token_set) < 2:
+            continue
+        candidates.append({"phrase": phrase, "tokens": tokens, "token_set": token_set})
+    return candidates
+
+
+def proximity_phrase_family_issues(text: str) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    phrases = quoted_phrase_candidates(text)
+    proximity_sets = proximity_token_sets(text)
+    seen: set[tuple[str, ...]] = set()
+
+    for index, left in enumerate(phrases):
+        left_tokens = left["tokens"]
+        left_set = left["token_set"]
+        for right in phrases[index + 1 :]:
+            right_tokens = right["tokens"]
+            right_set = right["token_set"]
+            shared = left_set & right_set
+            if len(shared) < 2:
+                continue
+            if tuple(left_tokens) == tuple(right_tokens):
+                continue
+            review_tokens = left_set | right_set if left_set == right_set else shared
+            if proximity_covers(review_tokens, proximity_sets):
+                continue
+            key = tuple(sorted(review_tokens))
+            if key in seen:
+                continue
+            seen.add(key)
+            add_issue(
+                issues,
+                "warning",
+                "proximity_review_needed",
+                "Phrase variants may need a proximity review: compare exact phrases, Boolean AND, and PubMed proximity widths, or document why proximity was rejected or not applicable.",
+                f'"{left["phrase"]}"[tiab] + "{right["phrase"]}"[tiab]',
+            )
+    return issues
+
+
+def simple_fielded_terms(text: str) -> list[dict[str, object]]:
+    terms = []
+    for atom in extract_leaf_atoms(text):
+        value = strip_outer_parentheses(atom.strip())
+        if "*" in value or has_proximity(value):
+            continue
+        quoted = re.fullmatch(r'"([^"]+)"\[(ti|title|tiab|title/abstract)\]', value, re.IGNORECASE)
+        bare = re.fullmatch(r"([a-z0-9][a-z0-9-]+)\[(ti|title|tiab|title/abstract)\]", value, re.IGNORECASE)
+        if quoted:
+            phrase = " ".join(quoted.group(1).split())
+            tokens = content_token_set(phrase)
+            field = quoted.group(2).lower()
+            display = value
+        elif bare:
+            token = bare.group(1)
+            tokens = content_token_set(token)
+            field = bare.group(2).lower()
+            display = value
+        else:
+            continue
+        if field == "title/abstract":
+            field = "tiab"
+        elif field == "title":
+            field = "ti"
+        if tokens:
+            terms.append({"field": field, "tokens": tokens, "display": display})
+    return terms
+
+
+def collect_and_groups(text: str) -> list[list[str]]:
+    value = strip_outer_parentheses(text.strip())
+    if not value:
+        return []
+    and_parts = split_top_level_and(value)
+    if len(and_parts) > 1:
+        groups = [and_parts]
+        for part in and_parts:
+            groups.extend(collect_and_groups(part))
+        return groups
+    groups: list[list[str]] = []
+    for part in split_top_level_or(value):
+        if part != value:
+            groups.extend(collect_and_groups(part))
+    return groups
+
+
+def proximity_and_pair_issues(text: str) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    proximity_sets = proximity_token_sets(text)
+    seen: set[tuple[str, ...]] = set()
+
+    for group in collect_and_groups(text):
+        term_sets = [simple_fielded_terms(part) for part in group]
+        for left_index, left_terms in enumerate(term_sets):
+            for right_terms in term_sets[left_index + 1 :]:
+                for left in left_terms:
+                    for right in right_terms:
+                        if left["field"] != right["field"]:
+                            continue
+                        combined = left["tokens"] | right["tokens"]
+                        if len(combined) < 2 or proximity_covers(combined, proximity_sets):
+                            continue
+                        key = tuple(sorted([left["field"], *combined]))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        add_issue(
+                            issues,
+                            "warning",
+                            "proximity_review_needed",
+                            "Same-field free-text terms combined with AND inside a concept block may need proximity review for precision; compare Boolean AND with PubMed proximity widths or document why proximity was rejected or not applicable.",
+                            f'{left["display"]} AND {right["display"]}',
+                        )
+    return issues
+
+
+def proximity_review_issues(text: str) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    blocks = split_top_level_and(text)
+    concept_blocks = [block for block in blocks if not likely_filter_or_limit_block(block)]
+    contexts = concept_blocks if len(concept_blocks) > 1 else [text]
+    for context in contexts:
+        issues.extend(proximity_phrase_family_issues(context))
+        issues.extend(proximity_and_pair_issues(context))
+    return issues[:10]
+
+
 def singular_plural_pairs(text: str) -> list[dict[str, str]]:
     """Find multi-word quoted [tiab] singular/plural phrase pairs that need morphology review.
 
@@ -419,6 +606,7 @@ def final_qa(strategy: str) -> dict[str, object]:
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):
         add_issue(issues, "error", "proximity_with_truncation", "PubMed does not allow truncation inside proximity expressions.", value)
 
+    issues.extend(proximity_review_issues(text))
     issues.extend(singular_plural_wildcard_review_issues(text))
     issues.extend(duplicate_term_issues(text))
 
@@ -447,6 +635,10 @@ def final_qa(strategy: str) -> dict[str, object]:
     if any(issue["code"] == "singular_plural_wildcard_review" for issue in issues):
         followups.append(
             "For singular_plural_wildcard_review warnings, test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained."
+        )
+    if any(issue["code"] == "proximity_review_needed" for issue in issues):
+        followups.append(
+            "For proximity_review_needed warnings, compare exact phrases, Boolean AND, and PubMed proximity widths (usually ~0 to ~3), then retain proximity only when testing supports it or document why it was rejected/not applicable."
         )
 
     return {

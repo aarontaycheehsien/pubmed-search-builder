@@ -174,6 +174,8 @@ Each block should usually include:
 
 Use `wildcard-and-truncation.md` before accepting proximity expressions or wildcard stems, especially when a stem may be short, ambiguous, or likely to retrieve unrelated concepts.
 
+Run a proximity review pass for phrase-like concepts before finalising the text-word layer. Review is required when a concept uses multiple exact phrase variants with shared content words, phrase wording/order varies, PubMed reports a quoted phrase as absent from the phrase index, or loose same-field `[tiab] AND [tiab]` wording is used inside one concept block. Compare exact phrase(s), Boolean `AND`, and PubMed proximity variants, usually `~0`, `~1`, `~2`, and `~3`; use `~0` as PubMed's fallback for quoted phrases not found in the phrase index. Retain proximity only when testing supports it, otherwise record the rejected or not-applicable rationale.
+
 Run a morphology pass for quoted `[tiab]` phrase families before finalising the text-word layer. Identify explicit singular/plural phrase pairs, generate phrase-final, phrase-anchored or concept-specific wildcard candidates when the morphology is predictable, test candidates with `pubmed_tool.py batch` or `search` when they may affect recall, and record the decision as `wildcard retained`, `explicit forms retained`, or `wildcard not applicable` in the title/abstract expansion log. Generic one-token wildcard stems require explicit testing/rationale before retention.
 
 Pattern:
@@ -221,7 +223,7 @@ Test:
 1. each accepted MeSH term
 2. each plausible but rejected MeSH term
 3. each major text-word cluster
-4. each proximity expression that may affect recall, including exact phrase comparisons, multiple `N` values where useful, concept-block with/without comparisons, and seed PMID impact when seeds exist
+4. each proximity review candidate, including exact phrase and Boolean `AND` comparisons, multiple `N` values where useful, concept-block with/without comparisons, rejected/not-applicable rationale, and seed PMID impact when seeds exist
 5. each wildcard stem that may affect recall
 5a. each phrase-final wildcard candidate from the morphology pass when explicit quoted `[tiab]` singular/plural pairs may affect recall
 6. each concept block
@@ -331,8 +333,9 @@ Before presenting the final draft:
 5a. For each zero-hit term reported by `phrases_not_found` or `quotedphrasesnotfound`, first check spelling, hyphenation, and spacing variants in case it is a typo for a real term rather than genuinely absent; fix typos instead of removing them. For genuinely zero-hit terms, the default is to **remove and document** them as removed zero-hit terms, because they match no records and removal is recall-neutral in the current index; offer the user the option to keep any **free-text** zero-hit term as an intentional zero-hit term for future-proofing, and promote this stage to a full banner with `User decision needed` while the choice is open. A zero-hit term carrying a controlled-vocabulary field tag (`[Mesh]`, `[Mesh:noexp]`, `[Majr]`, `[Supplementary Concept]`, or the `[mh]`/`[majr]` equivalents) is **never** a valid future-proofing keep — a real MeSH descriptor always exists in the index, so a zero-hit controlled-vocabulary term indicates a misspelled or nonexistent heading: fix the typo or remove it, and never retain it as an intentional zero-hit term. Record each removed and each kept zero-hit term, with reasons, in the audit decision ledger and PRISMA-S notes.
 6. If variants were tested, rerun the selected final variant after hygiene so the reported count matches the delivered strategy.
 7. Run `hooks_tool.py final-qa --strategy-file ...` after the final query text stabilizes.
-8. Treat `singular_plural_wildcard_review` findings as documentation warnings: test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained, then record the morphology-review decision in the audit.
-9. Run the per-block coverage check (`manifest_tool.py state coverage`, or `show --require-coverage` alongside `--require-ready`). Resolve any `coverage gap` by recording the missing MeSH sweep / block count against the block, or a reasoned waiver, before handoff. See *Per-block evidence coverage* in `mesh-and-pubmed-tools.md`.
+8. Treat `proximity_review_needed` findings as documentation warnings: compare exact phrases, Boolean `AND`, and proximity widths, retain proximity only when testing supports it, or document why proximity was rejected or not applicable.
+9. Treat `singular_plural_wildcard_review` findings as documentation warnings: test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained, then record the morphology-review decision in the audit.
+10. Run the per-block coverage check (`manifest_tool.py state coverage`, or `show --require-coverage` alongside `--require-ready`). Resolve any `coverage gap` by recording the missing MeSH sweep / block count against the block, or a reasoned waiver, before handoff. See *Per-block evidence coverage* in `mesh-and-pubmed-tools.md`.
 
 ### Final validation and cleanup offer
 
@@ -341,6 +344,7 @@ This is a required closing gate for every completed strategy build. Do not silen
 - **Errors to fix:** unbalanced parentheses/quotes, truncation inside a proximity expression, and `fields_not_found` (an unrecognized field tag). These break or mis-scope the search and must be fixed.
 - **Duplicate terms (`duplicate_term`):** remove by default. An exact repeated atom is logically redundant (`(A OR A)` is identical to `(A)`), so removal is recall-neutral and nobody benefits from keeping a literal duplicate; it also clears repeated `not found in PubMed` notices from a duplicated zero-hit term. Surface it in the report rather than stripping silently for two reasons: you must drop the *redundant-context* copy (e.g. the one nested inside a narrower `MeSH AND (...)` sub-clause) and never the broad standalone copy, which would narrow retrieval; and the duplication usually signals a wider redundancy worth reviewing.
 - **Zero-hit terms (`phrases_not_found` / `quotedphrasesnotfound`):** **remove + document** by default, because they match no records and removal is recall-neutral; offer the user the option to keep any as an intentional zero-hit term **(free-text terms only — a zero-hit `[Mesh]`/`[Majr]`/`[Mesh:noexp]`/`[Supplementary Concept]` term is a misspelled or nonexistent heading, so fix or remove it, never keep it)**. Check spelling/hyphenation/spacing variants first and fix typos rather than removing them (see step 5a).
+- **Proximity review (`proximity_review_needed`):** compare exact phrase(s), Boolean `AND`, and proximity widths, usually `~0` to `~3`; retain proximity only when testing supports it, or record why proximity was rejected or not applicable. This is a review warning, not an automatic insertion instruction.
 - **Singular/plural wildcard review (`singular_plural_wildcard_review`):** test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit quoted `[tiab]` singular/plural phrase variants are safer. This is a morphology-review warning, not an automatic replacement instruction.
 - **Recall-reducing warnings:** `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, and short wildcards. Flag each and either justify it against the protocol or remove it with the user. Diagnostic Bramer reciprocal gap queries may use `NOT` during block testing only when documented under `bramer-reciprocal-gap-analysis.md`; final-strategy `NOT` still requires separate protocol justification.
 - **Low-count plausibility check:** when the final topic-only count is `<500`, follow `references/low-count-plausibility.md`: report the count, diagnostics, relaxed variant test or reason not applicable, final decision, and final count after revision if revised. Treat the count as a recall warning, not as proof of precision and not as an automatic expansion target.
@@ -365,6 +369,7 @@ Stop when:
 - any methodological filter has been chosen from a validated source where available
 - the topic-only and topic-plus-filter versions have been compared when a filter is used
 - final query hygiene has removed exact duplicates and dead PubMed phrases, or remaining warnings are documented, and the required final validation and cleanup offer has been presented with the user's include/exclude/remove decisions applied or recorded
+- proximity review findings have been tested or documented as rejected/not applicable in the title/abstract expansion log
 - if the final topic-only strategy retrieved `<500` records, the low-count plausibility hook was run and recorded; any needed expansion was retested and before/after counts were documented
 - further expansion mainly adds unrelated noise
 - if a final strategy was generated or presented before audit output, the complete Markdown audit file was generated for a completed build or explicitly offered when the user paused before audit output

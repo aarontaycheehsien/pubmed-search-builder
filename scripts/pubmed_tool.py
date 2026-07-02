@@ -3073,9 +3073,14 @@ def build_audit_scaffold(
                 "rationale": audit_placeholder("reason for morphology decision"),
             }
         ],
+        "proximity_candidates_tested": audit_placeholder("proximity review decision: exact phrase(s), Boolean AND, and proximity widths tested, or not applicable"),
+        "proximity_expressions_added": audit_placeholder("proximity expressions retained, or none"),
+        "proximity_expressions_tested_but_rejected": audit_placeholder("proximity expressions tested but rejected with reason, or none"),
+        "proximity_not_applicable_rationale": audit_placeholder("reason proximity was not applicable, or not applicable"),
         "zero_hit_terms_removed": removed,
         "zero_hit_terms_kept": audit_placeholder("zero-hit terms kept by user choice as intentional, or none"),
     }
+    placeholders.append("tiab_expansion.proximity_review (decision)")
     placeholders.append("tiab_expansion.morphology_review (decision)")
     placeholders.append("tiab_expansion.zero_hit_terms (decision)")
 

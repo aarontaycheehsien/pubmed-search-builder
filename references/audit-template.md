@@ -223,8 +223,10 @@ For every row based on `fetch`, `mine`, or `sample` record content, record the s
 
 - **Spelling variants added:** [list]
 - **Hyphenation variants added:** [list]
+- **Proximity candidates tested:** [exact phrase(s), Boolean AND, and proximity widths tested, or not applicable]
 - **Proximity expressions added:** [list, or none]
 - **Proximity expressions tested but rejected:** [list and reason, or not performed]
+- **Proximity not applicable rationale:** [reason, or not applicable]
 - **Wildcard stems added:** [list]
 - **Wildcard stems tested but rejected:** [list and reason, or not performed]
 - **Zero-hit terms removed (documented):** [list, or none]
