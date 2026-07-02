@@ -85,7 +85,7 @@ Also save a canonical `run_manifest.json` with `scripts/manifest_tool.py`: an ap
 - `references/goal-tracking.md` - `/goal` pre-goal intake and state rules.
 - `references/mesh-and-pubmed-tools.md` - bundled script usage and the tool-to-stage map.
 - `references/tiab-expansion.md` - title/abstract expansion and objective term ranking.
-- `references/wildcard-and-truncation.md` - wildcard safety and the 600-variant cap.
+- `references/wildcard-and-truncation.md` - wildcard safety, current PubMed wildcard limits, and testing.
 - `references/bramer-reciprocal-gap-analysis.md` - conditional controlled-vocabulary/text-word gap analysis.
 - `references/seed-pmid-validation.md` - seed PMID validation workflow.
 - `references/no-seed-recall-estimation.md` - optional no-seed heuristic recall check (pilot → related → recall).

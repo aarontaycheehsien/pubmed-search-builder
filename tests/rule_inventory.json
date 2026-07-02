@@ -131,12 +131,13 @@
     },
 
     {
-      "id": "wildcard.600-cap-and-proximity-exclusion",
-      "rule": "wildcard-and-truncation.md owns the 600-variant cap sensitivity hazard and the truncation/proximity mutual exclusion.",
+      "id": "wildcard.current-limits-and-proximity-exclusion",
+      "rule": "wildcard-and-truncation.md owns current PubMed wildcard limits, wildcard testing, and the truncation/proximity mutual exclusion.",
       "canonical_owner": "references/wildcard-and-truncation.md",
       "assertions": [
-        "the 600-variant cap",
-        "sensitivity hazard",
+        "current pubmed wildcard limits",
+        "at least 4 characters before the first wildcard",
+        "256 wildcard operators per query",
         "truncation and proximity are mutually exclusive",
         "wildcard testing protocol",
         "risky stems"

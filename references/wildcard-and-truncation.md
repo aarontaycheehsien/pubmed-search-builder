@@ -139,18 +139,24 @@ OR
 wildcard stems
 ```
 
-## The 600-variant cap
+## Current PubMed wildcard limits
 
-PubMed retrieves at most the first 600 variants of a truncated stem (per the PubMed User Guide entry on wildcards). When a stem expands to more than 600 variants, the additional variants are silently dropped: PubMed does not return an error, and the search appears to run normally.
+Current PubMed Help no longer documents the older variant-expansion cap. Do not warn that PubMed silently drops variants after a fixed expansion count.
 
-This is a **sensitivity hazard**. A short or generic stem can silently exclude common wanted variants.
+Current practical limits and behaviours:
+
+- Terms must have at least 4 characters before the first wildcard (`colo*`).
+- Wildcards can appear in the middle of terms and phrases, and multiple wildcards can be used in the same term or phrase (`organi*ation*`, `colo*r`, `"colo* cancer*"`).
+- PubMed searches wildcarded terms for possible variations, which can add unintended noise.
+- Wildcards turn off Automatic Term Mapping, including MeSH mapping and explosion.
+- NLM Office Hours in June 2024 stated a limit of 256 wildcard operators per query.
 
 Practical implications:
 
-- Test short stems (`care*`, `pain*`, `cell*`, `gene*`) with the PubMed script to confirm whether expected variants are reached.
-- Use the longest concept-specific stem feasible. `neurostimulat*` is safer than `stimulat*`. `paediatric*` is safer than `pediat*`.
-- When the cap is plausibly hit, replace or supplement the wildcard with **explicit phrase variants** for the common forms you care about. The phrase variants act as a safety net when the cap silently truncates the wildcard expansion.
-- Note that PubMed's wildcard implementation (since the 2024 update, NLM Tech Bull. 2024 May-Jun) supports wildcards in the middle of terms and multiple wildcards per term (`organi*ation*`, `colo*r`); these are useful but increase the variant-count risk.
+- Test short stems (`care*`, `pain*`, `cell*`, `gene*`) with the PubMed script for noise and expected retrieval.
+- Use the longest phrase-anchored or concept-specific stem feasible. `neurostimulat*` is safer than `stimulat*`. `paediatric*` is safer than `pediat*`.
+- Replace or supplement noisy short stems with explicit phrase variants for important common forms.
+- Check PubMed Search Details because wildcarding can change translation and suppress Automatic Term Mapping.
 
 ## Truncation and proximity are mutually exclusive
 

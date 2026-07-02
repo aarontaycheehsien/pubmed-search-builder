@@ -274,7 +274,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/goal-tracking.md](references/goal-tracking.md)**: Goal tracking state rules, pre-goal intake, blockers, and completion audit
 - **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and the tool-to-stage map
 - **[references/tiab-expansion.md](references/tiab-expansion.md)**: Title/abstract expansion sources and strategies
-- **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, the 600-variant cap, and testing
+- **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, current PubMed wildcard limits, and testing
 - **[references/bramer-reciprocal-gap-analysis.md](references/bramer-reciprocal-gap-analysis.md)**: Conditional controlled-vocabulary/text-word gap analysis
 - **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Seed PMID validation workflow
 - **[references/validated-methodological-filters-and-hedges.md](references/validated-methodological-filters-and-hedges.md)**: Cochrane, McMaster, and other validated filters
