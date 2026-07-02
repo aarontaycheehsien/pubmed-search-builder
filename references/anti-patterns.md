@@ -111,6 +111,30 @@ The codex workflow forces iteration in `workflow.md §7` (Test iteratively) and 
 
 Evidence: [Adam et al. 2024](https://doi.org/10.1093/jamiaopen/ooae098); [Park, Shin & Kim 2025](https://doi.org/10.69528/jkmla.2025.52.1.28) showed that even with PRESS-style prompting, LLM-generated strategies require human refinement on controlled vocabulary and syntax. [De Cassai et al. 2025](https://doi.org/10.1136/rapm-2024-106231) found ChatGPT-4o retrieved only 6% of the records that expert search strings retrieved across 85 anesthesiology systematic reviews.
 
+## Mistake 9: Over-specific workflow block
+
+For methodological or automation topics, do not require a narrow term family such as Boolean query formulation when relevant papers may describe the broader workflow: searching, screening, study selection, evidence synthesis, systematic-review conduct, or other evidence-synthesis tasks.
+
+Bad:
+
+```text
+(large language models) AND (Boolean OR query formulation OR search string)
+```
+
+when the review question plausibly includes LLM support across search strategy/query generation, literature/database searching, title/abstract screening, full-text screening, study selection, data extraction, risk of bias, synthesis, or review drafting.
+
+Better: use a broader workflow block for the main recall-first strategy, and keep the narrow action terms as a focused/reserve variant or within-block vocabulary when the protocol does not explicitly narrow the scope.
+
+## Mistake 10: Standalone ambiguous model or acronym terms
+
+Avoid standalone model names or acronyms when they have common non-LLM meanings. A term like `LLaMA[tiab]` can retrieve animal, antibody, or construct records unrelated to large language models. Prefer phrase variants tied to the model family, such as `"Llama 2"[tiab]`, `"Llama-2"[tiab]`, `"Llama 3"[tiab]`, and `"Llama-3"[tiab]`, and document any broader acronym only when testing shows it is useful and tolerable.
+
+## Mistake 11: Treating low count as precision
+
+A final topic-only count below `<500` is not proof that the strategy is precise. It may indicate an over-specific concept block, too many `AND` blocks, narrow workflow/action language, missing MeSH or title/abstract variants, PubMed translation drift, or an unnecessary filter or limit.
+
+Do not expand automatically just to exceed 500 records. Diagnose the low count. If the topic is rare, new, tightly scoped, or protocol-limited, document why `<500` is plausible. If the count reflects avoidable narrowing, revise/expand the bottleneck block, rerun the final topic-only count, and document before/after counts.
+
 ## References
 
 - Adam GP, et al. Literature search sandbox: a large language model that generates search queries for systematic reviews. *JAMIA Open* 2024. [doi:10.1093/jamiaopen/ooae098](https://doi.org/10.1093/jamiaopen/ooae098).

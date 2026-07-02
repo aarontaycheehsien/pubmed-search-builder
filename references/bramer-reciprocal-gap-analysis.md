@@ -26,6 +26,14 @@ Build the two layer-specific query files from the draft concept block:
 
 Use `[Mesh]`, `[Mesh:noexp]`, and `[Supplementary Concept]` terms in the controlled-vocabulary layer as actually drafted. Use `[tiab]`, proximity, wildcard, spelling, hyphenation, acronym, and phrase variants in the text-word layer as actually drafted.
 
+Run both directions in one call with `pubmed_tool.py term-diff`, which builds the two gap queries, reports `counts` (mesh, tiab, overlap, combined, mesh_only, tiab_only), and fetches a sample of each side to inspect (a record-content command — requires `--output`):
+
+```bash
+python scripts/pubmed_tool.py term-diff --mesh-query-file concept_mesh.txt --tiab-query-file concept_text.txt --retmax 15 --output diff_concept.json
+```
+
+Building the gap-query files by hand and running `search`/`sample`/`batch` (see `mesh-and-pubmed-tools.md`) is equally valid when you want finer control.
+
 The `NOT` operator is allowed here only because these are temporary diagnostic gap queries. Do not copy diagnostic `NOT` into the final strategy unless the protocol independently justifies an exclusion and final QA records that recall risk.
 
 ## How to interpret
@@ -52,6 +60,8 @@ When performed, record:
 - rationale for each accepted or rejected candidate
 
 When waived, record the reason. When no controlled-vocabulary layer or no text-word layer exists, mark the check `not applicable` and explain why.
+
+This per-concept status is machine-checkable. Register the essential blocks (`state register-blocks`), tag each `term-diff`/gap entry to its block (`add --block <label> ...`), or record a waiver (`state waive-requirement <label> bramer_gap "<reason>"`); then `manifest_tool.py show --require-gap-analysis` fails at handoff if any block was neither analysed nor waived. This gate is **opt-in and separate from `--require-coverage`**, reflecting the conditional nature of the check. See `references/mesh-and-pubmed-tools.md`.
 
 ## Reference
 

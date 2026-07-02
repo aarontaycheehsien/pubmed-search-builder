@@ -37,6 +37,7 @@ Read the result asymmetrically:
    > draft retrieves — giving a relative-recall % and the bottleneck block. It is a heuristic,
    > not validated sensitivity. Yes / No.
    Ask only this, and stop.
+   If the draft or final topic-only strategy has a low-count plausibility warning (`<500` records), cite that as one reason the heuristic check is useful. Do not present `<500` as proof of low recall, and do not re-ask if the user already declined the optional check.
 2. Record the outcome in the manifest build-state so handoff can confirm the user was offered the choice:
    - accepted and run: `manifest_tool.py state resolve-recall-offer done`
    - user declined: `manifest_tool.py state resolve-recall-offer declined`
@@ -102,9 +103,14 @@ See `tiab-expansion.md` for the same pilot-construction guidance used by `term-r
 
 ## Act on the result
 
+Low heuristic recall is an action gate, not just a caveat. If overall heuristic recall is below `70%`, or any essential block is below `60%`, do not proceed to final handoff until missed records have been inspected and a revised draft has been retested, or every miss has been documented as out of scope.
+
 1. Inspect `missed_pmids` — are they truly relevant? (No reviewed JSON, no decision: inspect the saved records.)
 2. For genuine misses, the `bottleneck` block is usually where MeSH or text-word coverage is too narrow — widen that block, then re-run.
 3. Classify any term harvested from missed records by concept role like any other candidate; **never auto-add**, and respect the overfitting rules in `seed-pmid-validation.md`.
+4. If missed records are broader than the current draft but plausibly in scope, widen the bottleneck block before handoff. For methodological or automation topics, this may mean replacing a narrow action block with a broader workflow block.
+5. If missed records are out of scope, document each out-of-scope PMID explicitly and keep it out of the strategy rather than distorting the query.
+6. Do not proceed to audit output until the revised query has been retested and the audit can report the bottleneck-block diagnosis, revision decision, out-of-scope PMID table if applicable, and final heuristic retrieval result.
 
 ## Guardrails
 
@@ -112,6 +118,8 @@ See `tiab-expansion.md` for the same pilot-construction guidance used by `term-r
 - **Minimum benchmark size.** Below ~15–20 reachable candidates the percentage is too noisy — report "indicative only" or set `recall_offer = not-applicable` with a documented reason rather than printing a confident number.
 - **Reachability.** A benchmark PMID not in PubMed is indistinguishable from a genuine miss. Report recall against the reachable benchmark and note the unreachable count.
 - **Never narrow on the number.** A recall figure can drive *adding* coverage to a bottleneck block; it never justifies *removing* terms from a recall-first strategy.
+- **Low-recall handoff gate.** The `70%` overall and `60%` per-essential-block thresholds are not validated sensitivity targets, but they are strong enough to block handoff until missed-record inspection, revision, and retesting are complete or the misses are documented as out of scope.
+- **Low final count is a trigger, not evidence.** A final topic-only count below `<500` should strengthen the case for running the optional no-seed heuristic recall check when it has not yet been accepted or declined, but it is not itself a sensitivity estimate and never requires automatic expansion.
 
 ## Audit
 
@@ -120,6 +128,7 @@ known-item seed validation**:
 
 - benchmark source = **no-seed pilot-expansion heuristic**, the pilot query, link types, caps, and benchmark size;
 - `relative_recall_percent`, per-block recall, and the bottleneck block;
+- missed-record inspection outcome, revision decision, out-of-scope PMID table if applicable, and final retest result after any revision;
 - the offer outcome: run / `offered; declined by user` / `not-applicable (reason)`.
 
 `pubmed_tool.py audit-scaffold --recall-json recall.json --seed-status no --manifest run_manifest.json`

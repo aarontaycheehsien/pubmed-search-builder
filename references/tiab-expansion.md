@@ -53,6 +53,8 @@ When **no seeds** are supplied, objective ranking is still reachable, and this i
 
 This follows the tradition of objectively derived search strategies (Hausner et al. 2012, *Syst Rev*, [doi:10.1186/2046-4053-1-19](https://doi.org/10.1186/2046-4053-1-19)) and word-frequency-analysis tools such as PubMed PubReMiner and the Yale MeSH Analyzer.
 
+`term-rank` scores terms you already thought of. To also discover terms you *didn't*, inspect where a concept block's MeSH layer and `[tiab]` layer disagree — **`(MeSH) NOT (tiab)`** reveals free-text phrasings to add to the `[tiab]` layer, and **`(tiab) NOT (MeSH)`** reveals candidate descriptors and indexing gaps. This is the conditional **Bramer reciprocal gap analysis**; run it in one call with `pubmed_tool.py term-diff` (or manually with `search`/`sample`). See `references/bramer-reciprocal-gap-analysis.md` for when to run it, interpretation, and audit requirements, and `mesh-and-pubmed-tools.md` for the command. It is a term-discovery aid, not validated recall, and recall-only: use it to add coverage, never to remove terms.
+
 ## Pre-MeSH vocabulary/domain brainstorm
 
 Run a brief brainstorm before MeSH lookup for social-science, psychosocial, behavioral, qualitative, health-services, and weak-controlled-vocabulary concepts. This protects author-language and disciplinary vocabulary from being narrowed too early by MeSH.

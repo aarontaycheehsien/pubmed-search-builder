@@ -578,6 +578,16 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         self.assertIn("pubmed_tool.py batch bramer_gap_queries.json", tools_doc)
         self.assertIn("do not copy them into the final strategy", tools_doc)
 
+        # The term-diff command automates both gap directions in one call; it is offered (additively)
+        # alongside the manual search/sample/batch route in the reference and the tools doc.
+        self.assertIn("term-diff", ref)
+        self.assertIn("term-diff", tools_doc)
+
+        # The conditional gap-analysis status is machine-checkable via the separate opt-in gate.
+        self.assertIn("--require-gap-analysis", tools_doc)
+        self.assertIn("--require-gap-analysis", ref)
+        self.assertIn("separate from `--require-coverage`", tools_doc)
+
         for phrase in [
             "bramer reciprocal gap analysis",
             "performed / waived / not applicable / not performed",
@@ -705,6 +715,88 @@ class ConceptAnalysisDocsTests(unittest.TestCase):
         self.assertIn("resolve-gate seed none", workflow)
         self.assertIn("`none`", tools_doc)
         self.assertIn("reminders", tools_doc)
+
+    def test_recall_first_workflow_breadth_and_low_recall_gates_are_documented(self):
+        concept_doc = read_doc("references/concept-analysis-and-gating.md").lower()
+        recall_doc = read_doc("references/no-seed-recall-estimation.md").lower()
+        workflow = read_doc("references/workflow.md").lower()
+        anti_patterns = read_doc("references/anti-patterns.md")
+        anti_patterns_lower = anti_patterns.lower()
+
+        for phrase in [
+            "scope breadth check",
+            "could this topic be represented as a broader workflow",
+            "recall first",
+            "title/abstract screening",
+            "full-text screening",
+            "study selection",
+            "data extraction",
+            "risk of bias",
+            "synthesis",
+            "review drafting",
+        ]:
+            self.assertIn(phrase, concept_doc)
+
+        self.assertIn("below `70%`", recall_doc)
+        self.assertIn("below `60%`", recall_doc)
+        self.assertIn("low heuristic recall is an action gate", recall_doc)
+        self.assertIn("missed-record inspection", recall_doc)
+        self.assertIn("out-of-scope pmid table", recall_doc)
+        self.assertIn("do not proceed to audit output", recall_doc)
+
+        self.assertIn("late-arriving gold-standard pmids", workflow)
+        self.assertIn("final strategy cannot be handed off with missed in-scope seeds or gold-standard pmids", workflow)
+        self.assertIn("missed because the query failed", workflow)
+        self.assertIn("not retrieved because the pmid appears out of scope", workflow)
+        self.assertIn("do not proceed to audit output until the revised query is retested", workflow)
+
+        self.assertIn("over-specific workflow block", anti_patterns_lower)
+        self.assertIn("searching, screening, study selection, evidence synthesis", anti_patterns_lower)
+        self.assertIn("LLaMA[tiab]", anti_patterns)
+        self.assertIn('"Llama-3"[tiab]', anti_patterns)
+
+    def test_low_count_plausibility_check_is_documented_as_diagnostic_gate(self):
+        workflow = read_doc("references/workflow.md").lower()
+        low_count_doc = read_doc("references/low-count-plausibility.md").lower()
+        recall_doc = read_doc("references/no-seed-recall-estimation.md").lower()
+        audit = read_doc("references/audit-template.md").lower()
+        anti_patterns = read_doc("references/anti-patterns.md").lower()
+
+        for phrase in [
+            "low-count plausibility check",
+            "final **topic-only** strategy retrieves `<500` records",
+            "references/low-count-plausibility.md",
+            "hooks_tool.py low-count-review",
+            "manifest_tool.py show --require-low-count-review",
+        ]:
+            self.assertIn(phrase, workflow)
+
+        for phrase in [
+            "a final topic-only count below 500 is a trigger for review",
+            "do not expand automatically just to exceed 500 records",
+            "relaxed variant is a test, not an adoption requirement",
+            "the hook does not run pubmed, rewrite the strategy, or decide relevance",
+            "manifest_tool.py show --manifest run_manifest.json",
+            "--require-low-count-review",
+        ]:
+            self.assertIn(phrase, low_count_doc)
+
+        self.assertIn("not as proof of precision", workflow)
+        self.assertIn("if the final topic-only strategy retrieved `<500` records", workflow)
+        self.assertIn("before/after counts were documented", workflow)
+
+        self.assertIn("final topic-only count below `<500`", recall_doc)
+        self.assertIn("strengthen the case for running the optional no-seed heuristic recall check", recall_doc)
+        self.assertIn("never requires automatic expansion", recall_doc)
+
+        self.assertIn("low-count plausibility check", audit)
+        self.assertIn("final topic-only count `<500` triggered check", audit)
+        self.assertIn("expansion/retest decision", audit)
+        self.assertIn("final retest count", audit)
+
+        self.assertIn("treating low count as precision", anti_patterns)
+        self.assertIn("do not expand automatically just to exceed 500 records", anti_patterns)
+        self.assertIn("document before/after counts", anti_patterns)
 
 
 if __name__ == "__main__":

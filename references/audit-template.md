@@ -36,6 +36,7 @@
 | Text-word/proximity/wildcard choice | [terms or expressions considered] | [MeSH entry terms, seeds, samples, counts, warnings] | [decision] | [recall/noise rationale] | [title/abstract expansion log] |
 | Bramer reciprocal gap analysis | [performed / waived / not applicable / not performed per concept] | [MeSH/SCR NOT text-word count; text-word NOT MeSH/SCR count; sample JSON if inspected] | [terms accepted/rejected, or waiver] | [term-discovery rationale or waiver reason] | [MeSH descriptors considered / title-abstract expansion log] |
 | Filter/limit/variant choice | [main, focused, precision, filter, reserve] | [counts, seeds, labelled samples if available, QA] | [chosen main design] | [sensitivity/workload rationale] | [final strategy / PubMed CLI checks] |
+| Low-count plausibility check | [final topic-only count `<500` triggered check / not triggered] | [final topic-only count, block counts, query translation, final-qa, filter/limit comparison, seed/gold retrieval, no-seed recall offer status] | [expanded and retested / documented as plausible / not triggered] | [diagnosis and recall-risk note] | [PubMed CLI checks / reporting notes] |
 | Zero-hit and duplicate terms | [zero-hit terms from `phrases_not_found`; exact duplicates from `duplicate_term`] | [per-term PubMed counts, spelling/hyphenation variant checks, `final-qa`] | [duplicates removed; each genuinely zero-hit term removed+documented by default, or kept by user choice] | [default is remove+document zero-hit terms (they match no records); reason if kept] | [final strategy / title-abstract expansion log] |
 | QA or caveat | [warning, limitation, or unresolved check] | [query translation, final-qa, filter-check, sample inspection] | [resolved / documented / not performed] | [remaining risk] | [rationale / reporting notes] |
 
@@ -58,6 +59,8 @@ AND
 ```
 
 **Result count on [date searched]:** [count] records.
+
+**Low-count plausibility check (`<500` final topic-only records):** [triggered/not triggered]. Diagnosis: [expected rare/new/tightly scoped/protocol-limited topic, or avoidable narrowing from over-specific block, too many AND blocks, narrow workflow/action terms, missing variants, PubMed translation/parse issue, or restrictive filter/limit/hedge]. Expansion/retest decision: [expanded and retested with before/after counts / documented as plausible / not applicable].
 
 If a validated filter or focused variant was also tested:
 - **Topic-plus-filter count:** [count, or not applicable]
@@ -178,6 +181,7 @@ Use `not performed` if exploratory untagged ATM checks were not run.
 | Concept 1 - combined | [count] |
 | Concept 2 - combined | [count] |
 | Final combined topic-only strategy | [count] |
+| Low-count plausibility check (`<500` final topic-only records) | [triggered/not triggered; diagnosis, revision decision, and final retest count if revised] |
 | Topic-plus-filter or focused variant | [count or not applicable] |
 | Differential/noise sample | [count and sample result, or not performed] |
 
@@ -234,6 +238,7 @@ For every row based on `fetch`, `mine`, or `sample` record content, record the s
 - **Concept-gate and omitted-block choices.** [Dangerous optional blocks, user decisions, and screening-vs-search rationale.]
 - **Methodological filters or limits.** [None used, or validated source/version/interface/adaptation and recall risk.]
 - **Sensitivity vs precision.** [Chosen design, reserve/focused variants, count/workload evidence, seed impact if available.]
+- **Low-count plausibility.** [If final topic-only count was `<500`, diagnosis, expansion/retest decision, before/after counts if revised, and why the final count is acceptable.]
 - **QA.** `query_translation_drift`: [none/issues]; final query hygiene: [done/warnings]; `final-qa`: [none/issues]; `filter-check`: [none/not applicable/issues].
 
 ## PRESS 2015 element coverage

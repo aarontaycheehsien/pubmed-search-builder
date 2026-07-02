@@ -234,6 +234,8 @@ Test:
 12. labelled search design alternatives with `pubmed_tool.py variants` when sensitivity/precision or workload trade-offs matter
 13. relative recall against a benchmark relevant set with `pubmed_tool.py recall` when an objective sensitivity check beyond known-item seeds is warranted, passing the concept blocks via `--blocks-file` to find the bottleneck block. On a **no-seed build**, this is the optional heuristic check: offer it once (full banner), and if accepted build the benchmark by pilot query → `related` expansion → `recall`, then record the outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`. See `references/no-seed-recall-estimation.md`.
 
+If an accepted no-seed recall check shows overall heuristic recall below `70%`, any essential block below `60%`, or a clear bottleneck block with plausibly in-scope misses, revise that block or document why each miss is out of scope. Do not proceed to audit output until the revised query is retested.
+
 When seed PMIDs were provided, use `seed-pmid-validation.md` for known-item validation, missed-seed diagnosis, topic-only versus topic-plus-filter seed retrieval checks, and optional relative-recall estimation. Relative recall is relative to the benchmark, not absolute sensitivity; against a seed-expansion benchmark it is a heuristic.
 
 ## 7a. Record search design alternatives
@@ -276,10 +278,10 @@ Record:
 - seed or sample record evidence: seed-derived MeSH only when seed PMIDs were supplied; otherwise label any fetched-record MeSH as sample-record patterns. When the seed set was expanded with `related`, record the expansion provenance (link types used, per-link counts, caps, high-overlap candidate PMIDs) and keep related-set evidence labelled separately from user-confirmed seed-derived evidence
 - pre-MeSH brainstorm evidence: vocabulary families considered, domain-framing question and answer when asked, and accepted/rejected/deferred brainstorm terms
 - PubMed query translation observations: free-text exploratory queries, ATM mappings, parse warnings, and whether any mapping was added explicitly
-- PubMed count checks: MeSH-only, text-word-only, combined concept blocks, Bramer reciprocal gap counts/samples when performed, pairwise blocks when useful, final topic-only strategy, topic-plus-filter strategy, focused/reserve variants, and differential/noise samples when run
+- PubMed count checks: MeSH-only, text-word-only, combined concept blocks, Bramer reciprocal gap counts/samples when performed, pairwise blocks when useful, final topic-only strategy, topic-plus-filter strategy, focused/reserve variants, low-count plausibility hook when final topic-only count is `<500` (see `references/low-count-plausibility.md`), and differential/noise samples when run
 - title/abstract expansion decisions: MeSH-entry-derived terms, seed-derived terms, sample-record-derived terms, acronyms added or rejected, singular/plural forms, spelling and hyphenation variants, proximity expressions added or rejected, and wildcard stems added or rejected
 - sample inspection notes: number inspected, sampling method or sort, observed relevance/noise patterns, and whether records were formally labelled
-- relative-recall estimation: benchmark source (independent gold standard vs. seed-expansion heuristic), benchmark size, relative recall, per-block recall and bottleneck block, and `not performed` when no benchmark recall check was run; keep distinct from known-item seed validation
+- relative-recall estimation: benchmark source (independent gold standard vs. seed-expansion heuristic), benchmark size, relative recall, per-block recall and bottleneck block, missed-record inspection outcome, revision decision, final retest result, and `not performed` when no benchmark recall check was run; keep distinct from known-item seed validation
 - QA and reporting notes: final query hygiene, `query_translation_drift`, `final-qa`, `filter-check`, limits/restrictions, audit workbook path, and remaining caveats
 - run manifest: confirm `run_manifest.json` records each material command, output path, date, count, and superseded file, and report its saved path
 
@@ -300,13 +302,19 @@ Guardrails:
 Revise when:
 
 - a seed PMID is missed
+- an in-scope gold-standard PMID is missed
+- late-arriving gold-standard PMIDs are supplied after validation; reopen validation/revision and classify each one before final handoff
+- a no-seed heuristic recall check shows overall recall below `70%`, any essential block below `60%`, or a bottleneck block with plausibly in-scope misses
 - a term retrieves mostly unrelated concepts
 - a MeSH heading is too broad or too narrow
 - a concept block is over-constrained
+- the final topic-only strategy retrieves `<500` records and low-count diagnosis suggests avoidable narrowing or a bottleneck block
 - a phrase is too exact
 - a wildcard stem is too short or too noisy
 - a recent record lacks MeSH indexing and needs text-word coverage
 - an in-scope seed PMID is lost after adding a methodological filter
+
+When a recall check identifies a bottleneck block, revise that block or document why each miss is out of scope. Do not proceed to audit output until the revised query is retested. If a missed seed or gold-standard PMID appears out of scope, document the scope reason and keep it out of the strategy rather than overfitting the query.
 
 ## 9. Final query hygiene
 
@@ -317,9 +325,10 @@ Before presenting the final draft:
 1. Save the final topic-only strategy, and topic-plus-filter strategy if applicable, as UTF-8 query files.
 2. Deduplicate exact repeated terms inside `OR` blocks while retaining intentional spelling, plural, hyphenation, field-tag, and proximity variants. `hooks_tool.py final-qa` reports exact duplicates as `duplicate_term`; removing them is recall-neutral and also clears repeated `not found in PubMed` notices caused by a duplicated zero-hit term.
 3. Run `pubmed_tool.py search --query-file ... --retmax 0`.
+3a. If the final **topic-only** strategy retrieves `<500` records, read `references/low-count-plausibility.md` and run `hooks_tool.py low-count-review` before handoff. Diagnose whether the count is expected or caused by avoidable narrowing. Do not expand automatically just to exceed 500 records. Record the hook output in the manifest and include `manifest_tool.py show --require-low-count-review` in the final handoff check.
 4. Review PubMed parse/translation warnings, especially `phrases_not_found` (zero-hit terms), `fields_not_found` (unrecognized field tags), `quotedphrasesnotfound`, `phrasesignored`, output messages, and other `query_translation_drift` issues.
 5. Remove, replace, or justify dead quoted phrases and other warnings, then rerun until warnings are resolved or documented.
-5a. For each zero-hit term reported by `phrases_not_found`, first check spelling, hyphenation, and spacing variants in case it is a typo for a real term rather than genuinely absent; fix typos instead of removing them. For genuinely zero-hit terms, the default is to **remove and document** them as removed zero-hit terms, because they match no records and removal is recall-neutral in the current index; offer the user the option to keep any as an intentional zero-hit term for future-proofing, and promote this stage to a full banner with `User decision needed` while the choice is open. Record each removed and each kept zero-hit term, with reasons, in the audit decision ledger and PRISMA-S notes.
+5a. For each zero-hit term reported by `phrases_not_found` or `quotedphrasesnotfound`, first check spelling, hyphenation, and spacing variants in case it is a typo for a real term rather than genuinely absent; fix typos instead of removing them. For genuinely zero-hit terms, the default is to **remove and document** them as removed zero-hit terms, because they match no records and removal is recall-neutral in the current index; offer the user the option to keep any **free-text** zero-hit term as an intentional zero-hit term for future-proofing, and promote this stage to a full banner with `User decision needed` while the choice is open. A zero-hit term carrying a controlled-vocabulary field tag (`[Mesh]`, `[Mesh:noexp]`, `[Majr]`, `[Supplementary Concept]`, or the `[mh]`/`[majr]` equivalents) is **never** a valid future-proofing keep — a real MeSH descriptor always exists in the index, so a zero-hit controlled-vocabulary term indicates a misspelled or nonexistent heading: fix the typo or remove it, and never retain it as an intentional zero-hit term. Record each removed and each kept zero-hit term, with reasons, in the audit decision ledger and PRISMA-S notes.
 6. If variants were tested, rerun the selected final variant after hygiene so the reported count matches the delivered strategy.
 7. Run `hooks_tool.py final-qa --strategy-file ...` after the final query text stabilizes.
 8. Treat `singular_plural_wildcard_review` findings as documentation warnings: test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit singular/plural forms were retained, then record the morphology-review decision in the audit.
@@ -331,9 +340,10 @@ This is a required closing gate for every completed strategy build. Do not silen
 
 - **Errors to fix:** unbalanced parentheses/quotes, truncation inside a proximity expression, and `fields_not_found` (an unrecognized field tag). These break or mis-scope the search and must be fixed.
 - **Duplicate terms (`duplicate_term`):** remove by default. An exact repeated atom is logically redundant (`(A OR A)` is identical to `(A)`), so removal is recall-neutral and nobody benefits from keeping a literal duplicate; it also clears repeated `not found in PubMed` notices from a duplicated zero-hit term. Surface it in the report rather than stripping silently for two reasons: you must drop the *redundant-context* copy (e.g. the one nested inside a narrower `MeSH AND (...)` sub-clause) and never the broad standalone copy, which would narrow retrieval; and the duplication usually signals a wider redundancy worth reviewing.
-- **Zero-hit terms (`phrases_not_found`):** **remove + document** by default, because they match no records and removal is recall-neutral; offer the user the option to keep any as an intentional zero-hit term. Check spelling/hyphenation/spacing variants first and fix typos rather than removing them (see step 5a).
+- **Zero-hit terms (`phrases_not_found` / `quotedphrasesnotfound`):** **remove + document** by default, because they match no records and removal is recall-neutral; offer the user the option to keep any as an intentional zero-hit term **(free-text terms only — a zero-hit `[Mesh]`/`[Majr]`/`[Mesh:noexp]`/`[Supplementary Concept]` term is a misspelled or nonexistent heading, so fix or remove it, never keep it)**. Check spelling/hyphenation/spacing variants first and fix typos rather than removing them (see step 5a).
 - **Singular/plural wildcard review (`singular_plural_wildcard_review`):** test the phrase-final, phrase-anchored/concept-specific wildcard candidate or document why explicit quoted `[tiab]` singular/plural phrase variants are safer. This is a morphology-review warning, not an automatic replacement instruction.
 - **Recall-reducing warnings:** `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, and short wildcards. Flag each and either justify it against the protocol or remove it with the user. Diagnostic Bramer reciprocal gap queries may use `NOT` during block testing only when documented under `bramer-reciprocal-gap-analysis.md`; final-strategy `NOT` still requires separate protocol justification.
+- **Low-count plausibility check:** when the final topic-only count is `<500`, follow `references/low-count-plausibility.md`: report the count, diagnostics, relaxed variant test or reason not applicable, final decision, and final count after revision if revised. Treat the count as a recall warning, not as proof of precision and not as an automatic expansion target.
 
 Then ask once whether to apply the offered cleanups. Apply only the approved changes, re-save the query file, and re-run `search --query-file ... --retmax 0` to confirm the delivered count matches what you report. Promote this stage to a full banner with `User decision needed` whenever the report contains anything in an offer-only category.
 
@@ -346,7 +356,8 @@ Do not use hygiene to silently narrow a recall-first strategy.
 Stop when:
 
 - the concept gate is completed for completed strategy builds; use `not performed` or `not applicable` only for incomplete, abandoned, or non-build reporting contexts
-- in-scope seed PMIDs are retrieved, or misses are explained
+- in-scope seed PMIDs and gold-standard PMIDs are retrieved; a final strategy cannot be handed off with missed in-scope seeds or gold-standard PMIDs
+- any missed supplied PMID is classified as either missed because the query failed or not retrieved because the PMID appears out of scope, with the evidence and revision decision documented
 - essential concepts have MeSH and text-word coverage after an aggressive MeSH sweep
 - accepted and rejected plausible MeSH descriptors/supplementary concepts are documented
 - important variants have been considered
@@ -354,11 +365,13 @@ Stop when:
 - any methodological filter has been chosen from a validated source where available
 - the topic-only and topic-plus-filter versions have been compared when a filter is used
 - final query hygiene has removed exact duplicates and dead PubMed phrases, or remaining warnings are documented, and the required final validation and cleanup offer has been presented with the user's include/exclude/remove decisions applied or recorded
+- if the final topic-only strategy retrieved `<500` records, the low-count plausibility hook was run and recorded; any needed expansion was retested and before/after counts were documented
 - further expansion mainly adds unrelated noise
 - if a final strategy was generated or presented before audit output, the complete Markdown audit file was generated for a completed build or explicitly offered when the user paused before audit output
 - audit Markdown file with decision ledger has been saved and its path is reported
 - the run manifest (`run_manifest.json`) has been saved and its path is reported, and `manifest_tool.py show --validate --check-files --require-ready` passes (concept gate resolved, no user question pending)
 - per-block evidence coverage has been checked (`state coverage` / `show --require-coverage`): every essential block has a MeSH sweep and a block count recorded against it, or a reasoned waiver; any `coverage gap` is resolved or documented
 - on a no-seed build, the optional heuristic recall check was offered and its outcome recorded (`state resolve-recall-offer <done|declined|not-applicable>`; `show --require-recall-offer` passes); see `references/no-seed-recall-estimation.md`
+- any accepted no-seed heuristic recall check that crossed the low-recall gate was followed by missed-record inspection, block revision or out-of-scope documentation, and retesting
 - caveats are documented
 - the strategy is flagged as a draft pending human peer review (PRESS, McGowan et al., 2016)
