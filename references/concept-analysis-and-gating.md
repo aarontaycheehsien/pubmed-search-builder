@@ -31,6 +31,7 @@ Use these fields:
 - `seed_evidence`: seed-derived title/abstract term, seed MeSH, seed keyword, seed publication type, in-scope seed retrieval concern, or `not available - no seed PMIDs supplied`
 - `pre_gate_no_seed_evidence`: protocol/question wording, shallow framework parsing, pre-MeSH vocabulary/domain brainstorm needed for the gate, or `not applicable - seed evidence used`
 - `post_gate_validation_evidence`: MeSH sweep, PubMed ATM/query translation, sample-record pattern, concept-block count, final QA, filter check, or `not performed`
+- `scope_breadth_check`: for methodological or automation topics, whether the target is a narrow action or a broader workflow, with the reason
 - `recall_risk`: why the concept could miss records if required, or `low` for truly essential concepts
 - `and_block_admission`: pass, fail, deferred, or not applicable, with the specific reason
 - `decision_needed`: whether user/protocol input is required before proceeding
@@ -54,7 +55,8 @@ A candidate becomes an essential `AND` block only if all acceptance checks pass:
 4. It is not merely an outcome, comparator, narrow setting, subgroup, mechanism, severity marker, service-use qualifier, or study-design preference.
 5. It cannot be handled more safely inside an existing `OR` block, at screening, as a focused/reserve variant, or as a validated methodological filter.
 6. No high-impact framework-slot ambiguity remains unresolved.
-7. If seed PMIDs were supplied, seed evidence does not suggest likely retrieval loss from inconsistent wording, indexing, publication type, or missing abstracts.
+7. For methodological or automation topics, the scope breadth check does not show that a broader workflow concept is plausibly in scope.
+8. If seed PMIDs were supplied, seed evidence does not suggest likely retrieval loss from inconsistent wording, indexing, publication type, or missing abstracts.
 
 Default if uncertain: do not admit the candidate as a main `AND` block. Classify it as screening-only, omitted, deferred, reserve/focused-variant-only, or a filter decision, then record the recall risk.
 
@@ -70,9 +72,10 @@ Before MeSH lookup or PubMed exploration:
 
 1. Choose the review framework and extract candidate concepts from the plain-language question.
 2. Run the PICO-slot ambiguity check below.
-3. Apply the AND-block admission test to each candidate concept.
-4. Mark each candidate as a core required concept, within-block term family, screening-only concept, omitted concept, reserve/focused-variant candidate, or filter/limit decision.
-5. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
+3. Run the scope breadth check below for methodological or automation topics.
+4. Apply the AND-block admission test to each candidate concept.
+5. Mark each candidate as a core required concept, within-block term family, screening-only concept, omitted concept, reserve/focused-variant candidate, or filter/limit decision.
+6. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
 
 This phase may use the user question, protocol wording, and limited seed fetch/mining when seed PMIDs were supplied. It must not run MeSH lookup, broad PubMed exploration, block construction, block testing, variants, final QA, or filter checks.
 
@@ -99,6 +102,7 @@ Before MeSH lookup, record a compact pre-MeSH gate summary containing:
 - chosen framework, question type, and rationale
 - whether a framework question was needed, and why or why not
 - candidate concepts with framework slots and ambiguity grades
+- scope breadth check for methodological or automation topics, including whether the main workflow concept is narrow or broad
 - concepts admitted as core required search concepts
 - concepts kept inside existing `OR` blocks as term families
 - screening-only, omitted, deferred, reserve, or focused-variant concepts with recall-risk reasons
@@ -121,6 +125,22 @@ Common high-impact ambiguities to check:
 - Could what was classified as Population actually be a Condition that should anchor the search? Example: "adults with depression" - the search anchor is usually depression, with adults handled at screening unless the demographic is itself central to scope.
 
 If any ambiguity is graded `high` and would change which concept enters the gate as an essential `AND` block, pause and ask the user before proceeding to MeSH lookup or block drafting. Do not silently commit to one interpretation. See `anti-patterns.md` Mistake 7 for the underlying failure mode.
+
+## Scope breadth check for methodological and automation topics
+
+Before role assignment for methodological or automation topics, ask: **Could this topic be represented as a broader workflow than the exact wording in the user question?**
+
+Record whether the topic is:
+
+- a narrow action, such as Boolean search-strategy formulation, query generation, or query translation
+- a broader workflow, such as literature/database searching, screening, study selection, data extraction, synthesis, or evidence-synthesis conduct
+- ambiguous, with a focused narrow variant and a broader recall-first main strategy both plausible
+
+If the user says "recall first" and no seed PMIDs are available, default to the broader workflow concept unless the protocol explicitly narrows the review to the narrow action. Treat the narrow action language as a focused variant or within-block term family, not as the only main strategy, when broader workflow language is plausibly in scope.
+
+For LLM/AI evidence-synthesis topics, explicitly consider whether each of these workflow areas is in scope before fixing the essential block: search strategy/query generation, literature/database searching, title/abstract screening, full-text screening, study selection, data extraction, risk of bias, synthesis, and review drafting.
+
+If the scope is ambiguous and would change an essential `AND` block, pause and ask the user unless the user has already chosen recall-first with no seeds. In that no-seed recall-first case, continue with the broader workflow as the main strategy and document any narrower formulation/search-strategy-only query as a focused or reserve variant.
 
 ## Concept roles
 
@@ -192,10 +212,11 @@ If the user says there are no seed PMIDs or asks to proceed without seeds:
 2. Run the formal concept analysis and concept gate before MeSH/PubMed exploration.
 3. In the ledger, mark seed evidence as `not available - no seed PMIDs supplied`.
 4. Use pre-gate no-seed evidence only from protocol/question wording, shallow framework parsing, and pre-MeSH vocabulary/domain brainstorm needed for the gate.
-5. After the gate resolves, record post-gate validation/audit evidence from MeSH sweeps, PubMed ATM/query translations, sample-record patterns, concept-block counts, objective term ranking from a high-precision pilot relevant-set query (`term-rank --relevant-query-file`), final QA, and filter checks where those steps were actually performed.
-5a. Objective term discovery is available even without seeds. After the gate, build a small, deliberately high-precision pilot relevant-set query and feed it to `pubmed_tool.py term-rank --relevant-query-file` to rank candidate `[tiab]`/MeSH terms by coverage and lift instead of eyeballing them. Label results as pilot-relevant-set evidence, distinct from seed-derived evidence; treat them as term-discovery candidates, not validated recall, and do not overfit the strategy to pilot-query language. See `tiab-expansion.md` and `mesh-and-pubmed-tools.md`.
-6. Do not report true seed-derived MeSH, seed-derived title/abstract terminology, known-item recall, or seed validation results.
-7. State that validation is limited to MeSH checks, PubMed block testing, sample inspection, final query hygiene, `final-qa`, and `filter-check` where relevant. Objective term ranking against a pilot relevant set is available as term-discovery support, not recall validation; do not present it as known-item recall.
+5. For methodological or automation topics where recall-first is requested and the protocol does not explicitly narrow the scope, apply the scope breadth check and default the main workflow block to the broader workflow rather than only the exact narrow action wording.
+6. After the gate resolves, record post-gate validation/audit evidence from MeSH sweeps, PubMed ATM/query translations, sample-record patterns, concept-block counts, objective term ranking from a high-precision pilot relevant-set query (`term-rank --relevant-query-file`), final QA, and filter checks where those steps were actually performed.
+6a. Objective term discovery is available even without seeds. After the gate, build a small, deliberately high-precision pilot relevant-set query and feed it to `pubmed_tool.py term-rank --relevant-query-file` to rank candidate `[tiab]`/MeSH terms by coverage and lift instead of eyeballing them. Label results as pilot-relevant-set evidence, distinct from seed-derived evidence; treat them as term-discovery candidates, not validated recall, and do not overfit the strategy to pilot-query language. See `tiab-expansion.md` and `mesh-and-pubmed-tools.md`.
+7. Do not report true seed-derived MeSH, seed-derived title/abstract terminology, known-item recall, or seed validation results.
+8. State that validation is limited to MeSH checks, PubMed block testing, sample inspection, final query hygiene, `final-qa`, and `filter-check` where relevant. Objective term ranking against a pilot relevant set is available as term-discovery support, not recall validation; do not present it as known-item recall.
 
 Sample-record MeSH patterns are not seed-derived evidence. Label them as sample-record patterns.
 

@@ -194,6 +194,15 @@ RELATIVE_RECALL_NOTE = (
     "PMID that is not in PubMed is indistinguishable from a genuine miss. Do not use a recall "
     "number to silently narrow a recall-first strategy."
 )
+TERM_DIFF_NOTE = (
+    "Controlled-vocabulary vs free-text differential (Bramer et al. 2018, doi:10.5195/jmla.2018.283), "
+    "a term-discovery aid, not validated recall. Read mesh_only records (indexed under the MeSH "
+    "layer but missed by the [tiab] layer) to harvest free-text phrasings/synonyms to ADD to the "
+    "[tiab] layer; read tiab_only records (caught by free text but not the MeSH layer) for missing "
+    "MeSH descriptors and indexing gaps/recent unindexed records. Inspect the saved records before "
+    "deciding (No reviewed JSON, no decision). Classify harvested terms by concept role like any "
+    "other candidate; never auto-add. Recall-only: use this to ADD coverage, never to remove terms."
+)
 NO_LABELLED_SAMPLE_NOTE = "not estimable; no labelled sample supplied"
 ZERO_RELEVANT_SAMPLE_NOTE = "undefined/infinite; zero relevant labelled records"
 TRUE_RELEVANCE_VALUES = {"1", "true", "yes", "y", "relevant", "include", "included"}
@@ -410,6 +419,22 @@ def resolve_query(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     resolved = normalize_query(text)
     if not resolved:
         parser.error("Query is empty.")
+    return resolved
+
+
+def resolve_named_query(inline: str | None, file_arg: str | None, label: str, parser: argparse.ArgumentParser) -> str:
+    """Resolve a named query from an inline string or a file (UTF-8, '-' for stdin); exactly one required."""
+    if inline is not None and file_arg is not None:
+        parser.error(f"Use only one of --{label}-query or --{label}-query-file.")
+    if file_arg is not None:
+        text = read_text_source(file_arg)
+    elif inline is not None:
+        text = sys.stdin.read() if inline == "-" else inline
+    else:
+        parser.error(f"Provide --{label}-query or --{label}-query-file.")
+    resolved = normalize_query(text)
+    if not resolved:
+        parser.error(f"The {label} query is empty.")
     return resolved
 
 
@@ -1378,6 +1403,61 @@ def sample(client: NcbiClient, query: str, retmax: int, sort: str | None) -> dic
         "operation": "sample",
         "search": search_result,
         "records": fetch_result.get("records", []),
+        "request_info": client.metadata(),
+    }
+
+
+def term_diff(client: NcbiClient, mesh_query: str, tiab_query: str, retmax: int, sort: str | None) -> dict[str, object]:
+    """Controlled-vocabulary vs free-text differential for one concept block (Bramer optimization).
+
+    Computes `(MeSH) NOT (tiab)` and `(tiab) NOT (MeSH)` with counts and a fetched sample of each, so
+    the searcher can read the differential records to discover missed [tiab] terms and missing MeSH.
+    Inputs are the two halves of the SAME concept block."""
+    mesh_not_tiab = f"({mesh_query}) NOT ({tiab_query})"
+    tiab_not_mesh = f"({tiab_query}) NOT ({mesh_query})"
+    mesh_search = esearch(client, mesh_query, retmax=0, retstart=0, sort=None)
+    tiab_search = esearch(client, tiab_query, retmax=0, retstart=0, sort=None)
+    mesh_only_search = esearch(client, mesh_not_tiab, retmax=retmax, retstart=0, sort=sort)
+    tiab_only_search = esearch(client, tiab_not_mesh, retmax=retmax, retstart=0, sort=sort)
+    mesh_only_pmids = list(mesh_only_search.get("pmids", []))
+    tiab_only_pmids = list(tiab_only_search.get("pmids", []))
+    mesh_only_fetch = efetch(client, mesh_only_pmids) if mesh_only_pmids else {"records": []}
+    tiab_only_fetch = efetch(client, tiab_only_pmids) if tiab_only_pmids else {"records": []}
+    mesh_count = int(mesh_search.get("count", 0) or 0)
+    tiab_count = int(tiab_search.get("count", 0) or 0)
+    mesh_only_count = int(mesh_only_search.get("count", 0) or 0)
+    tiab_only_count = int(tiab_only_search.get("count", 0) or 0)
+    return {
+        "operation": "term-diff",
+        "queries": {
+            "mesh": mesh_query,
+            "tiab": tiab_query,
+            "mesh_not_tiab": mesh_not_tiab,
+            "tiab_not_mesh": tiab_not_mesh,
+        },
+        "counts": {
+            "mesh": mesh_count,
+            "tiab": tiab_count,
+            "overlap": mesh_count - mesh_only_count,
+            "combined": mesh_count + tiab_only_count,
+            "mesh_only": mesh_only_count,
+            "tiab_only": tiab_only_count,
+        },
+        "mesh_only_sample": {
+            "count": mesh_only_count,
+            "pmids": mesh_only_pmids,
+            "records": mesh_only_fetch.get("records", []),
+        },
+        "tiab_only_sample": {
+            "count": tiab_only_count,
+            "pmids": tiab_only_pmids,
+            "records": tiab_only_fetch.get("records", []),
+        },
+        "query_translation_hooks": {
+            "mesh_not_tiab": mesh_only_search.get("query_translation_hook", {}),
+            "tiab_not_mesh": tiab_only_search.get("query_translation_hook", {}),
+        },
+        "note": TERM_DIFF_NOTE,
         "request_info": client.metadata(),
     }
 
@@ -3553,6 +3633,18 @@ def emit_record_content_receipt(command: str, result: dict[str, object], args: a
             }
         )
         receipt["ok"] = bool(precmd_ok and qa["error_count"] == 0)
+    elif command == "term-diff":
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        mesh_only = result.get("mesh_only_sample") if isinstance(result.get("mesh_only_sample"), dict) else {}
+        tiab_only = result.get("tiab_only_sample") if isinstance(result.get("tiab_only_sample"), dict) else {}
+        receipt.update(
+            {
+                "counts": counts,
+                "mesh_only_records_saved": len(mesh_only.get("records") or []),
+                "tiab_only_records_saved": len(tiab_only.get("records") or []),
+            }
+        )
+        receipt["ok"] = bool(precmd_ok)
     else:
         raise ValueError(f"{command} is not a record-content command.")
 
@@ -3820,6 +3912,19 @@ def build_parser() -> argparse.ArgumentParser:
     sample_parser.add_argument("--sort", choices=["pub_date", "Author", "JournalName", "relevance"], default=None)
     add_record_output_arguments(sample_parser)
 
+    term_diff_parser = subparsers.add_parser(
+        "term-diff",
+        help="Bramer reciprocal gap analysis for one concept block: run (MeSH) NOT (tiab) and (tiab) NOT (MeSH) "
+        "to surface [tiab] terms missed by the MeSH layer and MeSH/indexing gaps missed by free text.",
+    )
+    term_diff_parser.add_argument("--mesh-query", help="The block's controlled-vocabulary (MeSH) sub-query.")
+    term_diff_parser.add_argument("--mesh-query-file", help="UTF-8 file with the MeSH sub-query. Use '-' for stdin.")
+    term_diff_parser.add_argument("--tiab-query", help="The block's free-text ([tiab]) sub-query.")
+    term_diff_parser.add_argument("--tiab-query-file", help="UTF-8 file with the [tiab] sub-query. Use '-' for stdin.")
+    term_diff_parser.add_argument("--retmax", type=int, default=15, help="Records fetched per differential side for inspection (default: %(default)s).")
+    term_diff_parser.add_argument("--sort", choices=["pub_date", "Author", "JournalName", "relevance"], default=None)
+    add_record_output_arguments(term_diff_parser)
+
     validate_parser = subparsers.add_parser("validate", help="Check whether a query retrieves supplied seed PMIDs.")
     add_query_input_arguments(validate_parser)
     validate_parser.add_argument("--pmids", nargs="+", required=True)
@@ -4077,6 +4182,17 @@ def main(argv: list[str] | None = None) -> int:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = sample(client, query, args.retmax, args.sort)
+            emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
+        elif args.command == "term-diff":
+            mesh_query = resolve_named_query(args.mesh_query, args.mesh_query_file, "mesh", parser)
+            tiab_query = resolve_named_query(args.tiab_query, args.tiab_query_file, "tiab", parser)
+            preflight = pre_command_hook(
+                client, args, queries=[{"label": "mesh", "query": mesh_query}, {"label": "tiab", "query": tiab_query}]
+            )
+            if not preflight["ok"]:
+                write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 2
+            result = term_diff(client, mesh_query, tiab_query, max(1, args.retmax), args.sort)
             emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
         elif args.command == "validate":
             query = resolve_query(args, parser)

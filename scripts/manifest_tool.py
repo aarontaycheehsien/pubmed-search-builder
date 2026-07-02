@@ -143,6 +143,25 @@ UNRESOLVED_GATE_VALUES = {"", "pending"}
 BLOCK_REQUIREMENTS = ("mesh_sweep", "block_count")
 MESH_SWEEP_COMMAND_RE = re.compile(r"mesh_tool\.py[\"']?\s+sweep\b", re.IGNORECASE)
 
+# Bramer reciprocal gap analysis is a *conditional* per-block check (run when it aids term discovery;
+# waive otherwise). It is tracked separately from the mandatory BLOCK_REQUIREMENTS and gated by its own
+# opt-in flag `show --require-gap-analysis`, never folded into `--require-coverage`. Evidence is a
+# `term-diff` run, a manual reciprocal gap query, or a reasoned waiver. See
+# `references/bramer-reciprocal-gap-analysis.md`.
+GAP_REQUIREMENT = "bramer_gap"
+GAP_BLOCK_REQUIREMENTS = (GAP_REQUIREMENT,)
+WAIVABLE_REQUIREMENTS = BLOCK_REQUIREMENTS + GAP_BLOCK_REQUIREMENTS
+BRAMER_GAP_COMMAND_RE = re.compile(r"term-diff\b|bramer[_\-\s]?gap|_not_|\bNOT\s*\(", re.IGNORECASE)
+
+# Low-count plausibility is a generic final-handoff check: when the final topic-only strategy
+# count is below the threshold, require a recorded hooks_tool.py low-count-review artifact.
+# See references/low-count-plausibility.md.
+LOW_COUNT_THRESHOLD = 500
+LOW_COUNT_HOOK_COMMAND_RE = re.compile(
+    r"(?:^|\s)(?:python(?:\.\w+)?\s+)?(?:\"[^\"]*hooks_tool\.py\"|'[^']*hooks_tool\.py'|\S*hooks_tool\.py)\s+low-count-review\b",
+    re.IGNORECASE,
+)
+
 # No-seed heuristic recall offer (opt-in via `state resolve-recall-offer` + `show --require-recall-offer`).
 # On a no-seed build the optional heuristic recall check must be offered once at the Validation stage;
 # this records whether the user was given the choice. `pending` means not yet offered/resolved. See
@@ -512,17 +531,21 @@ def requirement_satisfied(requirement: str, entries: list[object], block_key: st
         elif requirement == "block_count":
             if kind in ("search", "batch"):
                 return True
+        elif requirement == GAP_REQUIREMENT:
+            if BRAMER_GAP_COMMAND_RE.search(command):
+                return True
     return False
 
 
 def derive_block_coverage(
-    state: dict[str, object], entries: list[object]
+    state: dict[str, object], entries: list[object], requirements: tuple[str, ...] = BLOCK_REQUIREMENTS
 ) -> dict[str, dict[str, dict[str, str]]]:
     """Compute per-block requirement status from registered blocks + recorded entries.
 
     Status per requirement is ``waived`` (an explicit reason was recorded), ``satisfied``
     (matching evidence exists), or ``pending`` (neither). Derived fresh each call so it never
-    drifts from the actual manifest entries.
+    drifts from the actual manifest entries. ``requirements`` defaults to the mandatory
+    BLOCK_REQUIREMENTS; pass GAP_BLOCK_REQUIREMENTS for the conditional Bramer gap-analysis view.
     """
     blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
     coverage: dict[str, dict[str, dict[str, str]]] = {}
@@ -531,7 +554,7 @@ def derive_block_coverage(
         spec = spec if isinstance(spec, dict) else {}
         waivers = spec.get("waivers") if isinstance(spec.get("waivers"), dict) else {}
         reqs: dict[str, dict[str, str]] = {}
-        for requirement in BLOCK_REQUIREMENTS:
+        for requirement in requirements:
             waiver_reason = str(waivers.get(requirement, "")).strip()
             if waiver_reason:
                 reqs[requirement] = {"status": "waived", "reason": waiver_reason}
@@ -559,6 +582,120 @@ def block_coverage_readiness(state: dict[str, object], entries: list[object]) ->
             if info["status"] == "pending":
                 issues.append(f"block {label!r} missing evidence: {requirement}")
     return issues
+
+
+def gap_coverage_readiness(state: dict[str, object], entries: list[object]) -> list[str]:
+    """Return reasons the conditional Bramer reciprocal gap analysis is unresolved; empty means every
+    registered block has a recorded gap analysis (`term-diff`/manual gap query) or a reasoned waiver.
+    Opt-in via `show --require-gap-analysis`; never part of `--require-coverage`."""
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    if not blocks:
+        return [
+            "no essential blocks registered for gap analysis; run "
+            "`manifest_tool.py state register-blocks --blocks-file <blocks.json>`"
+        ]
+    issues: list[str] = []
+    for label, reqs in derive_block_coverage(state, entries, requirements=GAP_BLOCK_REQUIREMENTS).items():
+        if reqs.get(GAP_REQUIREMENT, {}).get("status") == "pending":
+            issues.append(
+                f"block {label!r} missing Bramer reciprocal gap analysis (run `pubmed_tool.py term-diff` "
+                "tagged to the block, or record a reasoned waiver)"
+            )
+    return issues
+
+
+def looks_like_final_topic_search(entry: dict[str, object]) -> bool:
+    """Heuristic for the final topic-only strategy count entry.
+
+    The manifest is append-only and intentionally flexible, so this cannot rely on one exact label.
+    Prefer labels/notes/commands that say final selected strategy/topic-only while excluding concept
+    block, pairwise, pilot, and layer counts.
+    """
+    if entry.get("kind") != "search" or not isinstance(entry.get("count"), int):
+        return False
+    if str(entry.get("block") or "").strip():
+        return False
+    label_note = " ".join(str(entry.get(key) or "") for key in ("label", "note")).casefold()
+    haystack = " ".join(
+        str(entry.get(key) or "")
+        for key in ("label", "note", "command", "output_path")
+    ).casefold()
+    if "final" not in haystack:
+        return False
+    if not any(token in haystack for token in ("strategy", "topic-only", "topic only", "selected")):
+        return False
+    excluded = (" block", "pairwise", "pilot", " layer", "mesh", "title/abstract")
+    return not any(token in label_note for token in excluded)
+
+
+def latest_final_topic_count(entries: list[object]) -> int | None:
+    candidates = [entry for entry in entries if isinstance(entry, dict) and looks_like_final_topic_search(entry)]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda entry: int(entry.get("seq") or 0))
+    count = candidates[-1].get("count")
+    return count if isinstance(count, int) else None
+
+
+def read_manifest_output_json(manifest_path: Path, output_path: object) -> dict[str, object] | None:
+    if not output_path:
+        return None
+    path = Path(str(output_path))
+    if not path.is_absolute():
+        path = manifest_path.parent / path
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def low_count_review_entries(entries: list[object]) -> list[dict[str, object]]:
+    found: list[dict[str, object]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("kind") != "qa":
+            continue
+        command = str(entry.get("command") or "")
+        label = str(entry.get("label") or "").casefold()
+        if LOW_COUNT_HOOK_COMMAND_RE.search(command) or "low-count" in label or "low count" in label:
+            found.append(entry)
+    found.sort(key=lambda entry: int(entry.get("seq") or 0), reverse=True)
+    return found
+
+
+def low_count_review_readiness(data: dict[str, object], manifest_path: Path, threshold: int = LOW_COUNT_THRESHOLD) -> list[str]:
+    entries = data.get("entries", [])
+    final_count = latest_final_topic_count(entries)
+    if final_count is None:
+        return [
+            "low-count review: no final topic-only strategy count found; record the final PubMed "
+            "search count with a label containing 'final' and 'strategy' or 'topic-only'"
+        ]
+    if final_count >= threshold:
+        return []
+
+    review_entries = low_count_review_entries(entries)
+    if not review_entries:
+        return [
+            f"low-count review: final topic-only count is {final_count} (<{threshold}); run "
+            "`hooks_tool.py low-count-review`, record the QA output in the manifest, and rerun this gate"
+        ]
+
+    for entry in review_entries:
+        payload = read_manifest_output_json(manifest_path, entry.get("output_path"))
+        if not payload:
+            continue
+        if payload.get("hook") != "low_count_plausibility_review":
+            continue
+        if payload.get("final_count") != final_count:
+            continue
+        if payload.get("status") == "pass" and payload.get("ok") is True:
+            return []
+
+    return [
+        f"low-count review: final topic-only count is {final_count} (<{threshold}), but no recorded "
+        "low-count-review QA artifact has status='pass' for that final count"
+    ]
 
 
 def load_block_labels(path_str: str) -> list[str]:
@@ -616,6 +753,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
         elif action == "coverage":
             entries = data.get("entries", [])
             receipt["coverage"] = derive_block_coverage(state, entries)
+            receipt["gap_coverage"] = derive_block_coverage(state, entries, requirements=GAP_BLOCK_REQUIREMENTS)
             issues = block_coverage_readiness(state, entries)
             receipt["ok"] = not issues
             receipt["issues"] = issues
@@ -663,9 +801,9 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             if args.label not in blocks:
                 blocks[args.label] = {"waivers": {}}
         elif action == "waive-requirement":
-            if args.requirement not in BLOCK_REQUIREMENTS:
+            if args.requirement not in WAIVABLE_REQUIREMENTS:
                 raise ManifestError(
-                    f"Unknown requirement {args.requirement!r}. Choose from: {', '.join(BLOCK_REQUIREMENTS)}."
+                    f"Unknown requirement {args.requirement!r}. Choose from: {', '.join(WAIVABLE_REQUIREMENTS)}."
                 )
             reason = (args.reason or "").strip()
             if not reason:
@@ -763,7 +901,17 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
     require_ready = getattr(args, "require_ready", False)
     require_coverage = getattr(args, "require_coverage", False)
     require_recall_offer = getattr(args, "require_recall_offer", False)
-    if args.validate or args.check_files or require_ready or require_coverage or require_recall_offer:
+    require_gap_analysis = getattr(args, "require_gap_analysis", False)
+    require_low_count_review = getattr(args, "require_low_count_review", False)
+    if (
+        args.validate
+        or args.check_files
+        or require_ready
+        or require_coverage
+        or require_recall_offer
+        or require_gap_analysis
+        or require_low_count_review
+    ):
         issues = (
             validate_manifest(data, check_files=args.check_files, manifest_path=path)
             if (args.validate or args.check_files)
@@ -804,6 +952,20 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
                 )
             else:
                 issues.extend(f"not ready for handoff: {reason}" for reason in recall_offer_readiness(state))
+        if require_gap_analysis:
+            # Opt-in conditional gate: every registered block must have a recorded Bramer reciprocal
+            # gap analysis or a reasoned waiver. Separate from --require-coverage by design.
+            state = data.get("build_state")
+            if not isinstance(state, dict):
+                issues.append(
+                    "build_state not initialized: register essential blocks and run the Bramer gap "
+                    "analysis (`term-diff`) or record a waiver before the gap-analysis check"
+                )
+            else:
+                entries = data.get("entries", [])
+                issues.extend(f"gap-analysis gap: {reason}" for reason in gap_coverage_readiness(state, entries))
+        if require_low_count_review:
+            issues.extend(low_count_review_readiness(data, path))
         receipt["ok"] = not issues
         receipt["issues"] = issues
     return receipt
@@ -852,6 +1014,8 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
 
     state = data.get("build_state")
     block_coverage = derive_block_coverage(state, entries) if isinstance(state, dict) else {}
+    gap_coverage = derive_block_coverage(state, entries, requirements=GAP_BLOCK_REQUIREMENTS) if isinstance(state, dict) else {}
+    final_topic_count = latest_final_topic_count(entries)
 
     receipt = base_receipt("manifest-report", path, data)
     receipt.update(
@@ -862,6 +1026,9 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "open_decisions": open_decisions,
             "superseded": superseded,
             "block_coverage": block_coverage,
+            "gap_coverage": gap_coverage,
+            "final_topic_count": final_topic_count,
+            "low_count_review_required": final_topic_count is not None and final_topic_count < LOW_COUNT_THRESHOLD,
         }
     )
     reminders = build_state_reminders(state) if isinstance(state, dict) else []
@@ -926,6 +1093,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="No-seed gate (opt-in): also fail unless the optional heuristic recall check was offered and its outcome recorded (resolve-recall-offer). Pass only on no-seed builds.",
     )
+    show_parser.add_argument(
+        "--require-gap-analysis",
+        action="store_true",
+        help="Conditional gap-analysis gate (opt-in): also fail unless every registered block has a recorded Bramer reciprocal gap analysis (term-diff/manual gap query) or a reasoned waiver. Separate from --require-coverage.",
+    )
+    show_parser.add_argument(
+        "--require-low-count-review",
+        action="store_true",
+        help="Low-count gate (opt-in): if final topic-only count is below 500, also fail unless a passing hooks_tool.py low-count-review QA artifact is recorded.",
+    )
 
     report_parser = subparsers.add_parser("report", help="Read-only build dashboard from the manifest (no reruns).")
     report_parser.add_argument("--manifest", default="run_manifest.json", help="Manifest path (default: %(default)s).")
@@ -978,7 +1155,7 @@ def build_parser() -> argparse.ArgumentParser:
         "waive-requirement", "Waive one requirement for a registered block, with a mandatory reason."
     )
     waive.add_argument("label", help="Registered block label.")
-    waive.add_argument("requirement", help=f"Requirement to waive, one of: {', '.join(BLOCK_REQUIREMENTS)}.")
+    waive.add_argument("requirement", help=f"Requirement to waive, one of: {', '.join(WAIVABLE_REQUIREMENTS)}.")
     waive.add_argument("reason", help="Why this requirement does not apply (required, non-empty).")
 
     add_state_action("show", "Print the current build-state block (read-only).", mutating=False)

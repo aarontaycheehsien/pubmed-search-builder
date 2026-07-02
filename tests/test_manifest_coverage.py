@@ -199,6 +199,149 @@ class ManifestCoverageTests(unittest.TestCase):
         self.assertIn("block_coverage", receipt)
         self.assertEqual(receipt["block_coverage"]["malaria"]["mesh_sweep"]["status"], "satisfied")
 
+    def test_low_count_review_gate_passes_when_final_count_is_not_low(self):
+        self.add(
+            kind="search",
+            command="pubmed_tool.py search --query-file final_strategy.txt --retmax 0",
+            count="501",
+            label="Final selected PubMed strategy count",
+        )
+
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-low-count-review"])
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["ok"])
+
+    def test_low_count_review_gate_blocks_then_passes(self):
+        self.add(
+            kind="search",
+            command="pubmed_tool.py search --query-file final_strategy.txt --retmax 0",
+            count="39",
+            label="Final selected PubMed strategy count",
+        )
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-low-count-review"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("low-count review" in issue for issue in receipt["issues"]))
+
+        review = self.dir / "low_count_review.json"
+        review.write_text(
+            json.dumps(
+                {
+                    "hook": "low_count_plausibility_review",
+                    "status": "pass",
+                    "ok": True,
+                    "final_count": 39,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.add(
+            kind="qa",
+            command="python scripts/hooks_tool.py low-count-review --strategy-file final_strategy.txt --final-count 39 --output low_count_review.json",
+            output=str(review),
+            label="Low-count plausibility review",
+        )
+
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-low-count-review"])
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["ok"])
+
+
+class BramerGapCoverageTests(unittest.TestCase):
+    """Conditional Bramer reciprocal gap analysis: tracked per block, gated by the separate opt-in
+    `--require-gap-analysis`, never by `--require-coverage`."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.manifest = str(self.dir / "run_manifest.json")
+
+    def run_cli(self, args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = manifest_tool.main(args)
+        text = out.getvalue().strip()
+        return rc, (json.loads(text) if text else None)
+
+    def state(self, *args):
+        return self.run_cli(["state", *args, "--manifest", self.manifest])
+
+    def add(self, **kw):
+        args = ["add", "--manifest", self.manifest, "--kind", kw.pop("kind"), "--command", kw.pop("command", "cmd")]
+        for flag, value in kw.items():
+            args += [f"--{flag}", str(value)]
+        return self.run_cli(args)
+
+    def _gap(self, block, command, kind="sample"):
+        self.add(kind=kind, block=block, command=command)
+        data = json.loads(Path(self.manifest).read_text(encoding="utf-8"))
+        cov = manifest_tool.derive_block_coverage(
+            data["build_state"], data["entries"], requirements=manifest_tool.GAP_BLOCK_REQUIREMENTS
+        )
+        return cov[block]["bramer_gap"]["status"]
+
+    def test_term_diff_command_satisfies_gap(self):
+        self.state("register-block", "malaria")
+        status = self._gap("malaria", "python scripts/pubmed_tool.py term-diff --mesh-query-file m.txt --tiab-query-file t.txt --output d.json")
+        self.assertEqual(status, "satisfied")
+
+    def test_manual_gap_query_filename_satisfies_gap(self):
+        self.state("register-block", "malaria")
+        status = self._gap("malaria", "pubmed_tool.py sample --query-file concept_mesh_not_text.txt --output g.json")
+        self.assertEqual(status, "satisfied")
+
+    def test_inline_not_gap_query_satisfies_gap(self):
+        self.state("register-block", "malaria")
+        status = self._gap("malaria", 'pubmed_tool.py search --query-file f.txt --retmax 0  # (mesh) NOT (tiab)')
+        self.assertEqual(status, "satisfied")
+
+    def test_plain_block_count_does_not_satisfy_gap(self):
+        self.state("register-block", "malaria")
+        status = self._gap("malaria", "pubmed_tool.py search --query-file malaria_block.txt --retmax 0")
+        self.assertEqual(status, "pending")
+
+    def test_bramer_gap_is_waivable(self):
+        self.state("register-block", "rdt")
+        rc, _ = self.state("waive-requirement", "rdt", "bramer_gap", "simple concept, stable MeSH")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.load_waivers("rdt"), {"bramer_gap": "simple concept, stable MeSH"})
+
+    def load_waivers(self, block):
+        data = json.loads(Path(self.manifest).read_text(encoding="utf-8"))
+        return data["build_state"]["blocks"][block]["waivers"]
+
+    def test_require_gap_analysis_blocks_then_passes(self):
+        self.state("register-block", "malaria")
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-gap-analysis"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("gap-analysis gap" in i for i in receipt["issues"]))
+
+        self.add(kind="sample", block="malaria", command="pubmed_tool.py term-diff --mesh-query-file m.txt --tiab-query-file t.txt --output d.json")
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-gap-analysis"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["ok"])
+
+    def test_require_coverage_does_not_demand_gap(self):
+        # Separation: mesh_sweep + block_count satisfied, gap pending -> --require-coverage passes,
+        # but --require-gap-analysis fails. Proves the gap gate is independent.
+        self.state("register-block", "malaria")
+        self.add(kind="mesh", block="malaria", command="mesh_tool.py sweep --output s.json")
+        self.add(kind="search", block="malaria", command="pubmed_tool.py search --query-file m.txt --retmax 0", count="5")
+        rc, _ = self.run_cli(["show", "--manifest", self.manifest, "--require-coverage"])
+        self.assertEqual(rc, 0)
+        rc, _ = self.run_cli(["show", "--manifest", self.manifest, "--require-gap-analysis"])
+        self.assertEqual(rc, 1)
+
+    def test_state_coverage_surfaces_gap_separately(self):
+        self.state("register-block", "malaria")
+        rc, receipt = self.state("coverage")
+        self.assertIn("gap_coverage", receipt)
+        self.assertEqual(receipt["gap_coverage"]["malaria"]["bramer_gap"]["status"], "pending")
+        # Mandatory coverage 'ok' is unaffected by the (informational) gap status.
+        self.assertIn("coverage", receipt)
+
 
 if __name__ == "__main__":
     unittest.main()

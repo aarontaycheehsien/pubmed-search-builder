@@ -11,6 +11,13 @@ from pathlib import Path
 
 
 ISSUE_LEVELS = ("error", "warning", "info")
+LOW_COUNT_DECISIONS = (
+    "undecided",
+    "expanded-and-retested",
+    "relaxed-variant-rejected",
+    "low-count-plausible",
+    "blocked-pending-decision",
+)
 
 
 def read_file(path: str) -> str:
@@ -533,7 +540,164 @@ def filter_check(
     }
 
 
-def write_json(data: dict[str, object]) -> None:
+def block_labels_from_file(path_str: str | None) -> list[str]:
+    if not path_str:
+        return []
+    path = Path(path_str)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    labels: list[str] = []
+    if isinstance(data, dict):
+        labels = [str(key) for key in data.keys()]
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("label"):
+                labels.append(str(item["label"]))
+            elif isinstance(item, str) and item.strip():
+                labels.append(item.strip())
+    return labels
+
+
+def has_proximity(text: str) -> bool:
+    return bool(re.search(r"\[(?:ti|tiab|ad):~\d+\]", text, re.IGNORECASE))
+
+
+def mostly_quoted_tiab_or_proximity(block: str) -> bool:
+    atoms = extract_leaf_atoms(block)
+    if not atoms:
+        return False
+    scoped = 0
+    for atom in atoms:
+        value = strip_outer_parentheses(atom.strip())
+        if quoted_tiab_phrase(value) or has_proximity(value):
+            scoped += 1
+    return scoped / max(len(atoms), 1) >= 0.8
+
+
+def low_count_review(
+    strategy: str,
+    *,
+    final_count: int,
+    threshold: int,
+    decision: str,
+    rationale: str | None,
+    relaxed_variant_tested: bool,
+    relaxed_variant_count: int | None,
+    no_relaxed_variant_reason: str | None,
+    blocks_file: str | None,
+    seed_status: str | None,
+    recall_offer_status: str | None,
+) -> dict[str, object]:
+    issues: list[dict[str, str]] = []
+    required_actions: list[str] = []
+    text = strategy.strip()
+    review_required = final_count < threshold
+    concept_blocks = split_top_level_and(text)
+    block_labels = block_labels_from_file(blocks_file)
+
+    if review_required:
+        add_issue(
+            issues,
+            "warning",
+            "low_final_topic_count",
+            "Final topic-only count is below the low-count review threshold; diagnose before handoff.",
+            f"{final_count} < {threshold}",
+        )
+        required_actions.extend(
+            [
+                "Review individual block counts, pairwise counts, and leave-one-block-out counts where feasible.",
+                "Inspect whether one block, too many AND blocks, narrow phrase wording, limits, or parse drift explain the count.",
+                "Test a relaxed or broader variant for a likely bottleneck, or document why no relaxed variant is applicable.",
+                "Record the final decision and rationale in the audit.",
+            ]
+        )
+
+    if len(concept_blocks) > 3:
+        add_issue(
+            issues,
+            "warning",
+            "many_required_concept_blocks",
+            "Many ANDed concept blocks can suppress recall; check whether any block belongs at screening or as a focused variant.",
+            str(len(concept_blocks)),
+        )
+
+    for index, block in enumerate(concept_blocks, start=1):
+        if mostly_quoted_tiab_or_proximity(block):
+            label = block_labels[index - 1] if index - 1 < len(block_labels) else f"block {index}"
+            add_issue(
+                issues,
+                "warning",
+                "narrow_phrase_or_proximity_block",
+                "A concept block appears dominated by exact phrases or proximity expressions; test broader wording if count is low.",
+                label,
+            )
+
+    add_layer_balance_issues(issues, text)
+
+    if review_required and decision == "undecided":
+        add_issue(
+            issues,
+            "error",
+            "missing_low_count_decision",
+            "Record a low-count decision before handoff.",
+            ", ".join(LOW_COUNT_DECISIONS[1:]),
+        )
+    if review_required and not (rationale or "").strip():
+        add_issue(issues, "error", "missing_low_count_rationale", "Record the rationale for the low-count decision.")
+    if review_required and relaxed_variant_tested and relaxed_variant_count is None:
+        add_issue(
+            issues,
+            "error",
+            "missing_relaxed_variant_count",
+            "When a relaxed variant was tested, record its PubMed count.",
+        )
+    if review_required and not relaxed_variant_tested and not (no_relaxed_variant_reason or "").strip():
+        add_issue(
+            issues,
+            "error",
+            "missing_relaxed_variant_evidence",
+            "Test a relaxed/broader variant or document why no relaxed variant was applicable.",
+        )
+    if review_required and seed_status and seed_status.strip().lower() in {"none", "no", "no-seed", "no-seeds"}:
+        if not recall_offer_status or recall_offer_status.strip().lower() == "pending":
+            add_issue(
+                issues,
+                "warning",
+                "no_seed_recall_offer_unresolved",
+                "No-seed builds should resolve the optional heuristic recall offer before handoff.",
+            )
+
+    has_error = any(issue["severity"] == "error" for issue in issues)
+    if not review_required:
+        status = "pass"
+    elif decision == "blocked-pending-decision" or has_error:
+        status = "blocked"
+    else:
+        status = "pass"
+
+    return {
+        "hook": "low_count_plausibility_review",
+        "status": status,
+        "ok": status == "pass",
+        "low_count_review_required": review_required,
+        "threshold": threshold,
+        "final_count": final_count,
+        "decision": decision,
+        "rationale": rationale or "",
+        "relaxed_variant_tested": relaxed_variant_tested,
+        "relaxed_variant_count": relaxed_variant_count,
+        "no_relaxed_variant_reason": no_relaxed_variant_reason or "",
+        "concept_block_count": len(concept_blocks),
+        "block_labels": block_labels,
+        "issue_counts": severity_counts(issues),
+        "issues": issues,
+        "required_actions": required_actions,
+    }
+
+
+def write_json(data: dict[str, object], output_path: str | None = None) -> None:
+    rendered = json.dumps(data, indent=2, ensure_ascii=False)
+    if output_path:
+        Path(output_path).write_text(rendered + "\n", encoding="utf-8")
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError, ValueError):
@@ -555,6 +719,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     qa_parser = subparsers.add_parser("final-qa", help="Run pre-final strategy QA checks.")
     add_text_args(qa_parser, "strategy", "strategy text")
+    qa_parser.add_argument("--output", help="Optional path to save the hook JSON.")
 
     filter_parser = subparsers.add_parser("filter-check", help="Check methodological filter requirements.")
     add_text_args(filter_parser, "text", "protocol/request/strategy text")
@@ -570,6 +735,21 @@ def build_parser() -> argparse.ArgumentParser:
     filter_parser.add_argument("--topic-plus-filter-count", type=int)
     filter_parser.add_argument("--seed-impact", help="Summary of seed PMID impact after adding the filter.")
     filter_parser.add_argument("--seed-pmids", nargs="*", default=[])
+    filter_parser.add_argument("--output", help="Optional path to save the hook JSON.")
+
+    low_parser = subparsers.add_parser("low-count-review", help="Review a final topic-only strategy with a low PubMed count.")
+    add_text_args(low_parser, "strategy", "strategy text")
+    low_parser.add_argument("--final-count", type=int, required=True)
+    low_parser.add_argument("--threshold", type=int, default=500)
+    low_parser.add_argument("--decision", choices=LOW_COUNT_DECISIONS, default="undecided")
+    low_parser.add_argument("--rationale")
+    low_parser.add_argument("--relaxed-variant-tested", action="store_true")
+    low_parser.add_argument("--relaxed-variant-count", type=int)
+    low_parser.add_argument("--no-relaxed-variant-reason")
+    low_parser.add_argument("--blocks-file")
+    low_parser.add_argument("--seed-status")
+    low_parser.add_argument("--recall-offer-status")
+    low_parser.add_argument("--output", help="Optional path to save the hook JSON.")
 
     return parser
 
@@ -586,7 +766,7 @@ def main(argv: list[str] | None = None) -> int:
             parser=parser,
             label="strategy",
         )
-        write_json(final_qa(strategy))
+        write_json(final_qa(strategy), args.output)
     elif args.command == "filter-check":
         text = read_text_source(
             text=args.text,
@@ -605,7 +785,32 @@ def main(argv: list[str] | None = None) -> int:
                 topic_plus_filter_count=args.topic_plus_filter_count,
                 seed_impact=args.seed_impact,
                 seed_pmids=args.seed_pmids,
-            )
+            ),
+            args.output,
+        )
+    elif args.command == "low-count-review":
+        strategy = read_text_source(
+            text=args.strategy,
+            file_path=args.strategy_file,
+            use_stdin=args.strategy_stdin,
+            parser=parser,
+            label="strategy",
+        )
+        write_json(
+            low_count_review(
+                strategy,
+                final_count=args.final_count,
+                threshold=args.threshold,
+                decision=args.decision,
+                rationale=args.rationale,
+                relaxed_variant_tested=args.relaxed_variant_tested,
+                relaxed_variant_count=args.relaxed_variant_count,
+                no_relaxed_variant_reason=args.no_relaxed_variant_reason,
+                blocks_file=args.blocks_file,
+                seed_status=args.seed_status,
+                recall_offer_status=args.recall_offer_status,
+            ),
+            args.output,
         )
     else:
         parser.error(f"Unknown command: {args.command}")

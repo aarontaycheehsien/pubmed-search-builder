@@ -138,5 +138,48 @@ class SingularPluralWildcardReviewTests(unittest.TestCase):
         self.assertIn("document why explicit singular/plural forms were retained", followups)
 
 
+class LowCountReviewTests(unittest.TestCase):
+    STRATEGY = '("large language model*"[tiab]) AND ("search strategy"[tiab])'
+
+    def test_blocks_low_count_without_rationale_or_variant_evidence(self):
+        result = hooks_tool.low_count_review(
+            self.STRATEGY,
+            final_count=39,
+            threshold=500,
+            decision="low-count-plausible",
+            rationale=None,
+            relaxed_variant_tested=False,
+            relaxed_variant_count=None,
+            no_relaxed_variant_reason=None,
+            blocks_file=None,
+            seed_status=None,
+            recall_offer_status=None,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("missing_low_count_rationale", issue_codes(result))
+        self.assertIn("missing_relaxed_variant_evidence", issue_codes(result))
+
+    def test_passes_documented_low_count_review(self):
+        result = hooks_tool.low_count_review(
+            self.STRATEGY,
+            final_count=39,
+            threshold=500,
+            decision="relaxed-variant-rejected",
+            rationale="Relaxed variant retrieved mostly off-scope records.",
+            relaxed_variant_tested=True,
+            relaxed_variant_count=982,
+            no_relaxed_variant_reason=None,
+            blocks_file=None,
+            seed_status="none",
+            recall_offer_status="done",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "pass")
+        self.assertTrue(result["low_count_review_required"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,7 @@ Use `scripts/pubmed_tool.py` to:
 - run candidate MeSH terms
 - run text-word clusters
 - run wildcard candidates
+- run the Bramer reciprocal gap analysis for a block in one call (`term-diff`)
 - test concept blocks
 - test the topic-only full strategy
 - test the topic-plus-filter full strategy, if a methodological filter is used
@@ -159,6 +160,14 @@ python scripts/pubmed_tool.py search --query-file concept_text_not_mesh.txt --re
 python scripts/pubmed_tool.py sample --query-file concept_mesh_not_text.txt --retmax 5 --output sample_concept_mesh_not_text.json
 python scripts/pubmed_tool.py batch bramer_gap_queries.json --summary
 ```
+
+Or run the whole reciprocal gap analysis for one block in a single call with `term-diff`: it builds both `(MeSH) NOT (text-word)` and `(text-word) NOT (MeSH)`, reports `counts` (mesh, tiab, overlap, combined, mesh_only, tiab_only), and fetches a sample of each side to inspect. It is a record-content command (requires `--output`, prints a receipt; tolerates a stray `--summary`):
+
+```bash
+python scripts/pubmed_tool.py term-diff --mesh-query-file concept_mesh.txt --tiab-query-file concept_text.txt --retmax 15 --output diff_concept.json
+```
+
+The `(... NOT ...)` queries are temporary diagnostics; do not copy them into the final strategy. Treat both directions as term-discovery candidates (not validated recall), inspect the saved records, classify each by concept role, and never auto-add. Record the analysis per `references/bramer-reciprocal-gap-analysis.md` (`performed` / `waived` / `not applicable` / `not performed`).
 
 These `NOT` queries are temporary diagnostics. Do not copy them into the final strategy unless the protocol independently requires an exclusion and final QA documents the recall risk.
 
@@ -231,11 +240,14 @@ Use `scripts/hooks_tool.py` for pre-final, non-network checks:
 ```bash
 python scripts/hooks_tool.py final-qa --strategy-file final_strategy.txt
 python scripts/hooks_tool.py filter-check --text-file protocol_or_strategy.txt
+python scripts/hooks_tool.py low-count-review --strategy-file final_strategy.txt --final-count 142 --decision low-count-plausible --rationale "rare/new topic; relaxed variant mostly off-scope" --relaxed-variant-tested --relaxed-variant-count 983 --output low_count_review.json
 ```
 
 Run `final-qa` before presenting a draft strategy. It flags recall risks such as `[Majr]`, `NOT`, language/date/species/age/publication-type/full-text limits, short wildcards, proximity with truncation, missing MeSH or `[tiab]` layers, and unreviewed quoted `[tiab]` singular/plural phrase pairs as `singular_plural_wildcard_review`; resolve that warning by testing the phrase-final, phrase-anchored/concept-specific wildcard candidate or documenting explicit-form retention. It reports exact duplicate terms as `duplicate_term` (recall-neutral cleanup; it detects an atom repeated across the flat `OR` list and nested `MeSH AND (...)` sub-clauses, which is the usual source of duplicated zero-hit terms). For multi-block strategies, it checks top-level concept blocks separately so one block's MeSH does not hide another block's missing controlled-vocabulary layer.
 
 Run `filter-check` whenever the protocol, request, or strategy mentions a study-design/evidence-type intent such as RCTs, systematic reviews, qualitative studies, diagnostic accuracy, prognosis, observational studies, or economic evaluations. If it reports that validated filter review is needed, read `validated-methodological-filters-and-hedges.md`, use `pubmed_tool.py batch` for topic-only versus topic-plus-filter counts, and validate seed PMID impact when seeds exist.
+
+Run `low-count-review` when the final topic-only PubMed count is below 500. Read `references/low-count-plausibility.md` first. The hook does not run PubMed or rewrite the query; it checks that the low-count decision, rationale, and relaxed-variant evidence (or reason not applicable) are documented, and it flags generic search-logic risks for audit follow-up.
 
 ## Audit Scaffold
 
@@ -286,6 +298,7 @@ python scripts/manifest_tool.py add --manifest run_manifest.json --kind sample -
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind artifact --command "python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --output audit_pressure-ulcer_2026-05-31.md" --output audit_pressure-ulcer_2026-05-31.md --note "audit markdown"
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind artifact --command "python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --output audit_pressure-ulcer_2026-05-31.md --if-exists suffix" --output audit_pressure-ulcer_2026-05-31_2.md --supersedes audit_pressure-ulcer_2026-05-31.md --note "re-rendered after cleanup"
 python scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files
+python scripts/manifest_tool.py show --manifest run_manifest.json --require-low-count-review
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
 
@@ -330,6 +343,18 @@ python scripts/manifest_tool.py state waive-requirement "rapid diagnostic test" 
 
 The coverage gate is currently **opt-in** (`show --require-coverage` / `state coverage`); it is not yet part of `--require-ready`. Run it at Final QA alongside `--require-ready` so a block that was never swept or count-tested surfaces as a hard `coverage gap` before handoff rather than as a silent omission.
 
+#### Conditional Bramer gap-analysis gate
+
+The **Bramer reciprocal gap analysis** is tracked per block too, but because it is *conditional* (run it where it aids term discovery; waive it for simple, stable-MeSH concepts) it is **separate from `--require-coverage`** and has its own opt-in gate. The `bramer_gap` requirement is satisfied by a `term-diff` run (or a manual reciprocal gap query) tagged to the block, or by a reasoned waiver:
+
+```bash
+python scripts/manifest_tool.py add --kind sample --block "malaria" --command "python scripts/pubmed_tool.py term-diff --mesh-query-file malaria_mesh.txt --tiab-query-file malaria_text.txt --output diff_malaria.json" --output diff_malaria.json
+python scripts/manifest_tool.py state waive-requirement "rapid diagnostic test" bramer_gap "simple concept, well covered by MeSH and text words"
+python scripts/manifest_tool.py show --require-gap-analysis   # opt-in; exit 1 while any block lacks a recorded gap analysis or waiver
+```
+
+`state coverage` and `report` show `gap_coverage` alongside the mandatory coverage (informational; it does not change their exit codes). Pass `--require-gap-analysis` at handoff when the build relied on reciprocal gap analysis for term discovery, so a block that was neither analysed nor waived surfaces as a hard `gap-analysis gap`. This machine-checks the per-concept `performed / waived / not applicable / not performed` status that `references/bramer-reciprocal-gap-analysis.md` requires in the audit.
+
 ### No-seed recall offer
 
 On a **no-seed build**, `build_state` also tracks whether the optional heuristic recall check was offered. The Validation stage must offer it once (see `references/no-seed-recall-estimation.md`); record the user's choice so handoff can confirm the offer was actually made:
@@ -354,10 +379,10 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 | Limited seed evidence (pre-gate) | `pubmed_tool.py fetch` / `mine`; optional `related` → `term-rank` | Seed records only, to inform concept analysis. Label `related` output as related-set evidence, distinct from seed-derived; it is term-discovery support, not broad PubMed exploration or block testing. |
 | Concept gate | (no tools) | Resolve the Phase 1 concept gate before MeSH lookup, PubMed exploration, block construction, variants, final QA, or filter checks. |
 | MeSH/PubMed exploration | `pubmed_tool.py search` (ATM/translation clues); `mesh_tool.py sweep --details`, `tree` | Build variant lists from brainstormed vocabulary plus seed/user/ATM clues, then run an aggressive sweep per essential concept and complete the MeSH candidate ledger before drafting a block. Use `mesh_tool.py sparql` only for unusual follow-ups not covered by `tree`. |
-| Text-word / block testing | `pubmed_tool.py search`, `batch` | Test text-word clusters, proximity, wildcard stems, and conditional Bramer reciprocal gap queries, then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
+| Text-word / block testing | `pubmed_tool.py search`, `batch`, `term-diff` | Test text-word clusters, proximity, wildcard stems, and conditional Bramer reciprocal gap queries (`term-diff` runs both gap directions for a block in one call), then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
 | Validation | `pubmed_tool.py validate`; optional `recall --blocks-file`; no-seed: `state resolve-recall-offer` | Known-item seed retrieval; optionally estimate relative recall against a benchmark to find the bottleneck block (relative, not absolute). Diagnose missed seeds, including filter-caused misses. On a no-seed build, offer the optional heuristic recall check (`references/no-seed-recall-estimation.md`) and record the outcome. |
-| Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`; `manifest_tool.py state coverage` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). Check per-block coverage so no essential block was left unswept or untested. |
-| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-ready` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. `--require-ready` blocks handoff until the concept gate is resolved and no question is pending. |
+| Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`, `low-count-review`; `manifest_tool.py state coverage` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). Check per-block coverage so no essential block was left unswept or untested. Run `low-count-review` when final topic-only count is `<500`. |
+| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-ready` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. `--require-ready` blocks handoff until the concept gate is resolved and no question is pending; add `--require-low-count-review` when the final topic-only count is below 500. |
 
 ## Do Not Fabricate
 
