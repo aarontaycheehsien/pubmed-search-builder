@@ -196,7 +196,7 @@
     },
     {
       "id": "tiab.objective-term-ranking-and-proximity",
-      "rule": "tiab-expansion.md owns objective term-ranking interpretation (coverage/lift/background) and PubMed proximity-operator behaviour.",
+      "rule": "tiab-expansion.md owns objective term-ranking interpretation (coverage/lift/background), PubMed proximity-operator behaviour, and source-grounded proximity review triggers.",
       "canonical_owner": "references/tiab-expansion.md",
       "assertions": [
         "objective / data-driven term selection",
@@ -204,9 +204,13 @@
         "lift",
         "background_count",
         "proximity searching",
+        "proximity review pass",
+        "source-grounded triggers",
+        "exact phrase(s), boolean `and`, and proximity variants",
         "applied to proximity searches",
         "truncation/wildcards"
       ],
+      "cross_links": [{"file": "references/audit-template.md", "must_contain": ["proximity candidates tested", "proximity not applicable rationale"]}],
       "guarded_by": "none",
       "status": "canonical"
     },

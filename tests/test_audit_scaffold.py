@@ -173,6 +173,16 @@ class BuildScaffoldTests(unittest.TestCase):
         self.assertIn("wildcard", str(review["wildcard_candidate"]).lower())
         self.assertIn("phrase-anchored/concept-specific", str(review["wildcard_candidate"]).lower())
 
+    def test_tiab_proximity_review_placeholders_are_scaffolded(self):
+        audit, _ = self.build()
+        expansion = audit["tiab_expansion"]
+
+        self.assertIn("proximity_candidates_tested", expansion)
+        self.assertIn("proximity_expressions_added", expansion)
+        self.assertIn("proximity_expressions_tested_but_rejected", expansion)
+        self.assertIn("proximity_not_applicable_rationale", expansion)
+        self.assertIn("decision", str(expansion["proximity_candidates_tested"]).lower())
+
     def test_seed_fetch_populates_pre_gate_seed_triage_without_attesting_review(self):
         fetch_data = {
             "operation": "fetch",
