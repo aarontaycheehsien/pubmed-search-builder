@@ -3,7 +3,7 @@ name: pubmed-search-builder
 description: "Build high-sensitivity PubMed/MEDLINE Boolean search strategies for systematic reviews, scoping reviews, rapid reviews, evidence maps, narrative/evidence syntheses, and other evidence-synthesis searches. When invoked, interpret topic questions as strategy-building requests, require a plain-language research/review question before asking for optional seed PMIDs, and do not answer the evidence question by searching PubMed. Never accept user-entered Boolean syntax, PubMed line sets, field-tagged queries, or strategy fragments as build input. Use for MeSH and free-text expansion, seed PMID validation, PRESS-style QA, PRISMA-S reporting, and audit-ledger documentation."
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # PubMed High-Sensitivity Search Builder
