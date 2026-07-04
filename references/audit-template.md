@@ -34,6 +34,7 @@
 | Pre-MeSH vocabulary brainstorm | [vocabulary families and domain frames considered] | [user/protocol wording, seeds, brainstorm checklist, domain-framing question if asked] | [accepted / rejected / deferred / not needed] | [recall/noise or scope rationale] | [title/abstract expansion log / rationale] |
 | MeSH/SCR choice | [accepted, rejected, deferred candidates] | [sweep, details, tree, ATM, seed indexing, counts] | [decision] | [scope, explosion/noexp, duplicate/noise/wrong-sense reason] | [MeSH descriptors considered] |
 | Text-word/proximity/wildcard choice | [terms or expressions considered] | [MeSH entry terms, seeds, samples, counts, warnings] | [decision] | [recall/noise rationale] | [title/abstract expansion log] |
+| Broad retrieval safety layer | [stable/fragile/very-fragile classification, fragility score/dimensions/red flags, exact-label terms, descriptive/action terms, tethering logic, leave-out alternatives, waivers] | [pre-MeSH brainstorm, known-item records, samples, term-rank, layer counts, variant counts, or not available] | [added / waived / not applicable - stable / omitted from sensitive strategy / focused-reserve variant / revised] | [why broader author language was needed, safely waived, omitted from the sensitive strategy, or not applicable for a stable concept] | [title/abstract expansion log / final strategy / variants] |
 | Bramer reciprocal gap analysis | [performed / waived / not applicable / not performed per concept] | [MeSH/SCR NOT text-word count; text-word NOT MeSH/SCR count; sample JSON if inspected] | [terms accepted/rejected, or waiver] | [term-discovery rationale or waiver reason] | [MeSH descriptors considered / title-abstract expansion log] |
 | Filter/limit/variant choice | [main, focused, precision, filter, reserve] | [counts, seeds, labelled samples if available, QA] | [chosen main design] | [sensitivity/workload rationale] | [final strategy / PubMed CLI checks] |
 | Low-count plausibility check | [final topic-only count `<500` triggered check / not triggered] | [final topic-only count, block counts, query translation, final-qa, filter/limit comparison, seed/gold retrieval, no-seed recall offer status] | [expanded and retested / documented as plausible / not triggered] | [diagnosis and recall-risk note] | [PubMed CLI checks / reporting notes] |
@@ -204,6 +205,12 @@ For every row based on `fetch`, `mine`, or `sample` record content, record the s
 - **Brainstormed vocabulary families accepted:** [list, or none]
 - **Brainstormed vocabulary families rejected:** [list with reason, or none]
 - **Brainstormed vocabulary families deferred/reserved:** [list with reason, or none]
+- **Stable/fragile/very-fragile concept classification:** [each essential concept with provisional/final status, total score, dimension scores, hard red flags, evidence sources used, and reason]
+- **Fragility scoring dimensions:** [terminology stability; controlled-vocabulary/indexing reliability; explicitness of author reporting; retrieval/noise behavior; validation or pilot evidence; unknown dimensions scored as 1]
+- **Fragility evidence sources:** [question/protocol wording, seed records, MeSH mapping, PubMed ATM/query translation, known-item or pilot retrieval, block counts, sample-record wording, or not performed]
+- **Broad retrieval safety-layer check:** [fragile concepts checked, exact-label terms, descriptive/action terms, artifact/role terms, tethering logic, waivers with rationale, or not applicable for stable concepts]
+- **Very-fragile leave-out alternative:** [concept omitted from sensitive main strategy and handled at screening / focused-reserve variant tested / protocol required inclusion / not applicable]
+- **Safety-layer counts:** [exact-label layer count, descriptive/action layer count, combined block count, or not performed]
 - **MeSH-entry-derived `[tiab]` variants added:** [list, or none]
 - **Seed-derived `[tiab]` variants added:** [list, or n/a if no seeds]
 - **Record-content evidence file reviewed:** [saved `mine`/`sample` JSON path, or not applicable]
