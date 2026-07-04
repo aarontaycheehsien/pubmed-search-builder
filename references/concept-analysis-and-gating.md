@@ -32,6 +32,14 @@ Use these fields:
 - `pre_gate_no_seed_evidence`: protocol/question wording, shallow framework parsing, pre-MeSH vocabulary/domain brainstorm needed for the gate, or `not applicable - seed evidence used`
 - `post_gate_validation_evidence`: MeSH sweep, PubMed ATM/query translation, sample-record pattern, concept-block count, final QA, filter check, or `not performed`
 - `scope_breadth_check`: for methodological or automation topics, whether the target is a narrow action or a broader workflow, with the reason
+- `fragility_status`: `stable`, `fragile`, `very_fragile`, or `not applicable`, based on whether the concept is likely to be named inconsistently, described operationally, or unsafe to require as a searchable concept
+- `fragility_score`: total score from the Fragility Scoring Rubric below, or `not applicable`
+- `fragility_dimension_scores`: score each dimension `0`, `1`, or `2`: terminology stability; controlled-vocabulary/indexing reliability; explicitness of author reporting; retrieval/noise behavior; validation or pilot evidence
+- `fragility_evidence_sources`: question/protocol wording, seed records, MeSH mapping, PubMed ATM/query translation, known-item or pilot retrieval, block counts, sample-record wording, or `not performed`
+- `fragility_hard_red_flags`: any hard red flags from the rubric below, or `none`
+- `fragility_trigger`: for fragile or very fragile concepts, the trigger such as methodological/study-design label, workflow/process concept, behavior, health-services/setting concept, weak MeSH, historical/regional wording drift, author-described operation, or poor searchability despite safety-layer expansion; for stable concepts, the evidence supporting stable terminology/MeSH coverage
+- `fragility_consequence`: normal expansion, exact plus descriptive safety layer, omit from sensitive main strategy and screen, focused/reserve variant, or protocol-required inclusion with recall risk
+- `safety_layer_handling`: `exact plus descriptive layer required`, `offer leave-out alternative - very fragile`, `safety layer not applicable - stable concept`, `waived with evidence`, or `deferred`, with the reason carried into `tiab-expansion.md`
 - `recall_risk`: why the concept could miss records if required, or `low` for truly essential concepts
 - `and_block_admission`: pass, fail, deferred, or not applicable, with the specific reason
 - `decision_needed`: whether user/protocol input is required before proceeding
@@ -44,6 +52,59 @@ The ledger may begin as a compact table in the response or working notes, but it
 If a candidate's role is optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant and it is materially plausible, default `decision_needed` to yes unless the protocol already fixes the decision.
 
 Do not use pasted Boolean syntax, line numbers, field tags, filters, or prior strategy structure as a source of concept evidence. If the user supplied Boolean syntax, use only an independently confirmed plain-language topic or protocol question as the source for concept analysis.
+
+## Fragility Scoring Rubric
+
+Use this rubric for every candidate that could become an essential concept block. The score is a decision aid, not a statistical model; hard red flags override the numeric total when recall is at risk.
+
+A fragile concept is one where failure to retrieve the preferred label is weak evidence that the paper lacks the concept. These concepts may be precise for screeners but unreliable for searching because authors or indexers use variable labels, describe the operation without naming the construct, mention it only in methods/full text, or map it inconsistently to controlled vocabulary. Do not treat high retrieval count alone as fragility; score retrieval/noise fragility when the language needed to express the concept is so generic that it threatens recall or makes the concept unsafe as a required `AND` block.
+
+Determine fragility in two passes:
+
+1. At the concept gate, assign a provisional score from the question/protocol wording, concept type, seed wording if available, likely MeSH/publication-type support, and the pre-MeSH vocabulary/domain brainstorm.
+2. During MeSH lookup and title/abstract expansion, revise the score using PubMed ATM/translation behavior, MeSH mapping, known-item or pilot misses, block counts, sample-record wording, and whether exact-label plus context-tethered descriptive layers retrieve plausible records.
+3. Record the final score, dimension scores, evidence sources, hard red flags, and search consequence in the concept ledger and audit. If evidence for a dimension is genuinely unknown, score it as `1` rather than `0`; use `0` only when there is positive evidence of stability.
+
+Score each dimension:
+
+- `0` = stable/searchable
+- `1` = some instability or uncertainty
+- `2` = high instability or likely retrieval loss
+
+Dimensions:
+
+1. **Terminology stability**: `0` = one dominant label with predictable synonyms; `1` = several labels, regional/disciplinary variation, or historical drift; `2` = no dominant label, mostly operational wording, or terminology changes across eras.
+2. **Controlled-vocabulary/indexing reliability**: `0` = reliable MeSH/publication type or established indexing; `1` = partial, new, lagging, or inconsistent indexing; `2` = no reliable descriptor/publication type, weak mapping, or likely sparse indexing.
+3. **Explicitness of author reporting**: `0` = usually named in title/abstract/indexing; `1` = often in methods/full text or implicit; `2` = frequently implicit, described only by procedure, or not abstracted.
+4. **Retrieval/noise behavior**: `0` = exact and ordinary text-word layer is selective; `1` = broad terms need tethering or produce moderate noise; `2` = even tethered descriptive terms are very noisy or exact terms are too brittle.
+5. **Validation or pilot evidence**: `0` = known items/pilots retrieve reliably; `1` = some misses or uncertain no-seed evidence; `2` = known-item/pilot misses caused by this concept, or no-seed benchmark shows a coherent missed cluster/noisy unusable expansion.
+
+Classify by total score unless a hard red flag applies:
+
+- `stable`: total `0-2` and no hard red flag.
+- `fragile`: total `3-6`, or one serious weakness that can plausibly be handled by exact-label plus descriptive safety-layer searching.
+- `very_fragile`: total `7+`, or any hard red flag below.
+
+Hard red flags forcing `very_fragile` unless protocol evidence overrides:
+
+- the concept is often implicit rather than named
+- exact-label and descriptive-action layers both miss known-item or pilot records
+- descriptive terms are unusably noisy even after context tethering
+- the concept is an eligibility property, interpretation, mechanism, bias/risk judgment, or outcome-like qualifier rather than a searchable topic anchor
+- old or sparse abstracts make author-language coverage unreliable
+- no reliable MeSH, publication type, or text-word family exists for the concept
+
+Examples:
+
+- `stable`: named diseases, drugs, organisms, established devices, and well-indexed procedures.
+- `fragile`: trial methods, allocation mechanisms, triage/referral workflows, adherence, help-seeking, telehealth or service settings.
+- `very_fragile`: recruitment speed, selection-bias risk, allocation concealment when rarely reported, pragmaticness, workflow fidelity, implicit clinician behavior, and other concepts usually judged during screening or risk-of-bias assessment.
+
+Consequences:
+
+- `stable`: normal MeSH plus `[tiab]` expansion; broad safety layer is not applicable.
+- `fragile`: require exact-label plus context-tethered descriptive/action safety layer unless waived with evidence.
+- `very_fragile`: default the sensitive main strategy to omit the concept and handle it at screening; any searched version is a focused/reserve variant unless the protocol explicitly accepts the recall risk.
 
 ## AND-block admission test
 
@@ -62,6 +123,8 @@ Default if uncertain: do not admit the candidate as a main `AND` block. Classify
 
 Outcomes, comparators, narrow settings, demographic subgroups, and study-design concepts fail the admission test unless the user question or protocol makes them true topic anchors and the recall risk is explicitly accepted.
 
+Very fragile concepts are candidates whose terminology is so inconsistent, operational, implicit, or noise-prone that even an exact-label plus descriptive safety layer may miss in-scope records or overwhelm the search. When a very fragile concept is not absolutely required as a searchable topic anchor, default the sensitive main strategy to leave it out and handle it at screening. If the concept is plausibly useful for workload or interpretation, offer a focused/reserve variant that includes the safety-layer block. When the protocol appears to require searching a very fragile concept as an essential block, pause at the concept gate and offer the trade-off explicitly: sensitive main strategy without the concept versus focused/reserve strategy with the concept.
+
 ## Concept-gate pilot-test protocol
 
 The concept gate has two phases. The first phase is mandatory before MeSH lookup; the second phase is scheduled for iterative testing after blocks exist.
@@ -75,7 +138,7 @@ Before MeSH lookup or PubMed exploration:
 3. Run the scope breadth check below for methodological or automation topics.
 4. Apply the AND-block admission test to each candidate concept.
 5. Mark each candidate as a core required concept, within-block term family, screening-only concept, omitted concept, reserve/focused-variant candidate, or filter/limit decision.
-6. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
+6. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, focused variant, or very-fragile leave-out trade-off is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
 
 This phase may use the user question, protocol wording, and limited seed fetch/mining when seed PMIDs were supplied. It must not run MeSH lookup, broad PubMed exploration, block construction, block testing, variants, final QA, or filter checks.
 
@@ -102,11 +165,13 @@ Before MeSH lookup, record a compact pre-MeSH gate summary containing:
 - chosen framework, question type, and rationale
 - whether a framework question was needed, and why or why not
 - candidate concepts with framework slots and ambiguity grades
+- candidate concepts classified as `stable`, `fragile`, or `very_fragile`, with fragility score, dimension scores, evidence sources, hard red flags, and fragility trigger or stable-concept rationale
+- very-fragile concepts for which the sensitive main strategy should omit the concept and handle it at screening, plus any focused/reserve variant offer
 - scope breadth check for methodological or automation topics, including whether the main workflow concept is narrow or broad
 - concepts admitted as core required search concepts
 - concepts kept inside existing `OR` blocks as term families
 - screening-only, omitted, deferred, reserve, or focused-variant concepts with recall-risk reasons
-- optional concept offers: each materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, or focused variant, or `none identified`
+- optional concept offers: each materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, focused variant, or very-fragile leave-out alternative, or `none identified`
 - methodological filter or limit decisions needed before narrowing the strategy
 - optional secondary `AND` blocks, outcome blocks, safety blocks, filters, limits, or focused variants that require user/protocol authorization before testing
 - the one next user-facing question, if a human decision is required before proceeding

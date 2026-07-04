@@ -33,6 +33,43 @@ Use:
 - Greek-letter, spelled-out, and symbol variants
 - Roman numeral and Arabic numeral variants
 
+## Broad retrieval safety layer for fragile concepts
+
+First classify each essential concept as `stable`, `fragile`, or `very_fragile` using the Fragility Scoring Rubric in `concept-analysis-and-gating.md`. If the concept-gate score was provisional, update it here using MeSH mapping, ATM/query translation, known-item or pilot retrieval, block counts, and sample-record wording. Add a broad retrieval safety layer only for fragile concepts before finalising the concept block. This protects recall when relevant records describe the idea without using the searcher's preferred label.
+
+Fragile concepts include:
+
+- methodological or study-design labels
+- workflow, process, or implementation concepts
+- health-services, setting, or service-delivery concepts
+- social-science, behavioral, qualitative, or psychosocial constructs
+- concepts with weak or recently changed MeSH coverage
+- concepts with older/newer, regional, or discipline-specific wording
+- author-described behaviors where papers may describe what happened rather than name the construct
+
+Very fragile concepts are fragile concepts whose searchable language remains especially unreliable even after safety-layer thinking. Signals include very inconsistent author wording, mostly implicit reporting, highly generic action verbs, weak or absent controlled vocabulary, old literature with sparse abstracts, or pilot/known-item evidence that exact and descriptive layers both miss records or create unusable noise. Use the concept-gate hard red flags to upgrade to `very_fragile` even when the numeric score is lower. For very fragile concepts, first consider leaving the concept out of the sensitive main strategy and handling it at screening. If searched, usually keep it as a focused/reserve variant unless the protocol explicitly accepts the recall risk.
+
+Stable concepts include established biomedical diseases, drugs, devices, organisms, or procedures with reliable MeSH coverage and predictable author wording. For stable concepts, record `safety layer not applicable - stable terminology/MeSH coverage` and proceed with normal MeSH plus `[tiab]` expansion.
+
+For each fragile concept that remains in the search, include all applicable layers inside the same concept `OR` block:
+
+- exact-label layer: controlled vocabulary, publication types where appropriate, formal names, acronyms, standard labels, and distinctive phrases
+- descriptive-action layer: generic verbs/nouns and author-language patterns describing what happened rather than naming the concept
+- artifact/role layer: protocols, pathways, algorithms, checklists, sequences, rosters, records, queues, forms, personnel roles, or other operational artifacts that authors may use to describe the concept
+- historical/disciplinary layer: older/newer labels, regional wording, field-specific shorthand, spelling variants, and loosened phrase/proximity forms
+
+The safety layer stays inside the same concept `OR` block. Do not turn it into a separate `AND` block. Generic descriptive terms must be context-tethered to trial, intervention, workflow, setting, population, or protocol anchors; do not leave broad verbs such as `assign*`, `screen*`, `refer*`, `triage*`, or `allocat*` floating alone. Keep the broader layer unless testing shows that it duplicates existing coverage or is unacceptably noisy after tethering and combination with the other essential blocks. A waived descriptive layer for a fragile concept needs an explicit audit reason and supporting evidence.
+
+Examples of safety-layer thinking:
+
+- A study-design concept may need trial/publication-type terms plus generic `assign*`, `allocat*`, `group*`, `controlled`, or `trial*` language tied to the intervention context.
+- A workflow concept may need both exact workflow labels and broader words for the tasks authors perform.
+- A setting concept may need formal service names plus local/regional labels, acronyms, and common author shorthand.
+
+For fragile concepts, test the exact-label layer, descriptive/action layer, and combined concept block where feasible. If the descriptive layer is noisy, tighten the tether or preserve a focused/reserve variant; do not drop the layer by default. For stable concepts, normal MeSH-only, text-word-only, and combined block testing is sufficient.
+
+For very fragile concepts, compare the sensitive strategy with the concept omitted against a focused/reserve variant containing the safety-layer block when testing is authorized. Prefer the omitted sensitive strategy unless known-item retrieval, benchmark inspection, or protocol direction shows that searching the concept is necessary and tolerably safe.
+
 ## Objective / data-driven term selection
 
 Manual brainstorming and MeSH entry terms are necessary but not sufficient: the resulting term list reflects what the searcher could recall, not what the relevant literature actually uses. When seed PMIDs or a pilot relevant set are available, also derive terms objectively by measuring which words and MeSH headings are enriched in known-relevant records relative to PubMed as a whole. Raw frequency alone is misleading: generic words such as "patients" or the MeSH heading `"Animals"[Mesh]` occur in nearly every record, so rank candidates by discrimination, not by count.

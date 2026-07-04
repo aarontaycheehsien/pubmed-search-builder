@@ -155,7 +155,8 @@ For each essential concept:
   - Test MeSH-only, text-word-only, and combined concept-block counts.
   - Use `bramer-reciprocal-gap-analysis.md` for conditional reciprocal gap analysis when layer complementarity or term discovery needs deeper checking; otherwise record a reasoned waiver when the check is not needed.
   - Resolve or document all MeSH/SCR mappings surfaced by PubMed ATM before finalising the block.
-4. Draft the concept block only after the candidate ledger is complete.
+4. Before drafting the final block, run the **broad retrieval safety-layer check** from `tiab-expansion.md`. Classify each essential concept as `stable`, `fragile`, or `very_fragile` using the scoring rubric in `concept-analysis-and-gating.md`. For fragile concepts - methodological/study-design labels, workflow or process concepts, health-services or setting concepts, weakly indexed constructs, author-described behaviors, and concepts with likely historical or regional wording drift - the block must include an exact-label layer and a context-tethered descriptive/action layer unless a documented test supports a waiver. For very fragile concepts, offer or document the sensitive-search alternative of leaving the concept out and handling it at screening; any searched version is usually a focused/reserve variant unless the protocol explicitly accepts the recall risk. For stable biomedical concepts with reliable MeSH and predictable author wording, record `safety layer not applicable - stable terminology/MeSH coverage`.
+5. Draft the concept block only after the candidate ledger and safety-layer check are complete.
 
 Each block should usually include:
 
@@ -171,6 +172,7 @@ Each block should usually include:
 - older and newer terminology
 - proximity expressions (`"word1 word2"[tiab:~N]`) where word order varies
 - wildcard stems where useful
+- broad descriptive safety-layer terms for fragile concepts
 
 Use `wildcard-and-truncation.md` before accepting proximity expressions or wildcard stems, especially when a stem may be short, ambiguous, or likely to retrieve unrelated concepts.
 
@@ -223,6 +225,8 @@ Test:
 1. each accepted MeSH term
 2. each plausible but rejected MeSH term
 3. each major text-word cluster
+3a. for fragile concepts, the exact-label layer, descriptive/action layer, and combined safety-layer block where feasible
+3b. for very fragile concepts, the sensitive strategy with the concept omitted versus any authorized focused/reserve variant that includes the safety-layer block
 4. each proximity review candidate, including exact phrase and Boolean `AND` comparisons, multiple `N` values where useful, concept-block with/without comparisons, rejected/not-applicable rationale, and seed PMID impact when seeds exist
 5. each wildcard stem that may affect recall
 5a. each phrase-final wildcard candidate from the morphology pass when explicit quoted `[tiab]` singular/plural pairs may affect recall
@@ -281,7 +285,7 @@ Record:
 - pre-MeSH brainstorm evidence: vocabulary families considered, domain-framing question and answer when asked, and accepted/rejected/deferred brainstorm terms
 - PubMed query translation observations: free-text exploratory queries, ATM mappings, parse warnings, and whether any mapping was added explicitly
 - PubMed count checks: MeSH-only, text-word-only, combined concept blocks, Bramer reciprocal gap counts/samples when performed, pairwise blocks when useful, final topic-only strategy, topic-plus-filter strategy, focused/reserve variants, low-count plausibility hook when final topic-only count is `<500` (see `references/low-count-plausibility.md`), and differential/noise samples when run
-- title/abstract expansion decisions: MeSH-entry-derived terms, seed-derived terms, sample-record-derived terms, acronyms added or rejected, singular/plural forms, spelling and hyphenation variants, proximity expressions added or rejected, and wildcard stems added or rejected
+- title/abstract expansion decisions: MeSH-entry-derived terms, seed-derived terms, sample-record-derived terms, acronyms added or rejected, singular/plural forms, spelling and hyphenation variants, proximity expressions added or rejected, wildcard stems added or rejected, stable/fragile/very-fragile classification with score, dimension scores, evidence sources, and hard red flags, safety-layer terms added/waived for fragile concepts, very-fragile leave-out alternatives and focused/reserve variants, and stable-concept not-applicable rationales
 - sample inspection notes: number inspected, sampling method or sort, observed relevance/noise patterns, and whether records were formally labelled
 - relative-recall estimation: benchmark source (independent gold standard vs. seed-expansion heuristic), benchmark size, relative recall, per-block recall and bottleneck block, missed-record inspection outcome, revision decision, final retest result, and `not performed` when no benchmark recall check was run; keep distinct from known-item seed validation
 - QA and reporting notes: final query hygiene, `query_translation_drift`, `final-qa`, `filter-check`, limits/restrictions, audit workbook path, and remaining caveats

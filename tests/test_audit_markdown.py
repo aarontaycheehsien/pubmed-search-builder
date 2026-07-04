@@ -227,6 +227,30 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn('"immune checkpoint inhibitor*"[tiab]', markdown)
         self.assertIn("explicit forms retained", markdown)
 
+    def test_fragility_fields_render_in_tiab_expansion_log(self):
+        data = sample_data()
+        data["tiab_expansion"] = {
+            "fragile_stable_concept_classification": "Allocation mechanism: very_fragile, score 8",
+            "fragility_score": "8",
+            "fragility_dimension_scores": "2/2/1/2/1",
+            "fragility_evidence_sources": "MeSH mapping; known-item retrieval",
+            "fragility_hard_red_flags": "often implicit",
+            "fragility_consequence": "omit from sensitive main strategy and screen",
+            "broad_retrieval_safety_layer_check": "leave-out alternative documented",
+            "very_fragile_leave_out_alternative": "focused-reserve variant only",
+            "exact_label_layer_terms": "quasi-random*",
+            "descriptive_action_layer_terms": "allocat*; assign*",
+            "artifact_role_layer_terms": "rota; roster",
+            "safety_layer_tethering_logic": "tether generic allocation language to trials",
+            "safety_layer_counts": "not performed",
+            "safety_layer_waivers": "none",
+        }
+        markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
+
+        self.assertIn("**Stable/fragile/very-fragile concept classification:** Allocation mechanism", markdown)
+        self.assertIn("**Fragility evidence sources:** MeSH mapping; known-item retrieval", markdown)
+        self.assertIn("**Safety-layer tethering logic:** tether generic allocation language to trials", markdown)
+
     def test_missing_morphology_review_renders_default_row(self):
         markdown = audit_markdown.render_audit_markdown(sample_data(), Path("audit.md"))
 
