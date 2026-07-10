@@ -1,802 +1,217 @@
-import unittest
+"""Documentation-contract tests for the scope-first conceptual/objective/critic workflow."""
+
 from pathlib import Path
+import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_doc(relative_path: str) -> str:
-    return (ROOT / relative_path).read_text(encoding="utf-8")
+def read_doc(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def markdown_docs() -> list[Path]:
-    return [path for path in ROOT.rglob("*.md") if "__pycache__" not in path.parts]
-
-
-class ConceptAnalysisDocsTests(unittest.TestCase):
-    def test_skill_requires_stage_reporting_contract(self):
-        skill = read_doc("SKILL.md").lower()
-        contract = skill.split("## stage reporting contract", 1)[1].split("## required input", 1)[0]
-
-        self.assertIn("stage banner", contract)
-        for field in [
-            "`stage`",
-            "`reference(s) in force`",
-            "`doing now`",
-            "`allowed now`",
-            "`not doing yet`",
-            "`user decision needed`",
-        ]:
-            self.assertIn(field, contract)
-
-        for reference in [
-            "references/workflow.md",
-            "references/framework-selection.md",
-            "references/concept-analysis-and-gating.md",
-            "references/mesh-and-pubmed-tools.md",
-            "references/seed-pmid-validation.md",
-            "references/audit-template.md",
-        ]:
-            self.assertIn(reference, contract)
-
-        self.assertIn("optional secondary blocks", contract)
-        self.assertIn("filters", contract)
-        self.assertIn("focused variants", contract)
-
-    def test_workflow_contains_numbered_stage_map_and_banner_requirements(self):
-        workflow = read_doc("references/workflow.md").lower()
-        stage_map = workflow.split("## stage map and banner requirement", 1)[1].split("high-sensitivity pubmed strategies", 1)[0]
-
-        for stage in [
-            "1. **question intake**",
-            "2. **seed intake**",
-            "4. **concept gate**",
-            "6. **mesh/pubmed exploration**",
-            "8. **block testing**",
-            "9. **validation**",
-            "11. **final qa**",
-            "12. **audit output**",
-        ]:
-            self.assertIn(stage, stage_map)
-
-        # Tiered reporting: full banners only at decision gates, one-line markers elsewhere.
-        self.assertGreaterEqual(stage_map.count("`full banner required`"), 3)
-        self.assertIn("`stage marker`", stage_map)
-        self.assertIn("exact reference files in force", stage_map)
-        self.assertIn("user/protocol decision needed", stage_map)
-        self.assertIn("before concept-block counts", workflow)
-        self.assertIn("before final parse checks", workflow)
-        self.assertIn("before rendering or saving the audit markdown file", workflow)
-
-    def test_framework_selection_states_when_user_question_is_needed(self):
-        doc = read_doc("references/framework-selection.md").lower()
-
-        self.assertIn("state the framework choice and reason", doc)
-        self.assertIn("state whether a framework question is needed", doc)
-        self.assertIn("no framework question is needed", doc)
-        self.assertIn("ask only that question and stop", doc)
-        self.assertIn("whether a framework question was needed, and why or why not", doc)
-
-    def test_concept_gate_asks_before_testing_optional_secondary_blocks(self):
-        doc = read_doc("references/concept-analysis-and-gating.md").lower()
-
-        self.assertIn("pre-mesh gate summary", doc)
-        self.assertIn("ask the user at the concept gate by default", doc)
-        self.assertIn("optional secondary `and` block", doc)
-        self.assertIn("outcome block", doc)
-        self.assertIn("safety block", doc)
-        self.assertIn("filter/limit", doc)
-        self.assertIn("focused variant", doc)
-        self.assertIn("unless the protocol already decides it", doc)
-        self.assertIn("pause and ask before testing or promoting", doc)
-        self.assertIn("do not use it to test unauthorized optional secondary blocks", doc)
-
-    def test_reference_documents_required_seed_branches(self):
-        doc = read_doc("references/concept-analysis-and-gating.md")
-        normalized = doc.lower()
-        workflow = read_doc("references/workflow.md").lower()
-
-        self.assertIn("formal concept analysis and concept gate", workflow)
-        self.assertLess(workflow.index("plain-language research/review question"), workflow.index("seed pmid decision"))
-        self.assertLess(workflow.index("seed pmid decision"), workflow.index("formal concept analysis and concept gate"))
-        self.assertLess(workflow.index("formal concept analysis and concept gate"), workflow.index("pre-mesh vocabulary/domain brainstorm"))
-        self.assertLess(workflow.index("pre-mesh vocabulary/domain brainstorm"), workflow.index("mesh/pubmed exploration"))
-        self.assertLess(workflow.index("formal concept analysis and concept gate"), workflow.index("mesh/pubmed exploration"))
-
-        self.assertIn("with seed pmids", normalized)
-        self.assertIn("with no seed pmids", normalized)
-        self.assertIn("limited seed fetch/mining", normalized)
-        self.assertLess(workflow.index("seed pmid decision"), workflow.index("limited seed fetch/mining"))
-        self.assertLess(workflow.index("limited seed fetch/mining"), workflow.index("formal concept analysis and concept gate"))
-        self.assertIn("not available - no seed pmids supplied", normalized)
-        self.assertIn("do not report true seed-derived mesh", normalized)
-        self.assertIn("known-item recall", normalized)
-
-        self.assertIn("goal-tracked concept gates", normalized)
-        self.assertIn("goal-tracking.md", normalized)
-        self.assertIn("social-science, psychosocial, behavioral, qualitative, health-services", normalized)
-        self.assertIn("ask one concise user-facing domain-framing question", normalized)
-        self.assertIn("minority stress", normalized)
-        self.assertIn("disclosure/concealment", normalized)
-
-    def test_goal_tracking_reference_owns_goal_rules(self):
-        doc = read_doc("references/goal-tracking.md")
-        normalized = doc.lower()
-        skill = read_doc("SKILL.md").lower()
-
-        for state in [
-            "goal_requested_intake_pending",
-            "goal_active_autonomous",
-            "goal_active_blocked",
-            "goal_completion_audit",
-        ]:
-            self.assertIn(state, doc)
-
-        self.assertIn("do not call `create_goal`", normalized)
-        self.assertIn("ask only whether the user has known relevant seed pmids", normalized)
-        self.assertIn("limited seed fetch/mining", normalized)
-        self.assertIn("concept-gate/filter decisions", normalized)
-        self.assertIn("token budgets", normalized)
-        self.assertIn("completion audit", normalized)
-        self.assertIn("suggested objective wording", normalized)
-        self.assertIn("`/goal` with no plain-language research question", normalized)
-        self.assertIn("`/goal` with a confirmed research question and no seed status", normalized)
-        self.assertIn("`/goal` with seeds and a dangerous optional concept", normalized)
-        self.assertIn("ask only for the research/review question", normalized)
-
-        self.assertIn("references/goal-tracking.md", skill)
-        self.assertIn("pre-goal intake rules", skill)
-        self.assertNotIn("goal_requested_intake_pending", skill)
-        self.assertNotIn("treat `/goal` as", skill)
-        self.assertNotIn("do not call `create_goal` yet", skill)
-
-    def test_reference_defines_ledger_roles_and_seed_behaviors(self):
-        doc = read_doc("references/concept-analysis-and-gating.md")
-        normalized = doc.lower()
-
-        for role in [
-            "essential `and` block",
-            "within-block synonym/term only",
-            "sensitivity-dangerous optional `and` block",
-            "methodological/filter concept",
-            "omitted concept",
-        ]:
-            self.assertIn(role, normalized)
-
-        for field in [
-            "`candidate_concept`",
-            "`framework_slot`",
-            "`seed_evidence`",
-            "`pre_gate_no_seed_evidence`",
-            "`post_gate_validation_evidence`",
-            "`recall_risk`",
-            "`and_block_admission`",
-            "`final_handling`",
-        ]:
-            self.assertIn(field, doc)
-
-        self.assertIn("with seed pmids", normalized)
-        self.assertIn("do not ask for seeds again", normalized)
-        self.assertIn("treat seed status as resolved", normalized)
-        self.assertIn("use limited seed fetch/mining before the concept gate", normalized)
-        self.assertIn("validate the final topic-only strategy against in-scope seeds", normalized)
-        self.assertIn("do not overfit", normalized)
-
-        self.assertIn("with no seed pmids", normalized)
-        self.assertIn("not available - no seed pmids supplied", normalized)
-        self.assertIn("pre-gate no-seed evidence", normalized)
-        self.assertIn("post-gate validation/audit evidence", normalized)
-        phase_1_no_seed = normalized.split("when no seed pmids are supplied", 1)[1].split("## gate output contract", 1)[0]
-        for forbidden in [
-            "do not use mesh sweeps",
-            "pubmed atm/query translations",
-            "sample-record patterns",
-            "concept-block counts",
-            "final qa",
-        ]:
-            self.assertIn(forbidden, phase_1_no_seed)
-        self.assertIn("do not report true seed-derived mesh", normalized)
-        self.assertIn("known-item recall", normalized)
-        self.assertIn("sample-record mesh patterns are not seed-derived evidence", normalized)
-        self.assertIn("and-block admission test", normalized)
-        self.assertIn("acceptance checks", normalized)
-        self.assertIn("concept-gate pilot-test protocol", normalized)
-        self.assertIn("phase 1 - pre-mesh admission check", normalized)
-        self.assertIn("phase 2 - post-block pilot checks", normalized)
-        self.assertIn("gate output contract", normalized)
-        self.assertIn("default if uncertain", normalized)
-        self.assertIn("do not use pasted boolean syntax", normalized)
-        self.assertNotIn("supplied boolean context", normalized)
-
-    def test_first_response_precedes_reference_navigation(self):
-        skill = read_doc("SKILL.md").lower()
-
-        self.assertLess(skill.index("## core goal"), skill.index("## first response"))
-        self.assertLess(skill.index("## first response"), skill.index("## required input"))
-        self.assertLess(skill.index("## first response"), skill.index("## canonical workflow"))
-        self.assertNotIn("## request router", skill)
-        self.assertNotIn("## build sequence", skill)
-        self.assertNotIn("## bundled tools and detailed workflow", skill)
-
-    def test_skill_requires_research_question_before_seed_intake(self):
-        skill = read_doc("SKILL.md").lower()
-        first_response = skill.split("## first response", 1)[1].split("## required input", 1)[0]
-
-        self.assertIn("first require an independently stated plain-language research/review question", first_response)
-        self.assertIn("ask only for the research/review question and stop", first_response)
-        self.assertLess(first_response.index("plain-language research/review question"), first_response.index("seed pmids"))
-        self.assertIn("after the plain-language research/review question is confirmed", first_response)
-
-    def test_pre_gate_seed_triage_policy_is_documented(self):
-        skill = read_doc("SKILL.md").lower()
-        first_response = skill.split("## first response", 1)[1].split("## required input", 1)[0]
-        workflow = read_doc("references/workflow.md").lower()
-        seed_doc = read_doc("references/seed-pmid-validation.md").lower()
-        concept_doc = read_doc("references/concept-analysis-and-gating.md").lower()
-        audit = read_doc("references/audit-template.md").lower()
-
-        for phrase in [
-            "normalize and deduplicate numeric pmids",
-            "malformed entries",
-            "not-found pmids",
-            "limited pre-gate seed fetch/mining",
-            "retracted",
-            "materially out of scope",
-            "exclude it, replace it, or retain it as a special validation seed",
-            "do not run broader pubmed exploration",
-        ]:
-            self.assertIn(phrase, first_response)
-
-        seed_section = workflow.split("## 2. ask once for seed pmids", 1)[1].split("## 3. run formal concept analysis", 1)[0]
-        for phrase in [
-            "malformed entries",
-            "missing or not-found pmids",
-            "exclude them from seed evidence",
-            "limited pre-gate seed fetch/mining",
-            "pause before the concept gate only when a fetched seed is retracted or appears materially out of scope",
-            "ordinary uncertainty is recorded",
-            "broader pubmed exploration",
-            "block testing",
-            "final qa",
-        ]:
-            self.assertIn(phrase, seed_section)
-
-        for phrase in [
-            "pre-gate seed triage",
-            "`pubmed_tool.py mine --pmids ... --output",
-            "`requested_pmids`",
-            "`found_pmids`",
-            "`missing_pmids`",
-            "titles",
-            "abstract text",
-            "publication types",
-            "mesh headings",
-            "keywords",
-            "missing or not-found pmids",
-            "retain it as a special validation seed",
-            "do not use malformed, missing, excluded, or unresolved seed records as term evidence",
-        ]:
-            self.assertIn(phrase, seed_doc)
-
-        for phrase in [
-            "pre-gate seed triage",
-            "document malformed and missing/not-found pmids",
-            "pause before the concept gate only for fetched seeds that are retracted or clearly out of scope",
-        ]:
-            self.assertIn(phrase, concept_doc)
-
-        for phrase in [
-            "pre-gate seed triage",
-            "malformed pmids",
-            "missing/not-found pmids",
-            "fetched seed records",
-            "retracted seeds",
-            "likely out-of-scope seeds",
-            "user/protocol decision when paused",
-        ]:
-            self.assertIn(phrase, audit)
-
-    def test_frontmatter_has_strong_triggers_and_metadata(self):
+class SkillContractTests(unittest.TestCase):
+    def test_frontmatter_uses_only_name_and_description_with_strong_triggers(self):
         skill = read_doc("SKILL.md")
-        frontmatter = skill.split("---", 2)[1].lower()
-        agent_metadata = read_doc("agents/openai.yaml").lower()
-
-        for trigger in [
+        frontmatter = skill.split("---", 2)[1]
+        keys = [line.split(":", 1)[0].strip() for line in frontmatter.splitlines() if ":" in line]
+        self.assertEqual(keys, ["name", "description"])
+        lower = frontmatter.lower()
+        for trigger in (
             "pubmed/medline",
             "systematic reviews",
             "scoping reviews",
-            "rapid reviews",
-            "evidence maps",
-            "narrative/evidence syntheses",
             "mesh",
-            "seed pmid",
-            "press",
+            "prescreen",
+            "held-out",
+            "press-informed",
             "prisma-s",
-        ]:
-            self.assertIn(trigger, frontmatter)
+        ):
+            self.assertIn(trigger, lower)
 
-        self.assertIn("license: mit", frontmatter)
-        self.assertIn("metadata:", frontmatter)
-        self.assertIn('  version: "1.0.0"', frontmatter)
-        self.assertNotIn("\nversion:", frontmatter)
-        self.assertIn("plain-language research/review question", agent_metadata)
-        self.assertLess(agent_metadata.index("plain-language research/review question"), agent_metadata.index("seed pmids"))
-        self.assertNotIn("ask for optional seed pmids first", agent_metadata)
+    def test_ui_metadata_matches_the_loop(self):
+        metadata = read_doc("agents/openai.yaml")
+        self.assertIn("$pubmed-search-builder", metadata)
+        self.assertIn("empirically", metadata.lower())
+        self.assertIn("critic loop", metadata.lower())
 
-    def test_required_input_rejects_existing_boolean_context(self):
-        skill = read_doc("SKILL.md")
-        normalized = skill.lower()
-        required_input = normalized.split("## required input", 1)[1].split("## goal tracking", 1)[0]
+    def test_plain_language_question_precedes_seed_intake_and_strategy_review(self):
+        skill = read_doc("SKILL.md").lower()
+        question = skill.index("require an independently stated plain-language")
+        seed = skill.index("ask once for optional known-relevant seed pmids")
+        review = skill.index("before inspecting the supplied strategy")
+        self.assertLess(question, seed)
+        self.assertIn("review objects, never as scope evidence", skill[review:])
+        self.assertIn("do not search pubmed or the web to answer", skill)
 
-        self.assertNotIn("use one mode only", required_input)
-        self.assertNotIn("**build mode**", required_input)
-        self.assertIn("independently stated topic, review question, or protocol-style question", required_input)
-        self.assertIn("seed pmids or seed papers", required_input)
-        self.assertIn("no-seed workflow", required_input)
-        self.assertIn("boolean syntax", required_input)
-        self.assertIn("pubmed line set", required_input)
-        self.assertIn("strategy fragment", required_input)
-        self.assertIn("ask only for the topic or review question in plain language", required_input)
-        self.assertIn("do not ask for seed pmids in the same response", required_input)
-        self.assertIn("ignore the pasted syntax", required_input)
-        self.assertIn("restate or confirm the topic/review question in plain language before asking for seed pmids", required_input)
-        self.assertIn("never use pasted boolean terms, operators, filters, line numbers, field tags, or line structure", required_input)
-        self.assertNotIn("optional build context", normalized)
-        self.assertNotIn("source of candidate terms", normalized)
-        self.assertNotIn("reuse", required_input)
-        self.assertNotIn("strategy review mode", required_input)
-        self.assertNotIn("syntax/logic review", required_input)
-        self.assertNotIn("build mode", normalized)
-        self.assertNotIn("existing boolean or syntax provided", normalized)
-        self.assertNotIn("review-existing-strategy.md", normalized)
+    def test_only_four_user_facing_markers_and_probes_before_adoption(self):
+        skill = read_doc("SKILL.md").lower()
+        for marker in ("`intake`", "`scope lock`", "`empirical build and critic loop`", "`handoff`"):
+            self.assertIn(marker, skill)
+        self.assertIn("read-only pubmed probes", skill)
+        self.assertIn("before asking the user to adopt", skill)
 
-    def test_workflow_owns_canonical_sequence_and_mental_model(self):
+    def test_top_level_routes_to_specialist_references(self):
+        skill = read_doc("SKILL.md").lower()
+        for reference in (
+            "workflow.md",
+            "framework-selection.md",
+            "concept-analysis-and-gating.md",
+            "candidate-screening.md",
+            "press-critic.md",
+            "mesh-and-pubmed-tools.md",
+            "tiab-expansion.md",
+            "seed-pmid-validation.md",
+            "no-seed-recall-estimation.md",
+            "audit-template.md",
+            "goal-tracking.md",
+        ):
+            self.assertIn(reference, skill)
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_scope_lock_precedes_candidate_and_objective_evidence(self):
         workflow = read_doc("references/workflow.md").lower()
-
-        sequence_items = [
-            "plain-language research/review question",
-            "seed pmid decision",
-            "limited seed fetch/mining, if supplied, only to inform concept analysis",
-            "formal concept analysis and concept gate",
-            "pre-mesh vocabulary/domain brainstorm for weak-mesh or social-science concepts",
-            "mesh/pubmed exploration",
-            "text-word, proximity, and wildcard candidate generation",
-            "concept-block construction and testing",
-            "seed pmid validation, if seeds were provided",
-            "revision",
-            "final query hygiene and qa",
-            "save audit markdown file with decision ledger",
-            "documented draft strategy for human press peer review",
+        sequence = [
+            "`scope-lock`",
+            "`candidate-discovery`",
+            "`candidate-screening`",
+            "`objective-evidence`",
+            "`block-testing`",
+            "`validation`",
+            "`critic-review`",
+            "`revision`",
+            "`final-qa`",
+            "`audit-output`",
         ]
+        positions = [workflow.index(item) for item in sequence]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("save `retrieval_scope_v1.json`", workflow)
+        self.assertIn("before any pubmed record fetch", workflow)
 
-        for item in sequence_items:
-            self.assertIn(item, workflow)
-        for before, after in zip(sequence_items, sequence_items[1:]):
-            self.assertLess(workflow.index(before), workflow.index(after))
+    def test_workflow_defines_a_repeating_empirical_critic_loop(self):
+        workflow = read_doc("references/workflow.md").lower()
+        self.assertIn("stages 5-9 form a loop", workflow)
+        self.assertIn("state reopen-scope", workflow)
+        self.assertIn("save a new scope version", workflow)
+        self.assertIn("repeat objective evidence, testing, validation, and critic review", workflow)
+        self.assertIn("no open must-fix or should-fix finding", workflow)
 
-        self.assertIn("(mesh layer or title/abstract layer or proximity/wildcard layer)", workflow)
+    def test_workflow_preserves_high_sensitivity_layer_model(self):
+        workflow = read_doc("references/workflow.md").lower()
+        self.assertIn("mesh/scr layer or title/abstract layer", workflow)
+        self.assertIn("prefer fewer required `and` blocks", workflow)
         self.assertIn("mesh does not replace free text", workflow)
         self.assertIn("free text does not replace mesh", workflow)
-        self.assertIn("proximity and wildcards do not replace either", workflow)
-        self.assertIn("do not overwrite it silently", workflow)
-        self.assertIn("report the saved audit markdown path", workflow)
-        self.assertIn("not performed", workflow)
-        self.assertIn("not available", workflow)
-        self.assertIn("not applicable", workflow)
-        self.assertIn("draft pending human peer review (press", workflow)
 
-    def test_tool_sequence_runs_concept_gate_before_exploration(self):
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
-        # The duplicated 20-step "Suggested Operational Sequence" was collapsed in Phase 1;
-        # workflow.md owns the canonical order and the tools doc keeps only a tool-to-stage map.
-        self.assertNotIn("## suggested operational sequence", tools_doc)
-        self.assertIn("## tool-to-stage quick map", tools_doc)
-        sequence = tools_doc.split("## tool-to-stage quick map", 1)[1].split("## do not fabricate", 1)[0]
-
-        self.assertIn("workflow.md", sequence)
-        self.assertIn("owns the canonical build sequence", sequence)
-        # The concept gate still precedes MeSH/PubMed exploration in the map.
-        self.assertLess(sequence.index("concept gate"), sequence.index("mesh/pubmed exploration"))
-
-    def test_workflow_links_specialist_references_at_relevant_steps(self):
+    def test_read_only_variants_are_tested_before_narrowing_adoption(self):
         workflow = read_doc("references/workflow.md").lower()
+        self.assertIn("run reversible, read-only diagnostic comparisons", workflow)
+        self.assertIn("may be adopted only after the user/protocol accepts", workflow)
+        self.assertIn("gather the comparison evidence before asking", workflow)
 
-        for reference in [
-            "concept-analysis-and-gating.md",
-            "goal-tracking.md",
-            "tiab-expansion.md",
-            "mesh-and-pubmed-tools.md",
-            "wildcard-and-truncation.md",
-            "bramer-reciprocal-gap-analysis.md",
-            "validated-methodological-filters-and-hedges.md",
-            "seed-pmid-validation.md",
-            "audit-template.md",
-            "prisma-s-reporting.md",
-        ]:
-            self.assertIn(reference, workflow)
-
-        self.assertLess(workflow.index("mesh-and-pubmed-tools.md"), workflow.index("mesh_tool.py sweep"))
-        self.assertLess(workflow.index("wildcard-and-truncation.md"), workflow.index("truncat*[tiab]"))
-        self.assertLess(workflow.index("seed-pmid-validation.md"), workflow.index("## 7a. record search design alternatives"))
-        self.assertLess(workflow.index("prisma-s-reporting.md"), workflow.index("record:"))
-
-    def test_noncanonical_docs_reference_workflow_without_full_duplication(self):
-        skill = read_doc("SKILL.md").lower()
-        readme = read_doc("README.md").lower()
-        concept_doc = read_doc("references/concept-analysis-and-gating.md").lower()
-
-        for doc in [skill, readme, concept_doc]:
-            self.assertIn("workflow.md", doc)
-            self.assertNotIn("-> seed pmid", doc)
-            self.assertNotIn("-> formal concept analysis", doc)
-            self.assertNotIn("(mesh layer or title/abstract layer or proximity/wildcard layer)", doc)
-            self.assertNotIn("mesh does not replace free text", doc)
-
-    def test_primary_docs_link_to_formal_concept_analysis(self):
-        skill = read_doc("SKILL.md").lower()
+    def test_final_handoff_uses_combined_gate_and_human_press(self):
         workflow = read_doc("references/workflow.md").lower()
-        tiab = read_doc("references/tiab-expansion.md").lower()
+        self.assertIn("--require-complete-loop", workflow)
+        self.assertIn("draft pending human press peer review", workflow)
+        self.assertIn("every critic round", workflow)
+        self.assertIn("revision-cycle ledger", workflow)
 
-        self.assertIn("references/concept-analysis-and-gating.md", skill)
-        self.assertIn("references/goal-tracking.md", skill)
-        self.assertFalse((ROOT / "references/review-existing-strategy.md").exists())
-        self.assertIn("references/workflow.md", skill)
-        self.assertIn("canonical build sequence", skill)
-        self.assertIn("high-sensitivity mental model", skill)
-        self.assertIn("seed/no-seed branches", skill)
-        self.assertIn("pre-goal intake rules", skill)
 
-        self.assertIn("concept-analysis-and-gating.md", workflow)
-        self.assertIn("goal-tracking.md", workflow)
-        self.assertIn("formal concept analysis and concept gate", workflow)
-        self.assertIn("pre-mesh vocabulary/domain brainstorm", workflow)
-        self.assertIn("before mesh lookup", workflow)
-        self.assertIn("do not call `create_goal` while seed status", workflow)
-        self.assertLess(workflow.index("formal concept analysis and concept gate"), workflow.index("pre-mesh vocabulary/domain brainstorm"))
-        self.assertLess(workflow.index("pre-mesh vocabulary/domain brainstorm"), workflow.index("mesh/pubmed exploration"))
+class CandidateEvidenceTests(unittest.TestCase):
+    def test_candidate_screening_schema_and_role_constraints_are_documented(self):
+        doc = read_doc("references/candidate-screening.md").lower()
+        for phrase in (
+            "user seed",
+            "discovery record",
+            "held-out validation record",
+            "heuristic neighbor",
+            "include`, `exclude`, or `uncertain`",
+            "`discovery`, `holdout`, `both`, `heuristic`, or `neither`",
+            "scripts/candidate_ledger.py",
+        ):
+            self.assertIn(phrase, doc)
+        self.assertIn("do not feed a related-record set directly to `term-rank`", doc)
 
-        self.assertIn("pre-mesh vocabulary/domain brainstorm", tiab)
-        self.assertIn("minority-stress", tiab)
-        self.assertIn("disclosure", tiab)
-        self.assertIn("unmet need", tiab)
+    def test_seed_evidence_cannot_precede_scope_lock(self):
+        doc = read_doc("references/seed-pmid-validation.md").lower()
+        self.assertIn("use them only after retrieval scope version 1 is locked", doc)
+        self.assertIn("do not fetch, mine, inspect, expand", doc)
+        self.assertIn("screen each found record against the locked scope", doc)
+        self.assertIn("non-independent reused seed", doc)
 
-    def test_no_seed_objective_term_path_is_documented(self):
-        concept_doc = read_doc("references/concept-analysis-and-gating.md").lower()
-        tiab = read_doc("references/tiab-expansion.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
+    def test_objective_term_ranking_uses_screened_discovery_records(self):
+        doc = read_doc("references/tiab-expansion.md").lower()
+        self.assertIn("validated candidate ledger", doc)
+        self.assertIn("pass only pmids assigned `discovery` or `both`", doc)
+        self.assertIn("high overlap and similarity prioritize screening", doc)
 
-        # The no-seed branch (post-gate) must route to objective term ranking,
-        # not leave term selection to LLM eyeballing.
-        no_seed_branch = concept_doc.split("## with no seed pmids", 1)[1]
-        self.assertIn("--relevant-query-file", no_seed_branch)
-        self.assertIn("pilot relevant-set query", no_seed_branch)
-        self.assertIn("not validated recall", no_seed_branch)
+    def test_no_seed_heuristic_requires_screened_anchors(self):
+        doc = read_doc("references/no-seed-recall-estimation.md").lower()
+        self.assertIn("candidate anchors are screened", doc)
+        self.assertIn("candidate_ledger.py", doc)
+        self.assertIn("convenience one-liner", doc)
+        self.assertIn("does not satisfy candidate-screening integrity", doc)
 
-        # tiab-expansion owns the how-to for building a no-seed pilot relevant set.
-        self.assertIn("--relevant-query-file", tiab)
-        self.assertIn("pilot relevant-set query", tiab)
-        self.assertIn("high-precision", tiab)
 
-        # workflow step 5 and the tools reference both expose the no-seed route.
-        self.assertIn("--relevant-query-file", workflow)
-        self.assertIn("--relevant-query-file", tools_doc)
-        self.assertIn("term-rank --relevant-query-file pilot.txt", tools_doc)
+class CriticAndAuditTests(unittest.TestCase):
+    def test_critic_schema_routing_and_press_distinction_are_documented(self):
+        doc = read_doc("references/press-critic.md").lower()
+        for phrase in (
+            "fresh context",
+            "reviewed_domains",
+            "must-fix",
+            "should-fix",
+            "lexical",
+            "structural",
+            "scope",
+            "filter",
+            "syntax",
+            "scripts/critic_tool.py",
+            "does not constitute press peer review",
+        ):
+            self.assertIn(phrase, doc)
 
-    def test_zero_hit_term_decision_is_documented(self):
-        workflow = read_doc("references/workflow.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
+    def test_audit_template_contains_scope_candidate_critic_and_revision_sections(self):
         audit = read_doc("references/audit-template.md").lower()
+        for heading in (
+            "## retrieval-scope versions",
+            "## candidate evidence screening",
+            "## press-informed internal critic rounds",
+            "## revision-cycle ledger",
+            "## press 2015 element coverage",
+            "## peer review status",
+        ):
+            self.assertIn(heading, audit)
+        self.assertIn("automated internal qa, not press peer review", audit)
 
-        # Final hygiene removes genuinely zero-hit terms and documents them by default,
-        # while still offering the user the option to keep any.
-        self.assertIn("phrases_not_found", workflow)
-        self.assertIn("remove and document", workflow)
-        self.assertIn("option to keep any as an intentional zero-hit term", workflow)
-        self.assertIn("duplicate_term", workflow)
+    def test_prisma_s_does_not_mislabel_internal_critic_as_peer_review(self):
+        doc = read_doc("references/prisma-s-reporting.md").lower()
+        self.assertIn("press-informed internal critic", doc)
+        self.assertIn("do not satisfy item 14", doc)
 
-        # The tools reference documents the new hook issues and the duplicate check.
-        self.assertIn("phrases_not_found", tools_doc)
-        self.assertIn("fields_not_found", tools_doc)
-        self.assertIn("duplicate_term", tools_doc)
 
-        # The audit ledger captures the zero-hit/duplicate decision.
-        self.assertIn("zero-hit", audit)
+class SupportingGuardrailTests(unittest.TestCase):
+    def test_record_content_requires_saved_json(self):
+        tools = read_doc("references/mesh-and-pubmed-tools.md").lower()
+        self.assertIn("record-content commands", tools)
+        self.assertIn("inspect the saved json", tools)
+        self.assertIn("--output", tools)
 
-    def test_singular_plural_morphology_guardrail_is_documented(self):
-        workflow = read_doc("references/workflow.md").lower()
-        tiab = read_doc("references/tiab-expansion.md").lower()
-        wildcard = read_doc("references/wildcard-and-truncation.md").lower()
-        audit = read_doc("references/audit-template.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
-
-        self.assertIn("morphology pass", workflow)
-        self.assertIn("phrase-final wildcard candidate", workflow)
-        self.assertIn("phrase-anchored or concept-specific", workflow)
-        self.assertIn("generic one-token wildcard stems require explicit testing/rationale", workflow)
-        self.assertIn("singular_plural_wildcard_review", workflow)
-        self.assertIn("explicit forms retained", workflow)
-
-        self.assertIn("document the morphology decision", tiab)
-        self.assertIn("tested or context-safe wildcard stem", tiab)
-        self.assertIn("phrase-anchored or concept-specific wildcard candidates", tiab)
-        self.assertIn("quoted `[tiab]` phrase family", tiab)
-        self.assertIn("explicit singular/plural forms", tiab)
-        self.assertNotIn("### 1. safe wildcard stem", tiab)
-
-        self.assertIn("usually reasonable candidate stems", wildcard)
-        self.assertIn("phrase-anchored or concept-specific stem", wildcard)
-        self.assertIn("broad single-token stems are candidates only", wildcard)
-        self.assertIn("phrase-final wildcard", wildcard)
-        self.assertIn('"immune checkpoint inhibitor*"[tiab]', wildcard)
-        self.assertIn("explicit singular/plural phrase variants remain acceptable", wildcard)
-
-        self.assertIn("morphology review for singular/plural", audit)
-        self.assertIn("phrase-anchored/concept-specific wildcard candidate", audit)
-        self.assertIn("singular_plural_wildcard_review", tools_doc)
-
-    def test_final_validation_cleanup_step_is_documented(self):
-        workflow = read_doc("references/workflow.md").lower()
-
-        # An explicit, required closing gate that tests, reports, and offers remediation.
-        self.assertIn("final validation and cleanup offer", workflow)
-        self.assertIn("required closing gate", workflow)
-        self.assertIn("apply the offered cleanups", workflow)
-        # Recall-first guardrail: recall-reducing items (not zero-hit terms) stay offer-only and default to keep.
-        self.assertIn("offer-only and default to keep", workflow)
-        # Approved cleanups are applied, then the count is re-confirmed.
-        self.assertIn("confirm the delivered count", workflow)
-        # It is also a stop condition.
-        self.assertIn("final validation and cleanup offer has been presented", workflow)
-
-    def test_bramer_reciprocal_gap_analysis_is_conditional_and_documented(self):
-        ref_path = ROOT / "references" / "bramer-reciprocal-gap-analysis.md"
-        self.assertTrue(ref_path.exists(), "bramer-reciprocal-gap-analysis.md reference must exist")
-        ref = ref_path.read_text(encoding="utf-8").lower()
+    def test_bramer_and_filter_references_remain_routed(self):
         skill = read_doc("SKILL.md").lower()
         workflow = read_doc("references/workflow.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
-        audit = read_doc("references/audit-template.md").lower()
-
-        for phrase in [
-            "when to run",
-            "(mesh/scr layer) not (text-word layer)",
-            "(text-word layer) not (mesh/scr layer)",
-            "reasoned waiver",
-            "counts alone are not enough",
-            "temporary diagnostic gap queries",
-            "do not copy diagnostic `not` into the final strategy",
-        ]:
-            self.assertIn(phrase, ref)
-
-        self.assertIn("references/bramer-reciprocal-gap-analysis.md", skill)
+        self.assertIn("gap-analysis", skill)
         self.assertIn("bramer-reciprocal-gap-analysis.md", workflow)
-        self.assertIn("conditional reciprocal gap analysis", workflow)
-        self.assertIn("temporary checks, not final-strategy exclusions", workflow)
+        self.assertIn("validated pubmed filter", workflow)
+        self.assertIn("validated-methodological-filters-and-hedges.md", read_doc("references/prisma-s-reporting.md").lower())
 
-        self.assertIn("bramer reciprocal gap analysis", tools_doc)
-        self.assertIn("pubmed_tool.py batch bramer_gap_queries.json", tools_doc)
-        self.assertIn("do not copy them into the final strategy", tools_doc)
-
-        # The term-diff command automates both gap directions in one call; it is offered (additively)
-        # alongside the manual search/sample/batch route in the reference and the tools doc.
-        self.assertIn("term-diff", ref)
-        self.assertIn("term-diff", tools_doc)
-
-        # The conditional gap-analysis status is machine-checkable via the separate opt-in gate.
-        self.assertIn("--require-gap-analysis", tools_doc)
-        self.assertIn("--require-gap-analysis", ref)
-        self.assertIn("separate from `--require-coverage`", tools_doc)
-
-        for phrase in [
-            "bramer reciprocal gap analysis",
-            "performed / waived / not applicable / not performed",
-            "mesh/scr not text-word",
-            "text-word not mesh/scr",
-            "gap samples inspected",
-            "waiver rationale",
-        ]:
-            self.assertIn(phrase, audit)
-
-    def test_run_manifest_is_canonical_output(self):
-        skill = read_doc("SKILL.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
-        audit = read_doc("references/audit-template.md").lower()
-
-        # SKILL.md Output Format names the canonical run manifest and the five recorded facts.
-        output_format = skill.split("## output format", 1)[1]
-        self.assertIn("run_manifest.json", output_format)
-        for field in ["command", "output path", "date", "count", "superseded"]:
-            self.assertIn(field, output_format)
-
-        # workflow.md saves the manifest at audit output: after the audit Markdown, before PRESS handoff.
-        self.assertIn("run_manifest.json", workflow)
-        self.assertLess(
-            workflow.index("save audit markdown file with decision ledger"),
-            workflow.index("run_manifest.json"),
-        )
-        self.assertLess(
-            workflow.index("run_manifest.json"),
-            workflow.index("documented draft strategy for human press peer review"),
-        )
-
-        # The tools reference documents the helper script and the manifest file.
-        self.assertIn("manifest_tool.py", tools_doc)
-        self.assertIn("run_manifest.json", tools_doc)
-
-        # The audit template Reporting notes point to the manifest.
-        self.assertIn("run manifest", audit)
-        self.assertIn("run_manifest.json", audit)
-
-    def test_final_strategy_handoff_offers_complete_audit_markdown(self):
-        skill = read_doc("SKILL.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-
-        output_format = skill.split("## output format", 1)[1]
-        self.assertIn("final-strategy handoff rule", output_format)
-        self.assertIn("whenever a final pubmed search strategy has been generated or presented", output_format)
-        self.assertIn("explicitly offer the complete markdown audit file", output_format)
-        self.assertIn("for completed builds, generate and save the audit markdown by default", output_format)
-        self.assertIn("every workflow stage", output_format)
-        self.assertIn("user/protocol decision", output_format)
-        self.assertIn("search-design decision", output_format)
-        self.assertIn("evidence file reviewed", output_format)
-        self.assertIn("rationale", output_format)
-        self.assertIn("do not claim the audit file exists until it has been saved", output_format)
-
-        self.assertIn("whenever a final pubmed search strategy is generated or presented", workflow)
-        self.assertIn("complete markdown audit file", workflow)
-        self.assertIn("explicitly offered when the user paused before audit output", workflow)
-
-    def test_record_content_command_docs_require_saved_json(self):
-        for path in markdown_docs():
-            text = path.read_text(encoding="utf-8")
-            for line in text.splitlines():
-                stripped = line.strip()
-                if "pubmed_tool.py fetch --pmids" in stripped:
-                    self.assertIn("--output", stripped, msg=str(path))
-                if stripped.startswith("python ") and "pubmed_tool.py mine --pmids" in stripped:
-                    self.assertIn("--output", stripped, msg=str(path))
-                    self.assertNotIn("--summary", stripped, msg=str(path))
-                if stripped.startswith("python ") and "pubmed_tool.py sample" in stripped:
-                    self.assertIn("--output", stripped, msg=str(path))
-                    self.assertNotIn("--summary", stripped, msg=str(path))
-
-        skill = read_doc("SKILL.md").lower()
-        mesh_tools = read_doc("references/mesh-and-pubmed-tools.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-        audit_template = read_doc("references/audit-template.md").lower()
-        for doc in (skill, mesh_tools):
-            self.assertIn("fetch", doc)
-            self.assertIn("mine", doc)
-            self.assertIn("sample", doc)
-            self.assertIn("record-content commands", doc)
-            self.assertIn("tolerated as a no-op", doc)
-            self.assertIn("inspect the saved json", doc)
-        self.assertIn("no reviewed json, no decision", workflow)
-        self.assertIn("receipt-only stdout from `fetch`, `mine`, or `sample` cannot support", workflow)
-        self.assertIn("record-content evidence reviewed", audit_template)
-        self.assertIn("receipt-only stdout used as decision evidence", audit_template)
-
-    def test_no_seed_recall_offer_is_documented(self):
-        ref_path = ROOT / "references" / "no-seed-recall-estimation.md"
-        self.assertTrue(ref_path.exists(), "no-seed-recall-estimation.md reference must exist")
-        ref = ref_path.read_text(encoding="utf-8").lower()
-        skill = read_doc("SKILL.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-        tools_doc = read_doc("references/mesh-and-pubmed-tools.md").lower()
-
-        # The reference owns the pipeline, the circularity warning, the heuristic label, and the offer.
-        self.assertIn("optional", ref)
-        self.assertIn("circularity", ref)
-        self.assertIn("not validated sensitivity", ref)
-        self.assertIn("related", ref)
-        self.assertIn("recall", ref)
-        self.assertIn("resolve-recall-offer", ref)
-        for outcome in ["done", "declined", "not-applicable"]:
-            self.assertIn(outcome, ref)
-
-        # SKILL.md lists the reference and names the offer + opt-in gate.
-        self.assertIn("references/no-seed-recall-estimation.md", skill)
-        self.assertIn("resolve-recall-offer", skill)
-        self.assertIn("--require-recall-offer", skill)
-
-        # workflow.md offers it at the Validation stage on a no-seed build and points to the reference.
-        self.assertIn("no-seed-recall-estimation.md", workflow)
-        self.assertIn("optional heuristic recall check", workflow)
-        self.assertIn("resolve-recall-offer", workflow)
-
-        # The tools reference documents the state command and the opt-in flag.
-        self.assertIn("resolve-recall-offer", tools_doc)
-        self.assertIn("--require-recall-offer", tools_doc)
-
-        # Seed-gate vocabulary (Task 8a): no-seed builds record `seed none` for auto-detection.
-        self.assertIn("resolve-gate seed none", workflow)
-        self.assertIn("`none`", tools_doc)
-        self.assertIn("reminders", tools_doc)
-
-    def test_recall_first_workflow_breadth_and_low_recall_gates_are_documented(self):
-        concept_doc = read_doc("references/concept-analysis-and-gating.md").lower()
-        recall_doc = read_doc("references/no-seed-recall-estimation.md").lower()
-        workflow = read_doc("references/workflow.md").lower()
-        anti_patterns = read_doc("references/anti-patterns.md")
-        anti_patterns_lower = anti_patterns.lower()
-
-        for phrase in [
-            "scope breadth check",
-            "could this topic be represented as a broader workflow",
-            "recall first",
-            "title/abstract screening",
-            "full-text screening",
-            "study selection",
-            "data extraction",
-            "risk of bias",
-            "synthesis",
-            "review drafting",
-        ]:
-            self.assertIn(phrase, concept_doc)
-
-        self.assertIn("below `70%`", recall_doc)
-        self.assertIn("below `60%`", recall_doc)
-        self.assertIn("low heuristic recall is an action gate", recall_doc)
-        self.assertIn("missed-record inspection", recall_doc)
-        self.assertIn("out-of-scope pmid table", recall_doc)
-        self.assertIn("do not proceed to audit output", recall_doc)
-
-        self.assertIn("late-arriving gold-standard pmids", workflow)
-        self.assertIn("final strategy cannot be handed off with missed in-scope seeds or gold-standard pmids", workflow)
-        self.assertIn("missed because the query failed", workflow)
-        self.assertIn("not retrieved because the pmid appears out of scope", workflow)
-        self.assertIn("do not proceed to audit output until the revised query is retested", workflow)
-
-        self.assertIn("over-specific workflow block", anti_patterns_lower)
-        self.assertIn("searching, screening, study selection, evidence synthesis", anti_patterns_lower)
-        self.assertIn("LLaMA[tiab]", anti_patterns)
-        self.assertIn('"Llama-3"[tiab]', anti_patterns)
-
-    def test_low_count_plausibility_check_is_documented_as_diagnostic_gate(self):
-        workflow = read_doc("references/workflow.md").lower()
-        low_count_doc = read_doc("references/low-count-plausibility.md").lower()
-        recall_doc = read_doc("references/no-seed-recall-estimation.md").lower()
-        audit = read_doc("references/audit-template.md").lower()
-        anti_patterns = read_doc("references/anti-patterns.md").lower()
-
-        for phrase in [
-            "low-count plausibility check",
-            "final **topic-only** strategy retrieves `<500` records",
-            "references/low-count-plausibility.md",
-            "hooks_tool.py low-count-review",
-            "manifest_tool.py show --require-low-count-review",
-        ]:
-            self.assertIn(phrase, workflow)
-
-        for phrase in [
-            "a final topic-only count below 500 is a trigger for review",
-            "do not expand automatically just to exceed 500 records",
-            "relaxed variant is a test, not an adoption requirement",
-            "the hook does not run pubmed, rewrite the strategy, or decide relevance",
-            "manifest_tool.py show --manifest run_manifest.json",
-            "--require-low-count-review",
-        ]:
-            self.assertIn(phrase, low_count_doc)
-
-        self.assertIn("not as proof of precision", workflow)
-        self.assertIn("if the final topic-only strategy retrieved `<500` records", workflow)
-        self.assertIn("before/after counts were documented", workflow)
-
-        self.assertIn("final topic-only count below `<500`", recall_doc)
-        self.assertIn("strengthen the case for running the optional no-seed heuristic recall check", recall_doc)
-        self.assertIn("never requires automatic expansion", recall_doc)
-
-        self.assertIn("low-count plausibility check", audit)
-        self.assertIn("final topic-only count `<500` triggered check", audit)
-        self.assertIn("expansion/retest decision", audit)
-        self.assertIn("final retest count", audit)
-
-        self.assertIn("treating low count as precision", anti_patterns)
-        self.assertIn("do not expand automatically just to exceed 500 records", anti_patterns)
-        self.assertIn("document before/after counts", anti_patterns)
+    def test_goal_completion_uses_complete_loop_gate(self):
+        goal = read_doc("references/goal-tracking.md").lower()
+        self.assertIn("goal_requested_intake_pending", goal)
+        self.assertIn("do not call `create_goal`", goal)
+        self.assertIn("--require-complete-loop", goal)
 
 
 if __name__ == "__main__":

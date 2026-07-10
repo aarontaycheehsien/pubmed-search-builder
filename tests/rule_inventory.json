@@ -1,146 +1,126 @@
 {
   "_about": {
-    "purpose": "Phase 0 refactor safety net. Machine-checkable inventory of normative rules, their canonical owner doc, where they may be linked, and where they must NOT be restated. Drives tests/test_rule_inventory.py. Adding/moving doc prose in later phases must keep this inventory green.",
-    "format_note": "JSON (not YAML) so the test suite stays standard-library-only, matching the skill's no-dependencies policy.",
+    "purpose": "Machine-checkable inventory of the skill's canonical normative rules after the scope-first conceptual/objective/critic refactor.",
+    "format_note": "JSON keeps the test standard-library-only.",
     "status_values": {
-      "canonical": "Rule already lives in exactly one owner; anti-duplication is enforced now.",
-      "duplicated-pending": "Rule is currently restated across several docs. Phase 1-4 will collapse it; until then the test only RECORDS the duplication, it does not fail on it. Flip to 'canonical' (and fill forbidden_locations) in the commit that deduplicates it."
-    },
-    "field_reference": {
-      "assertions": "lowercased substrings that MUST appear in canonical_owner",
-      "pointer_locations": "docs that must mention the owner's filename (a link, not a restatement)",
-      "forbidden_locations": "[{file, signatures[]}] substrings that must NOT appear outside the owner (anti-duplication)",
-      "cross_links": "[{file, must_contain[]}] reference paths that must appear in file",
-      "ordering": "[{file, sequence[]}] lowercased substrings that must appear in this order within file",
-      "dup_signature": "for duplicated-pending: a lowercased substring whose spread across docs is the duplication being tracked",
-      "guarded_by": "existing test method in test_concept_analysis_docs.py, or 'none' for coverage added by Phase 0"
+      "canonical": "Rule lives in its named owner and required pointers remain present.",
+      "duplicated-pending": "Temporary deduplication target."
     }
   },
-
   "rules": [
     {
-      "id": "workflow.canonical-sequence-and-mental-model",
-      "rule": "workflow.md owns the 13-step build sequence and the MeSH/free-text/proximity mental model; primary docs link, never restate.",
+      "id": "workflow.scope-objective-critic-loop",
+      "rule": "workflow.md owns the scope-first repeating build, validation, critic, and revision sequence.",
       "canonical_owner": "references/workflow.md",
       "assertions": [
-        "plain-language research/review question",
-        "formal concept analysis and concept gate",
-        "(mesh layer or title/abstract layer or proximity/wildcard layer)",
+        "stages 5-9 form a loop",
+        "save `retrieval_scope_v1.json`",
+        "repeat objective evidence, testing, validation, and critic review",
+        "--require-complete-loop",
         "mesh does not replace free text",
-        "free text does not replace mesh",
-        "proximity and wildcards do not replace either"
+        "free text does not replace mesh"
       ],
-      "pointer_locations": ["SKILL.md", "README.md", "references/concept-analysis-and-gating.md"],
-      "forbidden_locations": [
-        {"file": "SKILL.md", "signatures": ["(mesh layer or title/abstract layer or proximity/wildcard layer)", "mesh does not replace free text"]},
-        {"file": "README.md", "signatures": ["(mesh layer or title/abstract layer or proximity/wildcard layer)", "mesh does not replace free text"]},
-        {"file": "references/concept-analysis-and-gating.md", "signatures": ["(mesh layer or title/abstract layer or proximity/wildcard layer)", "mesh does not replace free text"]}
-      ],
-      "guarded_by": "test_noncanonical_docs_reference_workflow_without_full_duplication",
+      "pointer_locations": ["SKILL.md", "references/concept-analysis-and-gating.md"],
+      "guarded_by": "none",
       "status": "canonical"
     },
     {
-      "id": "concept.ledger-roles-and-admission-test",
-      "rule": "concept-analysis-and-gating.md owns the role taxonomy, the concept-analysis ledger fields, and the AND-block admission test.",
+      "id": "concept.roles-fragility-admission",
+      "rule": "concept-analysis-and-gating.md owns concept roles, fragility, and AND-block admission.",
       "canonical_owner": "references/concept-analysis-and-gating.md",
       "assertions": [
         "essential `and` block",
         "within-block synonym/term only",
         "sensitivity-dangerous optional `and` block",
-        "methodological/filter concept",
-        "omitted concept",
-        "`candidate_concept`",
-        "`and_block_admission`",
+        "fragility scoring rubric",
         "and-block admission test",
-        "acceptance checks",
         "default if uncertain"
       ],
       "pointer_locations": ["SKILL.md", "references/workflow.md"],
-      "cross_links": [{"file": "references/workflow.md", "must_contain": ["concept-analysis-and-gating.md", "anti-patterns.md"]}],
-      "guarded_by": "test_reference_defines_ledger_roles_and_seed_behaviors",
+      "guarded_by": "none",
       "status": "canonical"
     },
     {
-      "id": "skill.stage-reporting-contract",
-      "rule": "SKILL.md owns the two-level stage-reporting contract and the six full-banner fields.",
-      "canonical_owner": "SKILL.md",
+      "id": "candidate.screen-before-mining",
+      "rule": "candidate-screening.md owns evidence roles, screening decisions, and discovery/holdout integrity.",
+      "canonical_owner": "references/candidate-screening.md",
       "assertions": [
-        "stage banner",
-        "`stage`",
-        "`reference(s) in force`",
-        "`doing now`",
-        "`allowed now`",
-        "`not doing yet`",
-        "`user decision needed`"
+        "discovery record",
+        "held-out validation record",
+        "heuristic neighbor",
+        "include`, `exclude`, or `uncertain`",
+        "do not feed a related-record set directly to `term-rank`",
+        "scripts/candidate_ledger.py"
       ],
-      "guarded_by": "test_skill_requires_stage_reporting_contract",
+      "pointer_locations": ["SKILL.md", "references/workflow.md", "references/seed-pmid-validation.md", "references/tiab-expansion.md"],
+      "guarded_by": "none",
+      "status": "canonical"
+    },
+    {
+      "id": "critic.internal-not-human-press",
+      "rule": "press-critic.md owns critic independence, schema, routing, and pass criteria while preserving human PRESS handoff.",
+      "canonical_owner": "references/press-critic.md",
+      "assertions": [
+        "fresh context",
+        "reviewed_domains",
+        "must-fix",
+        "classification",
+        "scripts/critic_tool.py",
+        "does not constitute press peer review"
+      ],
+      "pointer_locations": ["SKILL.md", "references/workflow.md"],
+      "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "goal.tracking-ownership",
-      "rule": "goal-tracking.md owns the /goal state machine; SKILL.md only links to it and must not restate the states.",
+      "rule": "goal-tracking.md owns the /goal state machine and completion audit.",
       "canonical_owner": "references/goal-tracking.md",
       "assertions": [
         "goal_requested_intake_pending",
         "goal_active_autonomous",
         "goal_active_blocked",
         "goal_completion_audit",
-        "do not call `create_goal`"
+        "--require-complete-loop"
       ],
       "pointer_locations": ["SKILL.md"],
-      "forbidden_locations": [
-        {"file": "SKILL.md", "signatures": ["goal_requested_intake_pending", "treat `/goal` as"]}
-      ],
-      "guarded_by": "test_goal_tracking_reference_owns_goal_rules",
-      "status": "canonical"
-    },
-    {
-      "id": "seed.pre-gate-triage",
-      "rule": "seed-pmid-validation.md owns pre-gate seed triage mechanics; other docs reference the policy.",
-      "canonical_owner": "references/seed-pmid-validation.md",
-      "assertions": [
-        "pre-gate seed triage",
-        "normalize and deduplicate numeric pmids",
-        "retain it as a special validation seed",
-        "do not use malformed, missing, excluded, or unresolved seed records as term evidence"
-      ],
-      "guarded_by": "test_pre_gate_seed_triage_policy_is_documented",
+      "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "tools.record-content-saved-json",
-      "rule": "mesh-and-pubmed-tools.md owns the record-content rule: fetch/mine/sample require --output and inspect saved JSON; a stray --summary is tolerated as a no-op.",
+      "rule": "mesh-and-pubmed-tools.md owns saved record-content evidence requirements.",
+      "canonical_owner": "references/mesh-and-pubmed-tools.md",
+      "assertions": ["record-content commands", "inspect the saved json", "--output"],
+      "pointer_locations": ["SKILL.md"],
+      "guarded_by": "none",
+      "status": "canonical"
+    },
+    {
+      "id": "tools.complete-loop-manifest",
+      "rule": "mesh-and-pubmed-tools.md documents versioned scope/candidate/critic state and the combined manifest gate.",
       "canonical_owner": "references/mesh-and-pubmed-tools.md",
       "assertions": [
-        "record-content commands",
-        "tolerated as a no-op",
-        "inspect the saved json"
+        "record-candidate-screen",
+        "record-critic",
+        "record-revision",
+        "--require-complete-loop",
+        "run_manifest.json"
       ],
       "pointer_locations": ["SKILL.md"],
-      "guarded_by": "test_record_content_command_docs_require_saved_json",
+      "guarded_by": "none",
       "status": "canonical"
     },
-    {
-      "id": "tools.run-manifest-canonical",
-      "rule": "mesh-and-pubmed-tools.md documents the manifest_tool.py helper and run_manifest.json provenance ledger.",
-      "canonical_owner": "references/mesh-and-pubmed-tools.md",
-      "assertions": ["manifest_tool.py", "run_manifest.json"],
-      "cross_links": [{"file": "references/audit-template.md", "must_contain": ["run_manifest.json"]}],
-      "guarded_by": "test_run_manifest_is_canonical_output",
-      "status": "canonical"
-    },
-
     {
       "id": "wildcard.current-limits-and-proximity-exclusion",
-      "rule": "wildcard-and-truncation.md owns current PubMed wildcard limits, wildcard testing, and the truncation/proximity mutual exclusion.",
+      "rule": "wildcard-and-truncation.md owns PubMed wildcard limits and proximity exclusion.",
       "canonical_owner": "references/wildcard-and-truncation.md",
       "assertions": [
         "current pubmed wildcard limits",
         "at least 4 characters before the first wildcard",
         "256 wildcard operators per query",
         "truncation and proximity are mutually exclusive",
-        "wildcard testing protocol",
-        "risky stems"
+        "wildcard testing protocol"
       ],
       "pointer_locations": ["references/workflow.md"],
       "guarded_by": "none",
@@ -148,152 +128,83 @@
     },
     {
       "id": "bramer.reciprocal-gap-analysis",
-      "rule": "bramer-reciprocal-gap-analysis.md owns the conditional diagnostic controlled-vocabulary/text-word reciprocal gap analysis and final-strategy NOT guardrail.",
+      "rule": "bramer-reciprocal-gap-analysis.md owns the conditional reciprocal gap check.",
       "canonical_owner": "references/bramer-reciprocal-gap-analysis.md",
       "assertions": [
-        "bramer reciprocal gap analysis",
         "(mesh/scr layer) not (text-word layer)",
         "(text-word layer) not (mesh/scr layer)",
         "reasoned waiver",
         "counts alone are not enough",
         "do not copy diagnostic `not` into the final strategy"
       ],
-      "pointer_locations": ["SKILL.md", "README.md", "references/workflow.md", "references/mesh-and-pubmed-tools.md"],
-      "cross_links": [{"file": "references/audit-template.md", "must_contain": ["bramer reciprocal gap analysis", "mesh/scr not text-word", "text-word not mesh/scr"]}],
-      "guarded_by": "test_bramer_reciprocal_gap_analysis_is_conditional_and_documented",
+      "pointer_locations": ["SKILL.md", "references/workflow.md", "references/mesh-and-pubmed-tools.md"],
+      "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "filters.validated-sources-and-ovid-warning",
-      "rule": "validated-methodological-filters-and-hedges.md owns the validated filter source families and the Ovid-to-PubMed translation warning.",
+      "rule": "validated-methodological-filters-and-hedges.md owns validated filter sources and translation warnings.",
       "canonical_owner": "references/validated-methodological-filters-and-hedges.md",
       "assertions": [
         "cochrane highly sensitive search strategy",
         "mcmaster health information research unit",
         "issg search filters resource",
         "do not paste ovid syntax into pubmed",
-        "sensitivity-maximising version",
-        "do not silently modify these filters"
+        "sensitivity-maximising version"
       ],
-      "pointer_locations": ["references/workflow.md", "references/prisma-s-reporting.md"],
+      "pointer_locations": ["SKILL.md", "references/workflow.md", "references/prisma-s-reporting.md"],
       "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "prisma-s.item-coverage",
-      "rule": "prisma-s-reporting.md owns the 16-item PRISMA-S mapping, including multi-database (Item 2), full strategy (Item 8), and peer review (Item 14).",
+      "rule": "prisma-s-reporting.md owns PRISMA-S mapping and the human peer-review distinction.",
       "canonical_owner": "references/prisma-s-reporting.md",
       "assertions": [
         "prisma-s",
-        "multi-database searching",
         "item 8. full search strategies",
-        "item 14. peer review"
+        "item 14. peer review",
+        "do not satisfy item 14"
       ],
-      "cross_links": [{"file": "references/prisma-s-reporting.md", "must_contain": ["validated-methodological-filters-and-hedges.md"]}],
-      "ordering": [{"file": "references/prisma-s-reporting.md", "sequence": ["item 8. full search strategies", "item 14. peer review"]}],
       "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "tiab.objective-term-ranking-and-proximity",
-      "rule": "tiab-expansion.md owns objective term-ranking interpretation (coverage/lift/background), PubMed proximity-operator behaviour, and source-grounded proximity review triggers.",
+      "rule": "tiab-expansion.md owns screened objective ranking and proximity review.",
       "canonical_owner": "references/tiab-expansion.md",
       "assertions": [
         "objective / data-driven term selection",
+        "validated candidate ledger",
         "coverage",
         "lift",
         "background_count",
-        "proximity searching",
-        "proximity review pass",
-        "source-grounded triggers",
-        "exact phrase(s), boolean `and`, and proximity variants",
-        "applied to proximity searches",
-        "truncation/wildcards"
+        "proximity review pass"
       ],
-      "cross_links": [{"file": "references/audit-template.md", "must_contain": ["proximity candidates tested", "proximity not applicable rationale"]}],
       "guarded_by": "none",
       "status": "canonical"
     },
     {
-      "id": "output.line-set",
-      "rule": "audit-template.md defines the numbered PubMed line-set section; audit_markdown.py renders it from concept_blocks (tested in test_audit_markdown.py::LineSetAndAppendixTests).",
+      "id": "output.audit-iteration-sections",
+      "rule": "audit-template.md owns scope, candidate, critic, revision, line-set, and PRISMA-S audit sections.",
       "canonical_owner": "references/audit-template.md",
       "assertions": [
+        "## retrieval-scope versions",
+        "## candidate evidence screening",
+        "## press-informed internal critic rounds",
+        "## revision-cycle ledger",
         "## search strategy (numbered line set)",
-        "| line | concept | search query | results |",
-        "topic (combined)"
+        "## prisma-s appendix (pubmed)"
       ],
-      "pointer_locations": ["SKILL.md", "references/mesh-and-pubmed-tools.md"],
-      "guarded_by": "none",
-      "status": "canonical"
-    },
-    {
-      "id": "output.prisma-s-appendix",
-      "rule": "audit-template.md defines the paste-ready PRISMA-S appendix block; audit_markdown.py renders it always-on and can emit it standalone via --emit-appendix (tested in test_audit_markdown.py::LineSetAndAppendixTests).",
-      "canonical_owner": "references/audit-template.md",
-      "assertions": [
-        "## prisma-s appendix (pubmed)",
-        "full search strategy (item 8)",
-        "peer review (item 14)",
-        "total records and deduplication (items 15-16)"
-      ],
-      "pointer_locations": ["SKILL.md", "references/mesh-and-pubmed-tools.md"],
-      "cross_links": [{"file": "references/mesh-and-pubmed-tools.md", "must_contain": ["--emit-appendix"]}],
       "guarded_by": "none",
       "status": "canonical"
     },
     {
       "id": "examples.framework-walkthroughs",
-      "rule": "examples.md owns the worked PICO/PECO/PCC concept-gate walk-throughs.",
+      "rule": "examples.md retains worked PICO, PECO, and PCC examples.",
       "canonical_owner": "references/examples.md",
-      "assertions": [
-        "pico walk-through",
-        "peco walk-through",
-        "pcc walk-through"
-      ],
+      "assertions": ["pico walk-through", "peco walk-through", "pcc walk-through"],
       "guarded_by": "none",
-      "status": "canonical"
-    },
-
-    {
-      "id": "input.boolean-syntax-not-accepted",
-      "rule": "The full intake policy for pasted Boolean syntax / line sets / field-tagged queries lives only in SKILL.md 'Required Input'. workflow.md and goal-tracking.md link to it instead of restating it. A bare contextual mention of 'Boolean syntax' is allowed anywhere; the duplicated *restatement* phrasing is not. Distinct facets (concept-evidence in concept-analysis-and-gating.md; framework-choice in framework-selection.md) are separate rules and stay.",
-      "canonical_owner": "SKILL.md",
-      "assertions": [
-        "pubmed line set",
-        "strategy fragment",
-        "never use pasted boolean terms, operators, filters, line numbers, field tags, or line structure"
-      ],
-      "pointer_locations": ["references/workflow.md", "references/goal-tracking.md"],
-      "forbidden_locations": [
-        {"file": "references/workflow.md", "signatures": ["field-tagged queries, or strategy fragments", "ignore the syntax and ask the user to restate"]},
-        {"file": "references/goal-tracking.md", "signatures": ["field-tagged queries, or strategy fragments", "ignore the syntax and ask the user to restate"]}
-      ],
-      "guarded_by": "test_required_input_rejects_existing_boolean_context",
-      "status": "canonical"
-    },
-    {
-      "id": "stage-banner.inline-restatements",
-      "rule": "The six-field stage-banner definition is canonical in SKILL.md. workflow.md's numbered stage map is the single source for the references in force at each stage; inline stage triggers say 'references per the stage map' instead of re-listing them. Collapsed in Phase 3.",
-      "canonical_owner": "SKILL.md",
-      "assertions": ["stage banner", "`user decision needed`"],
-      "pointer_locations": ["references/workflow.md"],
-      "forbidden_locations": [
-        {"file": "references/workflow.md", "signatures": ["as references in force"]}
-      ],
-      "guarded_by": "test_workflow_contains_numbered_stage_map_and_banner_requirements",
-      "status": "canonical"
-    },
-    {
-      "id": "operational-sequence.duplicate-of-workflow",
-      "rule": "workflow.md owns the build sequence. mesh-and-pubmed-tools.md keeps only a tool-to-stage map that links to workflow.md, not a restated sequence. Collapsed in Phase 1.",
-      "canonical_owner": "references/workflow.md",
-      "assertions": ["formal concept analysis and concept gate"],
-      "pointer_locations": ["references/mesh-and-pubmed-tools.md"],
-      "forbidden_locations": [
-        {"file": "references/mesh-and-pubmed-tools.md", "signatures": ["suggested operational sequence"]}
-      ],
-      "guarded_by": "test_tool_sequence_runs_concept_gate_before_exploration",
       "status": "canonical"
     }
   ]

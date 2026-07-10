@@ -13,7 +13,7 @@ Use these states for `/goal` PubMed work:
 3. `goal_active_blocked`: An unexpected human-input blocker appears after goal creation. Ask once and stop. On later resumes before the user answers, do not call tools, do not restate the workflow, do not run a completion audit, and do not repeat the full checkpoint. Reply only: `Still paused for user input: [specific missing decision]. No further PubMed work can continue until that is answered.`
 4. `goal_completion_audit`: Use only after the final strategy appears complete. Run the completion audit, then call `update_goal` only if no required work remains.
 
-Before goal creation, require an independently stated plain-language research/review question or protocol-style question. Pasted Boolean syntax, line sets, field-tagged queries, and strategy fragments are not accepted as build input (see `SKILL.md` "Required Input"); ask only for the research/review question and stop. After the research question is confirmed, shallowly parse only enough to identify seed, concept-gate, and required filter/limit decisions. After seed status is resolved and seed PMIDs were supplied, limited seed fetch/mining is allowed before goal creation solely to inform concept-gate/filter decisions. Do not run MeSH lookup, broad PubMed searching, block testing, validation, variants, final QA, or filter checks until the required upfront decisions are resolved.
+Before goal creation, require an independently stated plain-language research/review question. A supplied strategy is a review object, not scope evidence. Resolve seed status and required scope/filter decisions from question/protocol evidence, then lock retrieval scope version 1. Do not fetch or mine seeds/candidates, run MeSH/PubMed exploration, or test blocks before that scope baseline exists.
 
 If a goal already exists, use it only when it clearly matches the current PubMed task. If it does not match, explain that a new active goal cannot be created in this thread and continue without claiming goal tracking.
 
@@ -30,7 +30,7 @@ Required intake sequence:
 
 1. If the plain-language research/review question is missing or only represented by Boolean syntax, ask only for the research/review question and stop.
 2. If seed PMID status is pending after the research question is confirmed, ask only whether the user has known relevant seed PMIDs and stop. Do not ask the concept-gate, filter/limit, or variant-selection question in the same response.
-3. Only after the user supplies seed PMIDs, says they have no seeds, or explicitly asks to proceed without seeds, use limited supplied-seed evidence when available and ask the high-sensitivity concept-gate question for sensitivity-dangerous blocks or filters.
+3. Only after seed status resolves, ask any high-impact scope/filter question needed to lock retrieval scope. Do not inspect supplied seeds to answer that conceptual question.
 4. Treat methodological filter or limit decisions as part of the post-seed concept-gate/filter stage unless the protocol already resolves them.
 
 After those decisions are resolved, call `create_goal` once for the remaining autonomous strategy-building work and continue with MeSH/PubMed exploration, testing, validation, QA, and final delivery.
@@ -55,7 +55,7 @@ Suggested objective wording:
 
 Before goal creation, ask required human-decision questions normally and compactly, but keep the required sequence: research/review question first, seed PMID question second, then high-sensitivity concept-gate/filter questions only after the seed answer. After goal creation, give a compact checkpoint only for unexpected blockers: what has been decided, what input is needed, the recommended default, and the exact next workflow step after the user answers. If goal tooling is unavailable, use the normal pause/resume workflow and do not claim goal tracking.
 
-Complete or mark an active goal complete only after the seed PMID decision is resolved, the concept gate is resolved when applicable, MeSH/PubMed testing is completed or explicitly marked not performed, seed validation is completed when seeds exist, final QA/filter checks are run when applicable, and the final draft strategy is delivered and flagged for human peer review.
+Complete or mark an active goal complete only after `manifest_tool.py show --validate --check-files --require-complete-loop` passes and the draft is delivered for human peer review.
 
 ## Pilot checks
 

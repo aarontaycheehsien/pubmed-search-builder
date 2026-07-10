@@ -1,22 +1,20 @@
 # Concept Analysis And Gating
 
-Use this step after the seed PMID decision is resolved and before MeSH lookup, broad PubMed exploration, or concept-block drafting. If supplied seed PMIDs are available after pre-gate seed triage, limited seed fetch/mining may happen immediately before the concept gate only to inform the concept-analysis ledger.
+Use this step after the plain-language question and seed-status decision are resolved, but before fetching or mining seed/candidate records, MeSH lookup, PubMed exploration, or concept-block drafting. Save retrieval scope version 1 from question/protocol evidence alone so objective evidence can challenge a visible baseline rather than silently shaping it.
 
 The purpose is to decide what belongs in the main high-sensitivity strategy, what belongs only inside an existing `OR` block, what should be omitted from the main search, and what requires a separate methodological filter decision.
 
 Do not skip this step just because the topic looks straightforward. It is the main safeguard against turning every PICO element into a separate `AND` block.
 
-Start this step with the **Concept gate** stage banner from `SKILL.md`, citing `references/framework-selection.md`, `references/concept-analysis-and-gating.md`, and `references/anti-patterns.md` as references in force. The stage banner must state that MeSH/PubMed exploration, block testing, optional secondary blocks, filters, focused variants, final QA, and audit output are not being done yet unless the gate and user/protocol decisions permit them.
+Start this step with the concise **Scope lock** marker from `SKILL.md`. State only the unresolved scope decision, if any. Keep detailed stage/reference tracking in the manifest rather than exposing internal file names to the user.
 
 ## Required sequence
 
 Use `workflow.md` as the canonical source for the full build sequence and high-sensitivity mental model.
 
-The seed PMID decision is resolved when the user supplies seed PMIDs, says they have no seeds, or explicitly asks to proceed without seeds.
+The seed PMID decision is resolved when the user supplies PMIDs, says there are none, or explicitly asks to proceed without them. Before scope version 1 is locked, normalize supplied identifiers only; do not fetch, mine, expand, or inspect record content.
 
-After seed status is resolved and seed PMIDs were supplied, run pre-gate seed triage from `seed-pmid-validation.md`. You may fetch/mine only usable found seed PMIDs before the concept gate to extract titles, abstracts, assigned MeSH, keywords, publication types, acronyms, and distinctive phrases for concept-role decisions. This limited seed work is not PubMed exploration, block testing, seed validation, variant comparison, final QA, or filter checking.
-
-Before any MeSH lookup, broad PubMed exploration, block construction, filter check, focused variant, or full strategy validation, produce the pre-MeSH gate summary described below. Do not run MeSH lookup, broad PubMed exploration, block construction, final QA, filter checks, variants, optional secondary block tests, or full strategy validation before the required seed and concept-gate decisions are resolved. The only other exception is shallow parsing of the user's prompt so you can identify candidate concepts and required upfront decisions.
+Produce the scope-lock summary and save `retrieval_scope_v1.json` before any record fetch, MeSH lookup, PubMed exploration, block construction, filter check, focused variant, or validation. Objective evidence enters only after this baseline exists.
 
 ## Concept-analysis ledger
 
@@ -24,12 +22,13 @@ Record a concept-analysis ledger before drafting blocks. Keep it concise, but ma
 
 Use these fields:
 
+- `scope_version`: positive integer; start at `1` and increment only after a structural or scope re-entry.
 - `candidate_concept`: the concept, limit, or filter idea being considered
 - `framework_slot`: the review-framework slot or custom role being considered, such as Population, Condition, Exposure, Phenomenon, Context, Outcome, Comparator, Study design, Limit, or `not applicable`
 - `source`: user question, protocol text, seed record, pre-MeSH brainstorm, or inferred framework slot
 - `role`: essential `AND` block, within-block synonym/term only, sensitivity-dangerous optional `AND` block, methodological/filter concept, or omitted concept
-- `seed_evidence`: seed-derived title/abstract term, seed MeSH, seed keyword, seed publication type, in-scope seed retrieval concern, or `not available - no seed PMIDs supplied`
-- `pre_gate_no_seed_evidence`: protocol/question wording, shallow framework parsing, pre-MeSH vocabulary/domain brainstorm needed for the gate, or `not applicable - seed evidence used`
+- `conceptual_evidence`: protocol/question wording, framework reasoning, and scope assumptions used for the initial lock
+- `objective_evidence`: screened-in discovery records, MeSH/ATM evidence, counts, samples, or validation evidence added after scope lock, or `not performed`
 - `post_gate_validation_evidence`: MeSH sweep, PubMed ATM/query translation, sample-record pattern, concept-block count, final QA, filter check, or `not performed`
 - `scope_breadth_check`: for methodological or automation topics, whether the target is a narrow action or a broader workflow, with the reason
 - `fragility_status`: `stable`, `fragile`, `very_fragile`, or `not applicable`, based on whether the concept is likely to be named inconsistently, described operationally, or unsafe to require as a searchable concept
@@ -117,7 +116,7 @@ A candidate becomes an essential `AND` block only if all acceptance checks pass:
 5. It cannot be handled more safely inside an existing `OR` block, at screening, as a focused/reserve variant, or as a validated methodological filter.
 6. No high-impact framework-slot ambiguity remains unresolved.
 7. For methodological or automation topics, the scope breadth check does not show that a broader workflow concept is plausibly in scope.
-8. If seed PMIDs were supplied, seed evidence does not suggest likely retrieval loss from inconsistent wording, indexing, publication type, or missing abstracts.
+8. No conceptual reason already suggests that inconsistent wording, indexing, publication type, or missing abstracts would make the block unsafe. Later objective evidence must retest this; failure triggers structural re-entry rather than silent mutation.
 
 Default if uncertain: do not admit the candidate as a main `AND` block. Classify it as screening-only, omitted, deferred, reserve/focused-variant-only, or a filter decision, then record the recall risk.
 
@@ -129,7 +128,7 @@ Very fragile concepts are candidates whose terminology is so inconsistent, opera
 
 The concept gate has two phases. The first phase is mandatory before MeSH lookup; the second phase is scheduled for iterative testing after blocks exist.
 
-### Phase 1 - pre-MeSH admission check
+### Phase 1 - conceptual scope lock
 
 Before MeSH lookup or PubMed exploration:
 
@@ -140,13 +139,13 @@ Before MeSH lookup or PubMed exploration:
 5. Mark each candidate as a core required concept, within-block term family, screening-only concept, omitted concept, reserve/focused-variant candidate, or filter/limit decision.
 6. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, focused variant, or very-fragile leave-out trade-off is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
 
-This phase may use the user question, protocol wording, and limited seed fetch/mining when seed PMIDs were supplied. It must not run MeSH lookup, broad PubMed exploration, block construction, block testing, variants, final QA, or filter checks.
+This phase may use only the plain-language question, protocol wording, framework reasoning, and a conceptual vocabulary brainstorm needed to distinguish concepts from eligibility properties. It must not inspect seed/candidate records, run MeSH lookup, PubMed exploration, block construction, variants, final QA, or filters.
 
-When no seed PMIDs are supplied, Phase 1 may use only protocol/question wording, shallow framework parsing, and any pre-MeSH vocabulary/domain brainstorm needed to decide whether a candidate is a core concept, term family, screening-only concept, omitted concept, reserve/focused concept, or filter/limit decision. Do not use MeSH sweeps, PubMed ATM/query translations, sample-record patterns, concept-block counts, final QA, or filter checks as pre-gate evidence.
+Save the resolved roles and decisions as `retrieval_scope_v1.json` and record it with `manifest_tool.py state lock-scope`.
 
-### Phase 2 - post-block pilot checks
+### Phase 2 - empirical challenge and re-entry
 
-Phase 2 is allowed only after the Phase 1 gate is resolved and the user or protocol has authorized testing the optional secondary `AND` block, filter, limit, or focused variant, or after later testing reveals a materially sharper optional-block trade-off that now requires a user decision. After the admitted essential concept blocks have been built and tested, pilot any authorized material optional-block or filter trade-off before promoting it beyond reserve/focused status:
+After scope lock, build and prescreen candidate evidence, then run reversible diagnostic comparisons for material optional-block and filter trade-offs before asking the user to adopt them:
 
 1. Compare the sensitive topic-only strategy with and without the optional concept or filter.
 2. If seed PMIDs were supplied, test whether every in-scope seed is still retrieved.
@@ -154,14 +153,15 @@ Phase 2 is allowed only after the Phase 1 gate is resolved and the user or proto
 4. Treat counts as workload proxies, not precision, unless PMID-level relevance labels exist.
 5. Keep the sensitive design as the default unless the focused/filter design preserves known-item retrieval, keeps MeSH plus text-word coverage for each essential concept, avoids PubMed parse hazards, and has an explicit user/protocol rationale.
 
-If counts, seed behavior, or noise patterns reveal a meaningful optional-block or filter trade-off that was not obvious at the concept gate, pause and ask before testing or promoting that focused/filter variant. Do not re-ask when the user already answered at the concept gate unless the new evidence materially changes the decision context.
+If counts, validation behavior, or samples reveal a new trade-off, gather the read-only comparison evidence. Ask only before adopting a recall-reducing block/filter or changing scope. Do not re-ask unless evidence materially changes the decision context.
 
-Record Phase 2 results in the search design ledger and final audit. Do not use Phase 2 as permission to run PubMed exploration before the Phase 1 gate is resolved, and do not use it to test unauthorized optional secondary blocks, filters, limits, or focused variants.
+If objective evidence changes an essential concept's role or meaning, run `manifest_tool.py state reopen-scope`, record the reason, rerun the admission test, save the next scope version, re-screen affected candidate records, re-register blocks, and rerun affected evidence. Record all Phase 2 results in the revision and decision ledgers.
 
 ## Gate output contract
 
 Before MeSH lookup, record a compact pre-MeSH gate summary containing:
 
+- retrieval-scope version and saved artifact path
 - chosen framework, question type, and rationale
 - whether a framework question was needed, and why or why not
 - candidate concepts with framework slots and ambiguity grades
@@ -257,15 +257,13 @@ If seed PMIDs are supplied at the start of a strategy build:
 
 1. Do not ask for seeds again.
 2. Treat seed status as resolved.
-3. Run pre-gate seed triage: normalize and deduplicate numeric PMIDs, document malformed and missing/not-found PMIDs, and exclude them from seed evidence unless corrected.
-4. Use limited seed fetch/mining before the concept gate when usable found seed evidence would help classify concepts or filters.
-4a. Optionally run `pubmed_tool.py related` to expand the confirmed seeds into a candidate relevant set and feed high-overlap candidates to `term-rank`. Use this only to enrich candidate evidence; label related-set evidence separately from user-confirmed seed evidence, classify any harvested term by concept role, and do not treat neighbor retrieval as validated recall. See `seed-pmid-validation.md`.
-5. Pause before the concept gate only for fetched seeds that are retracted or clearly out of scope; ask whether to exclude, replace, or retain the PMID as a special validation seed.
-6. Use seed records and the pre-MeSH brainstorm to inform the concept-analysis ledger before MeSH block construction.
-7. Use seed titles, abstracts, MeSH headings, keywords, publication types, acronyms, and distinctive phrases as candidate evidence.
-8. Classify seed-derived terms by concept role before adding them to the strategy.
-9. Validate the final topic-only strategy against in-scope seeds.
-10. If a methodological filter is used, validate topic-only and topic-plus-filter seed retrieval separately.
+3. Normalize and deduplicate numeric PMIDs, document malformed entries, and lock conceptual scope before fetching them.
+4. After scope lock, fetch and screen every seed against the scope using `references/candidate-screening.md`.
+5. Allocate screened-in records to discovery, holdout, or `both`; do not use excluded, uncertain, or unresolved records for term mining.
+6. Expand with `related` only after scope lock. Screen candidates before they influence `term-rank`; unscreened neighbors remain heuristic only.
+7. Classify seed-derived terms by existing concept role before adding them to an `OR` layer.
+8. Validate against held-out records when possible. Label reuse of discovery records as non-independent.
+9. If a methodological filter is used, validate topic-only and topic-plus-filter retrieval separately.
 
 Seed PMIDs are validation aids, not the whole target set. Do not overfit the strategy to retrieve only the language used in a small seed set. If a seed is out of scope, report it rather than distorting the strategy.
 
@@ -275,11 +273,11 @@ If the user says there are no seed PMIDs or asks to proceed without seeds:
 
 1. Treat seed status as resolved.
 2. Run the formal concept analysis and concept gate before MeSH/PubMed exploration.
-3. In the ledger, mark seed evidence as `not available - no seed PMIDs supplied`.
-4. Use pre-gate no-seed evidence only from protocol/question wording, shallow framework parsing, and pre-MeSH vocabulary/domain brainstorm needed for the gate.
+3. Lock scope from question/protocol evidence and mark seed evidence unavailable.
+4. After scope lock, use a high-precision pilot to discover candidate anchors and screen them before term mining.
 5. For methodological or automation topics where recall-first is requested and the protocol does not explicitly narrow the scope, apply the scope breadth check and default the main workflow block to the broader workflow rather than only the exact narrow action wording.
-6. After the gate resolves, record post-gate validation/audit evidence from MeSH sweeps, PubMed ATM/query translations, sample-record patterns, concept-block counts, objective term ranking from a high-precision pilot relevant-set query (`term-rank --relevant-query-file`), final QA, and filter checks where those steps were actually performed.
-6a. Objective term discovery is available even without seeds. After the gate, build a small, deliberately high-precision pilot relevant-set query and feed it to `pubmed_tool.py term-rank --relevant-query-file` to rank candidate `[tiab]`/MeSH terms by coverage and lift instead of eyeballing them. Label results as pilot-relevant-set evidence, distinct from seed-derived evidence; treat them as term-discovery candidates, not validated recall, and do not overfit the strategy to pilot-query language. See `tiab-expansion.md` and `mesh-and-pubmed-tools.md`.
+6. Record post-lock evidence from candidate screening, MeSH sweeps, PubMed ATM/query translations, sample-record patterns, block counts, objective term ranking, final QA, and filter checks.
+6a. Feed only screened-in pilot anchors to `term-rank --pmids` or an accepted whitelist. Do not treat raw pilot-query hits as a relevant set merely because the pilot was precise.
 7. Do not report true seed-derived MeSH, seed-derived title/abstract terminology, known-item recall, or seed validation results.
 8. State that validation is limited to MeSH checks, PubMed block testing, sample inspection, final query hygiene, `final-qa`, and `filter-check` where relevant. Objective term ranking against a pilot relevant set is available as term-discovery support, not recall validation; do not present it as known-item recall.
 

@@ -11,6 +11,17 @@
 - **Omitted or reserve concepts:** [list with sensitivity rationale]
 - **Methodological filters or limits:** [none, or name/source/version/interface/adaptation]
 
+## Retrieval-scope versions
+
+- **Current version:** [positive integer]
+- **Status:** [locked]
+- **Current artifact:** [retrieval_scope_vN.json]
+- **Scope-change rationale:** [not applicable for v1, or critic finding/user decision that triggered re-entry]
+
+| Version | Artifact | Reason | Locked UTC |
+|---:|---|---|---|
+| [1] | [retrieval_scope_v1.json] | [initial protocol-only scope lock] | [timestamp] |
+
 ## Stage Trace
 
 | Stage | Reference files | Action taken | Blocked actions | Decision needed | User/protocol decision |
@@ -22,7 +33,7 @@
 - **Explicit user choice:** **[Optional or sensitivity-dangerous concept]** was asked because [why it could narrow retrieval] -> user chose **[omit/include/test as variant/filter]**. [How handled in the strategy.]
 - **No user decision requested:** **[Optional or sensitivity-dangerous concept]** was not asked -> analyst decision under workflow: **[omit/include/test as variant/filter]**. [Why no explicit user question was requested and how handled.]
 - **Not applicable:** no materially plausible optional concept block or filter was identified for user decision.
-- **Seed PMIDs:** offered -> user chose **[provided PMIDs / no seeds - proceed without / not asked because already supplied]**. Pre-gate triage: [malformed PMIDs, missing/not-found PMIDs, fetched seed records, retracted seeds, likely out-of-scope seeds, and any user/protocol decision when paused]. [Validation implication.]
+- **Seed PMIDs:** offered -> user chose **[provided PMIDs / no seeds - proceed without / not asked because already supplied]**. After scope lock: [malformed/not-found PMIDs, screening decisions, retractions, use roles, and validation implication].
 - **Study-design, date, language, age, species, or publication-type limits:** [offered/required/not applicable] -> [decision and recall-risk note].
 
 ## Decision ledger
@@ -30,7 +41,7 @@
 | Decision point | Options considered | Evidence or test used | Decision made | Rationale / recall-risk note | Reflected in strategy/report |
 |---|---|---|---|---|---|
 | Seed PMID handling | [provided / no seeds / proceed without; malformed/missing/retracted/out-of-scope triage] | [user answer, seed fetch/mine, found/missing PMIDs, retraction/scope check, or not available] | [decision] | [impact on validation and concept gate] | [seed validation section] |
-| Concept gate | [candidate concepts, framework slots, optional blocks, and filter ideas] | [concept-analysis ledger, AND-block admission checks, pre-gate seed/no-seed evidence, post-gate counts if tested later] | [essential / inside OR / screening-only / focused variant / omitted / deferred / filter] | [why this protects recall or workload] | [search structure / final strategy / variants] |
+| Scope lock / re-entry | [candidate concepts, framework slots, optional blocks, and filter ideas] | [question/protocol concept ledger, AND-block admission checks, and later objective challenge evidence] | [essential / inside OR / screening-only / focused variant / omitted / deferred / filter] | [why this protects recall or why a new scope version was required] | [retrieval-scope versions / strategy / variants] |
 | Pre-MeSH vocabulary brainstorm | [vocabulary families and domain frames considered] | [user/protocol wording, seeds, brainstorm checklist, domain-framing question if asked] | [accepted / rejected / deferred / not needed] | [recall/noise or scope rationale] | [title/abstract expansion log / rationale] |
 | MeSH/SCR choice | [accepted, rejected, deferred candidates] | [sweep, details, tree, ATM, seed indexing, counts] | [decision] | [scope, explosion/noexp, duplicate/noise/wrong-sense reason] | [MeSH descriptors considered] |
 | Text-word/proximity/wildcard choice | [terms or expressions considered] | [MeSH entry terms, seeds, samples, counts, warnings] | [decision] | [recall/noise rationale] | [title/abstract expansion log] |
@@ -40,6 +51,21 @@
 | Low-count plausibility check | [final topic-only count `<500` triggered check / not triggered] | [final topic-only count, block counts, query translation, final-qa, filter/limit comparison, seed/gold retrieval, no-seed recall offer status] | [expanded and retested / documented as plausible / not triggered] | [diagnosis and recall-risk note] | [PubMed CLI checks / reporting notes] |
 | Zero-hit and duplicate terms | [zero-hit terms from `phrases_not_found`; exact duplicates from `duplicate_term`] | [per-term PubMed counts, spelling/hyphenation variant checks, `final-qa`] | [duplicates removed; each genuinely zero-hit term removed+documented by default, or kept by user choice] | [default is remove+document zero-hit terms (they match no records); reason if kept] | [final strategy / title-abstract expansion log] |
 | QA or caveat | [warning, limitation, or unresolved check] | [query translation, final-qa, filter-check, sample inspection] | [resolved / documented / not performed] | [remaining risk] | [rationale / reporting notes] |
+
+## Candidate evidence screening
+
+- **Status:** [complete / not applicable with reason]
+- **Scope version:** [version used for screening]
+- **Candidate ledger and validation receipt:** [paths]
+- **Counts by decision:** [include / exclude / uncertain]
+- **Counts by use:** [discovery / holdout / both / heuristic / neither]
+- **Eligible discovery PMIDs:** [list]
+- **Independent holdout PMIDs:** [list]
+- **Non-independent validation PMIDs:** [list]
+- **Heuristic PMIDs:** [list]
+- **Screening and holdout rationale:** [eligibility evidence, exclusions/uncertainties, representativeness, and independence limits]
+
+Only screened-in discovery records may support objective term mining. Keep raw pilot/related neighbors separate from confirmed evidence.
 
 For optional-block or filter rows in the decision ledger, record whether a user question was explicitly asked, the exact question when asked, and whether the final handling came from explicit user input, protocol direction, or analyst judgment under the workflow.
 
@@ -138,7 +164,7 @@ Seed PMIDs provided: **[Yes/No]**.
 - Receipt-only stdout used as decision evidence: no
 - Decision supported: [yes/no/not applicable]
 
-### Pre-gate seed triage
+### Post-scope seed fetch and screening
 
 - Requested seed entries: [list, or none]
 - Normalized unique numeric PMIDs: [list, or none]
@@ -250,6 +276,20 @@ For every row based on `fetch`, `mine`, or `sample` record content, record the s
 - **Low-count plausibility.** [If final topic-only count was `<500`, diagnosis, expansion/retest decision, before/after counts if revised, and why the final count is acceptable.]
 - **QA.** `query_translation_drift`: [none/issues]; final query hygiene: [done/warnings]; `final-qa`: [none/issues]; `filter-check`: [none/not applicable/issues].
 
+## PRESS-informed internal critic rounds
+
+These rounds are automated internal QA, not PRESS peer review.
+
+| Round | Scope version | Overall status | Findings | Open must-fix | Open actionable | Findings and dispositions | Artifact |
+|---:|---:|---|---:|---:|---:|---|---|
+| [1] | [1] | [revise/pass] | [count] | [count] | [count] | [summary] | [critic_round_1.json] |
+
+## Revision-cycle ledger
+
+| Revision | Critic round | Scope | Classification | Trigger finding | Change | Before/after evidence | Validation effect | Disposition | Artifact |
+|---:|---:|---:|---|---|---|---|---|---|---|
+| [1] | [1] | [1] | [lexical/structural/scope/filter/syntax/reporting] | [finding] | [exact change] | [counts, samples, evidence files, and required re-probes] | [holdout/seed effect] | [accepted/reverted/superseded] | [revision_cycle_1.json] |
+
 ## PRESS 2015 element coverage
 
 Map the audit's QA checks to the six PRESS 2015 elements ([McGowan et al. 2016](https://doi.org/10.1016/j.jclinepi.2016.01.021)). For each element, state `addressed`, `not applicable`, or `not performed` and link to the supporting section in this audit.
@@ -270,7 +310,7 @@ Peer review by an information specialist is still required before the strategy i
 Seed PMIDs provided: **[Yes/No]**.
 
 If yes:
-- Pre-gate seed triage summary: [malformed, missing/not-found, fetched, retracted, likely out-of-scope, and special validation seed handling]
+- Post-scope seed fetch/screening summary: [malformed, missing/not-found, fetched, retracted, include/exclude/uncertain decisions, and discovery/holdout roles]
 - Seed PMIDs tested: [list]
 - Retrieved: [list]
 - Missed: [list]
@@ -303,7 +343,7 @@ Do not imply that PRESS peer review has occurred unless it actually has.
 - **Restrictions and justifications:** [none applied, or state clearly]
 - **Audit Markdown file:** [path saved]
 - **Audit workbook:** [path if exported, otherwise not exported]
-- **Run manifest:** [path saved, e.g. `run_manifest.json`, validated with `manifest_tool.py show --validate --check-files --require-ready`]
+- **Run manifest:** [path saved, e.g. `run_manifest.json`, validated with `manifest_tool.py show --validate --check-files --require-complete-loop`]
 - **Remaining caveats:** [seed validation, noisy terms, untested tree context, sample inspection limits, etc.]
 - **Other databases:** Database-specific strategies for Ovid MEDLINE, Embase, CENTRAL, CINAHL, EconLit, grey literature, or other sources were [not requested / not built / built separately]. Do not present them unless separately constructed.
 
