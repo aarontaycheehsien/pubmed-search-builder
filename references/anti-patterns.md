@@ -135,6 +135,18 @@ A final topic-only count below `<500` is not proof that the strategy is precise.
 
 Do not expand automatically just to exceed 500 records. Diagnose the low count. If the topic is rare, new, tightly scoped, or protocol-limited, document why `<500` is plausible. If the count reflects avoidable narrowing, revise/expand the bottleneck block, rerun the final topic-only count, and document before/after counts.
 
+## Mistake 12: Letting seeds define scope before the conceptual lock
+
+Fetching or mining seeds before saving a protocol-only retrieval scope lets a small or biased set determine which eligibility elements become search blocks. Normalize seed identifiers at intake, then lock scope version 1 from the question/protocol before inspecting record content. Objective evidence may challenge that baseline only through an explicit lexical revision or scope re-entry.
+
+## Mistake 13: Mining unscreened pilot or related records
+
+High-precision pilot hits, similar articles, citations, and high-overlap neighbors are candidates, not automatically relevant studies. Do not feed them directly to `term-rank`. Screen each record against the locked scope and assign discovery, holdout, heuristic, or neither use in the candidate ledger.
+
+## Mistake 14: Calling automated QA PRESS peer review
+
+Mapping a draft to PRESS elements or asking another model pass to criticize it is PRESS-informed internal QA. It does not become PRESS peer review without an independent information specialist. Preserve the human handoff and report the automated critic rounds separately.
+
 ## References
 
 - Adam GP, et al. Literature search sandbox: a large language model that generates search queries for systematic reviews. *JAMIA Open* 2024. [doi:10.1093/jamiaopen/ooae098](https://doi.org/10.1093/jamiaopen/ooae098).

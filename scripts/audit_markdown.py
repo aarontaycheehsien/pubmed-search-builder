@@ -244,6 +244,120 @@ def render_search_structure(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_retrieval_scope(data: dict[str, Any]) -> list[str]:
+    scope = as_dict(first_value(data, ["retrieval_scope", "search_structure.retrieval_scope"], {}))
+    history = as_list(scope.get("history") or data.get("retrieval_scope_history"))
+    history_rows = []
+    for item in history:
+        if isinstance(item, dict):
+            history_rows.append(
+                [
+                    item.get("version"),
+                    item.get("artifact"),
+                    item.get("reason"),
+                    item.get("locked_utc"),
+                ]
+            )
+        else:
+            history_rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+    lines = [
+        "## Retrieval-scope versions",
+        "",
+        f"- **Current version:** {compact_text(scope.get('version'))}",
+        f"- **Status:** {compact_text(scope.get('status'))}",
+        f"- **Current artifact:** {compact_text(scope.get('artifact'))}",
+        f"- **Scope-change rationale:** {compact_text(scope.get('scope_change_rationale') or scope.get('reopened_reason'), 'not applicable')}",
+        "",
+        markdown_table(["Version", "Artifact", "Reason", "Locked UTC"], history_rows),
+        "",
+    ]
+    return lines
+
+
+def render_candidate_screening(data: dict[str, Any]) -> list[str]:
+    screening = as_dict(first_value(data, ["candidate_screening", "candidate_evidence_screening"], {}))
+    summary = as_dict(screening.get("summary"))
+    return [
+        "## Candidate evidence screening",
+        "",
+        f"- **Status:** {compact_text(screening.get('status'))}",
+        f"- **Scope version:** {compact_text(summary.get('scope_version') or screening.get('scope_version'))}",
+        f"- **Candidate ledger:** {compact_text(screening.get('artifact') or screening.get('ledger_file'))}",
+        f"- **Validation receipt:** {compact_text(screening.get('validation_artifact'))}",
+        f"- **Record count:** {compact_text(summary.get('record_count'))}",
+        f"- **Decision counts:** {compact_text(summary.get('decision_counts'))}",
+        f"- **Use-role counts:** {compact_text(summary.get('use_counts'))}",
+        f"- **Eligible discovery PMIDs:** {compact_text(summary.get('eligible_discovery_pmids'))}",
+        f"- **Independent holdout PMIDs:** {compact_text(summary.get('holdout_pmids'))}",
+        f"- **Non-independent validation PMIDs:** {compact_text(summary.get('non_independent_validation_pmids'))}",
+        f"- **Heuristic PMIDs:** {compact_text(summary.get('heuristic_pmids'))}",
+        f"- **Screening/holdout rationale:** {compact_text(screening.get('screening_notes') or screening.get('reason'))}",
+        "",
+    ]
+
+
+def render_critic_rounds(data: dict[str, Any]) -> list[str]:
+    rows = []
+    for item in as_list(data.get("critic_rounds")):
+        if isinstance(item, dict):
+            rows.append(
+                [
+                    item.get("round"),
+                    item.get("scope_version"),
+                    item.get("overall_status"),
+                    item.get("finding_count"),
+                    item.get("open_must_fix"),
+                    item.get("open_actionable"),
+                    item.get("findings_summary"),
+                    item.get("artifact"),
+                ]
+            )
+        else:
+            rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+    return [
+        "## PRESS-informed internal critic rounds",
+        "",
+        "These rounds are automated internal QA, not external PRESS peer review.",
+        "",
+        markdown_table(
+            ["Round", "Scope", "Status", "Findings", "Open must-fix", "Open actionable", "Findings / disposition", "Artifact"],
+            rows,
+        ),
+        "",
+    ]
+
+
+def render_revision_cycles(data: dict[str, Any]) -> list[str]:
+    rows = []
+    for item in as_list(data.get("revision_cycles")):
+        if isinstance(item, dict):
+            rows.append(
+                [
+                    item.get("revision_round"),
+                    item.get("critic_round"),
+                    item.get("scope_version"),
+                    item.get("classification"),
+                    item.get("trigger_finding"),
+                    item.get("change"),
+                    item.get("before_after_evidence") or item.get("evidence_files"),
+                    item.get("validation_effect"),
+                    item.get("disposition"),
+                    item.get("artifact"),
+                ]
+            )
+        else:
+            rows.append([item] + [DEFAULT_STATUS] * 9)
+    return [
+        "## Revision-cycle ledger",
+        "",
+        markdown_table(
+            ["Revision", "Critic round", "Scope", "Class", "Trigger", "Change", "Before/after evidence", "Validation effect", "Disposition", "Artifact"],
+            rows,
+        ),
+        "",
+    ]
+
+
 def render_stage_trace(data: dict[str, Any]) -> list[str]:
     trace_items = as_list(data.get("stage_trace"))
     if not trace_items:
@@ -487,7 +601,7 @@ def fetched_seed_rows(records: Any) -> list[list[Any]]:
 
 def render_pre_gate_seed_triage(data: dict[str, Any]) -> list[str]:
     triage = as_dict(first_value(data, ["pre_gate_seed_triage", "seed_triage"], {}))
-    lines = ["### Pre-gate seed triage", ""]
+    lines = ["### Post-scope seed fetch and screening", ""]
     fields = [
         ("Requested seed entries", "requested_seed_entries"),
         ("Normalized unique numeric PMIDs", "normalized_unique_numeric_pmids"),
@@ -1003,15 +1117,19 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     title = compact_text(first_value(data, ["title", "topic", "review_question"], "PubMed search audit"))
     lines = [f"# {title}", ""]
     lines.extend(render_search_structure(data))
+    lines.extend(render_retrieval_scope(data))
     lines.extend(render_stage_trace(data))
     lines.extend(render_user_decisions(data))
     lines.extend(render_decision_ledger(data))
+    lines.extend(render_candidate_screening(data))
     lines.extend(render_record_content_evidence(data))
     lines.extend(render_final_strategy(data))
     lines.extend(render_line_set(data))
     lines.extend(render_ncbi_work(data))
     lines.extend(render_tiab_expansion(data))
     lines.extend(render_rationale(data))
+    lines.extend(render_critic_rounds(data))
+    lines.extend(render_revision_cycles(data))
     lines.extend(render_press_coverage(data))
     lines.extend(render_seed_validation(data))
     lines.extend(render_peer_review(data))

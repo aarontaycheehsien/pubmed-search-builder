@@ -1624,7 +1624,7 @@ def filter_pmids(
 ) -> tuple[list[str], list[str]]:
     """Apply an optional accepted-whitelist (``only``) and exclusion (``exclude``) filter to a
     resolved relevant-set PMID list. Returns ``(kept, removed)`` with order preserved, so a seed
-    excluded at pre-gate triage never reaches term ranking even when reused from a mine JSON."""
+    excluded during post-scope candidate screening never reaches term ranking even when reused from a mine JSON."""
     kept = dedup_preserving_order([str(pmid) for pmid in pmids])
     only_set = {str(pmid) for pmid in (only or [])}
     exclude_set = {str(pmid) for pmid in (exclude or [])}
@@ -2999,6 +2999,51 @@ def build_audit_scaffold(
     recall_offer = ""
     if isinstance(manifest_state, dict):
         recall_offer = str(manifest_state.get("recall_offer") or "")
+        scope_state = manifest_state.get("scope")
+        if isinstance(scope_state, dict):
+            audit["retrieval_scope"] = dict(scope_state)
+            filled.append("retrieval_scope")
+        screening_state = manifest_state.get("candidate_screening")
+        if isinstance(screening_state, dict):
+            screening_copy = dict(screening_state)
+            if screening_copy.get("status") == "complete":
+                screening_copy["screening_notes"] = audit_placeholder(
+                    "candidate exclusions/uncertainties, holdout allocation, and independence rationale"
+                )
+                placeholders.append("candidate_screening.screening_notes")
+            audit["candidate_screening"] = screening_copy
+            filled.append("candidate_screening")
+        critic_state = manifest_state.get("critic_rounds")
+        if isinstance(critic_state, list) and critic_state:
+            critic_rows = []
+            for item in critic_state:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                row["findings_summary"] = audit_placeholder(
+                    f"critic round {row.get('round')} findings and dispositions"
+                )
+                critic_rows.append(row)
+            audit["critic_rounds"] = critic_rows
+            filled.append("critic_rounds")
+            placeholders.append("critic_rounds.findings_summary")
+        revision_state = manifest_state.get("revision_cycles")
+        if isinstance(revision_state, list) and revision_state:
+            revision_rows = []
+            for item in revision_state:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                row["before_after_evidence"] = audit_placeholder(
+                    f"revision {row.get('revision_round')} before/after counts and evidence files"
+                )
+                row["validation_effect"] = audit_placeholder(
+                    f"revision {row.get('revision_round')} seed/holdout effect and re-probe result"
+                )
+                revision_rows.append(row)
+            audit["revision_cycles"] = revision_rows
+            filled.append("revision_cycles")
+            placeholders.append("revision_cycles.before_after_evidence/validation_effect")
     relative_recall = _scaffold_relative_recall(recall_data, seed_status=seed_status, recall_offer=recall_offer)
     if relative_recall:
         audit["relative_recall"] = relative_recall
@@ -3026,9 +3071,12 @@ def build_audit_scaffold(
         placeholders.append("record_content_evidence (review/supported)")
 
     # Forced judgment placeholders: the agent must author these (render blocked until then).
+    scope_version = None
+    if isinstance(manifest_state, dict) and isinstance(manifest_state.get("scope"), dict):
+        scope_version = manifest_state["scope"].get("version")
     audit["search_structure"] = {
         "framework": audit_placeholder("framework, question type, and reason"),
-        "concept_gate_status": "completed",
+        "concept_gate_status": f"completed - retrieval scope v{scope_version}" if scope_version else "completed",
         "and_block_admission_summary": audit_placeholder("AND-block admission summary"),
         "methodological_filters_or_limits": audit_placeholder("none, or filter source/version/interface/adaptation"),
     }
@@ -3833,7 +3881,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     related_parser = subparsers.add_parser(
         "related",
-        help="Expand seed PMIDs into a candidate relevant set via PubMed eLink (similar articles, cited-by, references).",
+        help="Discover candidate PMIDs from screened anchors via PubMed eLink (similar articles, cited-by, references); candidates still require screening.",
     )
     related_parser.add_argument("--pmids", nargs="+", required=True, help="Seed PMIDs to expand.")
     related_parser.add_argument(
@@ -3875,7 +3923,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude-pmids",
         nargs="*",
         default=None,
-        help="PMIDs to drop from the resolved relevant set (e.g. seeds excluded at pre-gate triage as out-of-scope/retracted). Combine with --mine-json to reuse mined seeds minus the excluded ones.",
+        help="PMIDs to drop from the resolved discovery set (e.g. seeds excluded during post-scope screening). Combine with --mine-json to reuse mined records minus excluded ones.",
     )
     term_rank_parser.add_argument(
         "--only-pmids",
@@ -3998,7 +4046,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude-pmids",
         nargs="*",
         default=None,
-        help="PMIDs to drop from the resolved benchmark set (e.g. seeds excluded at pre-gate triage as out-of-scope/retracted, or noise from a related expansion). Combine with --benchmark-json to reuse a candidate set minus the excluded ones.",
+        help="PMIDs to drop from the resolved benchmark set (e.g. records excluded during post-scope screening or noise from a related expansion). Combine with --benchmark-json to reuse a candidate set minus excluded ones.",
     )
     recall_parser.add_argument(
         "--only-pmids",
@@ -4036,8 +4084,8 @@ def build_parser() -> argparse.ArgumentParser:
     scaffold_parser.add_argument("--strategy-file", help="UTF-8 file with the final PubMed strategy text.")
     scaffold_parser.add_argument("--validate-json", help="Saved validate --output JSON (seed retrieved/missed).")
     scaffold_parser.add_argument("--variants-json", help="Saved variants --output JSON (chosen/focused variant).")
-    scaffold_parser.add_argument("--seed-fetch-json", help="Saved fetch --output JSON from pre-gate seed triage.")
-    scaffold_parser.add_argument("--seed-mine-json", help="Saved mine --output JSON from pre-gate seed mining.")
+    scaffold_parser.add_argument("--seed-fetch-json", help="Saved fetch --output JSON from post-scope seed screening.")
+    scaffold_parser.add_argument("--seed-mine-json", help="Saved mine --output JSON from post-scope screened discovery records.")
     scaffold_parser.add_argument("--related-json", help="Saved related --output JSON for seed-set expansion.")
     scaffold_parser.add_argument("--recall-json", help="Saved recall --output JSON for relative-recall estimation.")
     scaffold_parser.add_argument("--blocks-file", help="JSON list of {label, query} concept blocks (or a {label: query} map) to populate concept_blocks for the numbered line set; counts are matched from labelled manifest search entries.")

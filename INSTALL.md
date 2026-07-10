@@ -83,6 +83,22 @@ If you see errors or warnings:
 - **`HTTP 400`**: Your query may be malformed (the `doctor` command shouldn't be - please report)
 - **Network error**: Check your internet connection and NCBI API availability
 
+### 6. Build the Clean Codex Skill Package
+
+Keep repository-only material (`tests`, `evals`, setup guides, and examples) outside the installed skill. Package only runtime files:
+
+```powershell
+python tools\package_skill.py --output "$env:USERPROFILE\.codex\skills\pubmed-search-builder" --replace
+```
+
+On macOS/Linux:
+
+```bash
+python tools/package_skill.py --output "${CODEX_HOME:-$HOME/.codex}/skills/pubmed-search-builder" --replace
+```
+
+Re-run the command after pulling updates. The package intentionally excludes `.env`; set NCBI variables in the environment or place `.env` in the working directory where searches run.
+
 ---
 
 ## Getting an NCBI Email
@@ -161,6 +177,7 @@ To update to the latest version:
 
 ```bash
 git pull origin main
+python tools/package_skill.py --output "${CODEX_HOME:-$HOME/.codex}/skills/pubmed-search-builder" --replace
 ```
 
 Your `.env` file will not be affected (it's in `.gitignore`).

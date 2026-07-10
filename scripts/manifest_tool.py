@@ -12,12 +12,12 @@ union of {commands run, counts returned, files written, supersessions}: the PubM
 CLIs stream JSON to stdout and never see agent-written artifacts such as concept-block
 ``.txt`` files or ``audit_*.md``.
 
-Schema (manifest_version 1.0)::
+Schema (manifest_version 1.1)::
 
     {
-      "manifest_version": "1.0",
+      "manifest_version": "1.1",
       "skill": "pubmed-search-builder",
-      "skill_version": "1.0.0",
+      "skill_version": "2.0.0",
       "topic_slug": "<slug or ''>",
       "created_utc": "2026-05-31T12:00:00Z",
       "updated_utc": "2026-05-31T12:40:00Z",
@@ -69,11 +69,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-MANIFEST_VERSION = "1.0"
+MANIFEST_VERSION = "1.1"
 SKILL_NAME = "pubmed-search-builder"
-DEFAULT_SKILL_VERSION = "1.0.0"
+DEFAULT_SKILL_VERSION = "2.0.0"
 
 ENTRY_KINDS = (
+    "scope",
+    "candidate-screen",
     "search",
     "fetch",
     "related",
@@ -85,6 +87,8 @@ ENTRY_KINDS = (
     "variants",
     "validate",
     "qa",
+    "critic",
+    "revision",
     "mesh",
     "artifact",
     "other",
@@ -117,7 +121,21 @@ REQUIRED_ENTRY_KEYS = ("seq", "timestamp_utc", "kind", "command")
 # "where am I in the build" tracking that would otherwise be reconstructed from conversation
 # prose each turn: the current workflow stage, which stages are done, gate decisions, and the
 # one unresolved user question (if any).
-STAGE_NAMES = (
+CANONICAL_STAGE_NAMES = (
+    "intake",
+    "scope-lock",
+    "candidate-discovery",
+    "candidate-screening",
+    "objective-evidence",
+    "block-testing",
+    "validation",
+    "critic-review",
+    "revision",
+    "final-qa",
+    "audit-output",
+    "peer-review-handoff",
+)
+LEGACY_STAGE_NAMES = (
     "question-intake",
     "seed-intake",
     "limited-seed-evidence",
@@ -125,13 +143,8 @@ STAGE_NAMES = (
     "pre-mesh-brainstorm",
     "mesh-exploration",
     "text-word-expansion",
-    "block-testing",
-    "validation",
-    "revision",
-    "final-qa",
-    "audit-output",
-    "peer-review-handoff",
 )
+STAGE_NAMES = CANONICAL_STAGE_NAMES + LEGACY_STAGE_NAMES
 GATE_NAMES = ("framework", "seed", "concept", "filter")
 UNRESOLVED_GATE_VALUES = {"", "pending"}
 
@@ -427,6 +440,22 @@ def new_build_state() -> dict[str, object]:
         "open_decisions": [],
         "blocks": {},
         "recall_offer": "pending",
+        "scope": {
+            "version": 0,
+            "status": "pending",
+            "artifact": "",
+            "reopened_reason": "",
+            "history": [],
+        },
+        "candidate_screening": {
+            "status": "pending",
+            "artifact": "",
+            "validation_artifact": "",
+            "summary": {},
+            "reason": "",
+        },
+        "critic_rounds": [],
+        "revision_cycles": [],
         "updated_utc": utc_now(),
     }
 
@@ -448,6 +477,20 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
             state["gates"].setdefault(gate, "pending")
     if not isinstance(state.get("blocks"), dict):
         state["blocks"] = {}
+    if not isinstance(state.get("scope"), dict):
+        state["scope"] = base["scope"]
+    else:
+        for key, value in base["scope"].items():
+            state["scope"].setdefault(key, value)
+    if not isinstance(state.get("candidate_screening"), dict):
+        state["candidate_screening"] = base["candidate_screening"]
+    else:
+        for key, value in base["candidate_screening"].items():
+            state["candidate_screening"].setdefault(key, value)
+    if not isinstance(state.get("critic_rounds"), list):
+        state["critic_rounds"] = []
+    if not isinstance(state.get("revision_cycles"), list):
+        state["revision_cycles"] = []
     return state
 
 
@@ -479,6 +522,122 @@ def recall_offer_readiness(state: dict[str, object]) -> list[str]:
         "no-seed recall offer unresolved: offer the optional heuristic recall check, then record the "
         "outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`"
     ]
+
+
+def load_json_object(path_value: str, label: str) -> dict[str, object]:
+    path = Path(path_value)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"Could not read {label} {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ManifestError(f"{label} must be a JSON object: {path}")
+    return value
+
+
+def validate_scope_artifact(path_value: str) -> dict[str, object]:
+    data = load_json_object(path_value, "retrieval-scope artifact")
+    version = data.get("scope_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ManifestError("retrieval-scope artifact scope_version must be a positive integer")
+    for field in ("review_question", "framework", "essential_blocks"):
+        value = data.get(field)
+        if value in (None, "", [], {}):
+            raise ManifestError(f"retrieval-scope artifact requires non-empty {field}")
+    if not isinstance(data.get("essential_blocks"), list):
+        raise ManifestError("retrieval-scope artifact essential_blocks must be a list")
+    ambiguities = data.get("unresolved_ambiguities", [])
+    if not isinstance(ambiguities, list):
+        raise ManifestError("retrieval-scope artifact unresolved_ambiguities must be a list")
+    if ambiguities:
+        raise ManifestError("retrieval scope cannot be locked while unresolved_ambiguities is non-empty")
+    return {
+        "version": version,
+        "review_question": str(data.get("review_question")),
+        "framework": data.get("framework"),
+        "essential_block_count": len(data.get("essential_blocks", [])),
+    }
+
+
+def validated_receipt(path_value: str, expected_operation: str) -> dict[str, object]:
+    data = load_json_object(path_value, "validation receipt")
+    if data.get("operation") != expected_operation:
+        raise ManifestError(
+            f"validation receipt operation must be {expected_operation!r}, got {data.get('operation')!r}"
+        )
+    if data.get("ok") is not True:
+        raise ManifestError(f"validation receipt did not pass: {path_value}")
+    summary = data.get("summary")
+    if not isinstance(summary, dict):
+        raise ManifestError(f"validation receipt lacks a summary object: {path_value}")
+    return summary
+
+
+def validate_revision_artifact(path_value: str) -> dict[str, object]:
+    data = load_json_object(path_value, "revision-cycle artifact")
+    required = (
+        "revision_round",
+        "critic_round",
+        "scope_version",
+        "trigger_finding",
+        "classification",
+        "change",
+        "evidence_files",
+        "required_reprobe",
+        "strategy_file",
+        "disposition",
+    )
+    for field in required:
+        if data.get(field) in (None, "", [], {}):
+            raise ManifestError(f"revision-cycle artifact requires non-empty {field}")
+    for field in ("revision_round", "critic_round", "scope_version"):
+        value = data.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ManifestError(f"revision-cycle artifact {field} must be a positive integer")
+    if data.get("classification") not in {"lexical", "structural", "scope", "filter", "syntax", "reporting"}:
+        raise ManifestError("revision-cycle artifact classification is invalid")
+    return {
+        "revision_round": data["revision_round"],
+        "critic_round": data["critic_round"],
+        "scope_version": data["scope_version"],
+        "classification": data["classification"],
+        "trigger_finding": data["trigger_finding"],
+        "change": data["change"],
+        "strategy_file": data["strategy_file"],
+        "disposition": data["disposition"],
+    }
+
+
+def append_internal_entry(
+    data: dict[str, object],
+    *,
+    now: str,
+    kind: str,
+    label: str,
+    command: str,
+    output_path: str,
+    note: str = "",
+) -> int:
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        raise ManifestError("manifest entries is not a list")
+    seq = len(entries) + 1
+    entries.append(
+        {
+            "seq": seq,
+            "timestamp_utc": now,
+            "kind": kind,
+            "label": label,
+            "block": "",
+            "command": command,
+            "output_path": output_path,
+            "count": None,
+            "supersedes": None,
+            "note": note,
+            "open_decision": False,
+        }
+    )
+    return seq
 
 
 def seed_gate_is_no_seed(state: dict[str, object]) -> bool:
@@ -698,6 +857,145 @@ def low_count_review_readiness(data: dict[str, object], manifest_path: Path, thr
     ]
 
 
+def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> list[str]:
+    """Return all reasons a completed conceptual-objective-critic loop cannot be handed off."""
+    issues: list[str] = []
+    state = data.get("build_state")
+    if not isinstance(state, dict):
+        return ["build_state not initialized; the complete-loop gate requires tracked state"]
+    state = ensure_build_state(data)
+    issues.extend(build_state_readiness(state))
+
+    gates = state.get("gates") if isinstance(state.get("gates"), dict) else {}
+    for gate in GATE_NAMES:
+        if not gate_resolved(gates.get(gate)):
+            issues.append(f"{gate} gate is not resolved")
+
+    scope = state.get("scope") if isinstance(state.get("scope"), dict) else {}
+    scope_version = scope.get("version")
+    if scope.get("status") != "locked" or not isinstance(scope_version, int) or scope_version < 1:
+        issues.append("retrieval scope is not locked at a positive version")
+    scope_artifact = str(scope.get("artifact") or "")
+    if not scope_artifact:
+        issues.append("retrieval-scope artifact is not recorded")
+    elif not output_path_exists(scope_artifact, manifest_path=manifest_path, data=data):
+        issues.append(f"retrieval-scope artifact does not exist: {scope_artifact}")
+
+    screening = state.get("candidate_screening") if isinstance(state.get("candidate_screening"), dict) else {}
+    screening_status = screening.get("status")
+    if screening_status not in {"complete", "not-applicable"}:
+        issues.append("candidate screening is not complete or explicitly not applicable")
+    if screening_status == "complete":
+        for key, label in (("artifact", "candidate ledger"), ("validation_artifact", "candidate-ledger validation")):
+            path_value = str(screening.get(key) or "")
+            if not path_value:
+                issues.append(f"{label} artifact is not recorded")
+            elif not output_path_exists(path_value, manifest_path=manifest_path, data=data):
+                issues.append(f"{label} artifact does not exist: {path_value}")
+    if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
+        issues.append("candidate-screening not-applicable status lacks a reason")
+
+    entries = data.get("entries", [])
+    issues.extend(block_coverage_readiness(state, entries))
+    issues.extend(gap_coverage_readiness(state, entries))
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    for label, spec in blocks.items():
+        if not isinstance(spec, dict) or spec.get("scope_version") != scope_version:
+            issues.append(f"block {label!r} is not registered against the current scope version")
+
+    if seed_gate_is_no_seed(state):
+        issues.extend(recall_offer_readiness(state))
+
+    critics = state.get("critic_rounds") if isinstance(state.get("critic_rounds"), list) else []
+    if not critics:
+        issues.append("no PRESS-informed critic round is recorded")
+        latest_critic_seq = 0
+    else:
+        latest = critics[-1] if isinstance(critics[-1], dict) else {}
+        latest_critic_seq = int(latest.get("entry_seq") or 0)
+        if latest.get("overall_status") != "pass":
+            issues.append("latest critic round has not passed")
+        if latest.get("open_actionable") not in (0, None):
+            issues.append("latest critic round still has open actionable findings")
+        if latest.get("scope_version") != scope_version:
+            issues.append("latest critic round does not match the current retrieval-scope version")
+        for key, label in (("artifact", "critic"), ("validation_artifact", "critic validation")):
+            path_value = str(latest.get(key) or "")
+            if not path_value:
+                issues.append(f"latest {label} artifact is not recorded")
+            elif not output_path_exists(path_value, manifest_path=manifest_path, data=data):
+                issues.append(f"latest {label} artifact does not exist: {path_value}")
+
+    revisions = state.get("revision_cycles") if isinstance(state.get("revision_cycles"), list) else []
+    revision_critic_rounds = {
+        item.get("critic_round") for item in revisions if isinstance(item, dict)
+    }
+    for critic in critics:
+        if isinstance(critic, dict) and critic.get("overall_status") == "revise":
+            if critic.get("round") not in revision_critic_rounds:
+                issues.append(f"critic round {critic.get('round')} required revision but no revision cycle is recorded")
+
+    screening_summary = screening.get("summary") if isinstance(screening.get("summary"), dict) else {}
+    needs_validation = str(gates.get("seed") or "").strip().lower() in {"provided", "partial"}
+    needs_validation = needs_validation or bool(screening_summary.get("independent_holdout_available"))
+    validation_entries = [
+        entry for entry in entries
+        if isinstance(entry, dict) and entry.get("kind") in {"validate", "recall"}
+    ]
+    if needs_validation and not validation_entries:
+        issues.append("seed/holdout validation is required but no validate or recall artifact is recorded")
+    elif needs_validation and not any(
+        isinstance(entry.get("output_path"), str)
+        and entry.get("output_path")
+        and output_path_exists(str(entry["output_path"]), manifest_path=manifest_path, data=data)
+        for entry in validation_entries
+    ):
+        issues.append("recorded validation lacks an existing output artifact")
+
+    final_qa_entries = [
+        entry for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("kind") == "qa"
+        and "final-qa" in str(entry.get("command") or "").casefold()
+    ]
+    final_qa_entries.sort(key=lambda entry: int(entry.get("seq") or 0))
+    if not final_qa_entries:
+        issues.append("no hooks_tool.py final-qa entry is recorded")
+        final_qa_seq = 0
+    else:
+        final_qa = final_qa_entries[-1]
+        final_qa_seq = int(final_qa.get("seq") or 0)
+        if latest_critic_seq and final_qa_seq <= latest_critic_seq:
+            issues.append("final QA was not rerun after the latest critic round")
+        output_value = str(final_qa.get("output_path") or "")
+        if not output_value or not output_path_exists(output_value, manifest_path=manifest_path, data=data):
+            issues.append("latest final-qa entry lacks an existing output artifact")
+
+    if latest_final_topic_count(entries) is None:
+        issues.append("no final topic-only strategy count is recorded")
+    else:
+        issues.extend(low_count_review_readiness(data, manifest_path))
+
+    audit_entries = [
+        entry for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("kind") == "artifact"
+        and str(entry.get("output_path") or "").lower().endswith(".md")
+    ]
+    audit_entries.sort(key=lambda entry: int(entry.get("seq") or 0))
+    if not audit_entries:
+        issues.append("no final audit Markdown artifact is recorded")
+    else:
+        audit = audit_entries[-1]
+        if final_qa_seq and int(audit.get("seq") or 0) <= final_qa_seq:
+            issues.append("audit Markdown was not rendered after final QA")
+        output_value = str(audit.get("output_path") or "")
+        if not output_path_exists(output_value, manifest_path=manifest_path, data=data):
+            issues.append(f"audit Markdown artifact does not exist: {output_value}")
+
+    return issues
+
+
 def load_block_labels(path_str: str) -> list[str]:
     """Extract block labels from a ``--blocks-file`` (the same ``[{label, query}]`` list or
     ``{label: query}`` map used by ``recall``/``audit-scaffold``). Only labels are read, so the
@@ -738,7 +1036,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
     action = args.state_action
 
     # Read-only actions never lock or write.
-    if action in ("show", "check-ready", "coverage"):
+    if action in ("show", "check-ready", "check-complete", "coverage"):
         data = load_manifest(path)
         state = ensure_build_state(data)
         receipt = base_receipt(f"state-{action}", path, data)
@@ -748,6 +1046,10 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             receipt["reminders"] = reminders
         if action == "check-ready":
             issues = build_state_readiness(state)
+            receipt["ok"] = not issues
+            receipt["issues"] = issues
+        elif action == "check-complete":
+            issues = complete_loop_readiness(data, path)
             receipt["ok"] = not issues
             receipt["issues"] = issues
         elif action == "coverage":
@@ -791,15 +1093,177 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                     f"Unknown recall-offer value {args.value!r}. Choose from: {', '.join(RECALL_OFFER_VALUES)}."
                 )
             state["recall_offer"] = args.value
+        elif action == "lock-scope":
+            summary = validate_scope_artifact(args.scope_file)
+            scope = state["scope"]
+            current_version = int(scope.get("version") or 0)
+            new_version = int(summary["version"])
+            if current_version and scope.get("status") != "reopened":
+                if new_version == current_version and scope.get("artifact") == args.scope_file:
+                    pass
+                else:
+                    raise ManifestError("reopen the current scope before locking a new version")
+            elif new_version != current_version + 1:
+                raise ManifestError(
+                    f"scope version must increment by one: current={current_version}, supplied={new_version}"
+                )
+            history = scope.get("history") if isinstance(scope.get("history"), list) else []
+            existing = next((item for item in history if isinstance(item, dict) and item.get("version") == new_version), None)
+            if existing is None:
+                entry_seq = append_internal_entry(
+                    data,
+                    now=now,
+                    kind="scope",
+                    label=f"retrieval scope v{new_version}",
+                    command=f"manifest_tool.py state lock-scope --scope-file {args.scope_file}",
+                    output_path=args.scope_file,
+                    note=str(scope.get("reopened_reason") or "initial conceptual scope lock"),
+                )
+                history.append(
+                    {
+                        **summary,
+                        "artifact": args.scope_file,
+                        "locked_utc": now,
+                        "reason": str(scope.get("reopened_reason") or "initial conceptual scope lock"),
+                        "entry_seq": entry_seq,
+                    }
+                )
+            scope.update(
+                {
+                    "version": new_version,
+                    "status": "locked",
+                    "artifact": args.scope_file,
+                    "reopened_reason": "",
+                    "history": history,
+                }
+            )
+            state["gates"]["concept"] = f"resolved-v{new_version}"
+            state["current_stage"] = "scope-lock"
+        elif action == "reopen-scope":
+            reason = str(args.reason or "").strip()
+            if not reason:
+                raise ManifestError("reopen-scope requires a non-empty reason")
+            scope = state["scope"]
+            if scope.get("status") != "locked" or int(scope.get("version") or 0) < 1:
+                raise ManifestError("cannot reopen scope before an initial scope version is locked")
+            scope["status"] = "reopened"
+            scope["reopened_reason"] = reason
+            state["gates"]["concept"] = "pending"
+            state["candidate_screening"] = new_build_state()["candidate_screening"]
+            state["blocks"] = {}
+            state["current_stage"] = "revision"
+        elif action == "record-candidate-screen":
+            scope = state["scope"]
+            if scope.get("status") != "locked":
+                raise ManifestError("lock retrieval scope before recording candidate screening")
+            summary = validated_receipt(args.validation_file, "candidate-ledger-validate")
+            if summary.get("scope_version") != scope.get("version"):
+                raise ManifestError("candidate ledger scope_version does not match the locked retrieval scope")
+            entry_seq = append_internal_entry(
+                data,
+                now=now,
+                kind="candidate-screen",
+                label=f"candidate screening for scope v{scope.get('version')}",
+                command=(
+                    f"candidate_ledger.py {args.ledger_file} --output {args.validation_file}; "
+                    "manifest_tool.py state record-candidate-screen"
+                ),
+                output_path=args.ledger_file,
+                note="validated candidate discovery/holdout roles",
+            )
+            state["candidate_screening"] = {
+                "status": "complete",
+                "artifact": args.ledger_file,
+                "validation_artifact": args.validation_file,
+                "summary": summary,
+                "reason": "",
+                "entry_seq": entry_seq,
+                "completed_utc": now,
+            }
+            state["current_stage"] = "candidate-screening"
+        elif action == "resolve-candidate-screening":
+            reason = str(args.reason or "").strip()
+            if args.value != "not-applicable":
+                raise ManifestError("resolve-candidate-screening currently accepts only not-applicable")
+            if not reason:
+                raise ManifestError("candidate-screening not-applicable requires a reason")
+            state["candidate_screening"] = {
+                "status": "not-applicable",
+                "artifact": "",
+                "validation_artifact": "",
+                "summary": {},
+                "reason": reason,
+                "completed_utc": now,
+            }
+        elif action == "record-critic":
+            scope = state["scope"]
+            if scope.get("status") != "locked":
+                raise ManifestError("lock retrieval scope before recording a critic round")
+            summary = validated_receipt(args.validation_file, "critic-artifact-validate")
+            if summary.get("scope_version") != scope.get("version"):
+                raise ManifestError("critic scope_version does not match the locked retrieval scope")
+            rounds = state["critic_rounds"]
+            expected_round = len(rounds) + 1
+            if summary.get("round") != expected_round:
+                raise ManifestError(f"critic round must be sequential: expected {expected_round}")
+            entry_seq = append_internal_entry(
+                data,
+                now=now,
+                kind="critic",
+                label=f"PRESS-informed critic round {summary.get('round')}",
+                command=(
+                    f"critic_tool.py {args.critic_file} --output {args.validation_file}; "
+                    "manifest_tool.py state record-critic"
+                ),
+                output_path=args.critic_file,
+                note=f"overall_status={summary.get('overall_status')}",
+            )
+            rounds.append(
+                {
+                    **summary,
+                    "artifact": args.critic_file,
+                    "validation_artifact": args.validation_file,
+                    "entry_seq": entry_seq,
+                    "recorded_utc": now,
+                }
+            )
+            state["current_stage"] = "critic-review"
+        elif action == "record-revision":
+            summary = validate_revision_artifact(args.revision_file)
+            scope = state["scope"]
+            if summary.get("scope_version") != scope.get("version"):
+                raise ManifestError("revision-cycle scope_version does not match the current retrieval scope")
+            expected_round = len(state["revision_cycles"]) + 1
+            if summary.get("revision_round") != expected_round:
+                raise ManifestError(f"revision round must be sequential: expected {expected_round}")
+            critic_round = int(summary.get("critic_round") or 0)
+            critics = state["critic_rounds"]
+            if critic_round < 1 or critic_round > len(critics):
+                raise ManifestError("revision-cycle critic_round does not reference a recorded critic round")
+            entry_seq = append_internal_entry(
+                data,
+                now=now,
+                kind="revision",
+                label=f"revision cycle {summary.get('revision_round')}",
+                command=f"manifest_tool.py state record-revision --revision-file {args.revision_file}",
+                output_path=args.revision_file,
+                note=str(summary.get("change") or ""),
+            )
+            state["revision_cycles"].append(
+                {**summary, "artifact": args.revision_file, "entry_seq": entry_seq, "recorded_utc": now}
+            )
+            state["current_stage"] = "revision"
         elif action == "register-blocks":
+            scope = state["scope"]
             blocks = state["blocks"]
             for label in load_block_labels(args.blocks_file):
                 if label not in blocks:
-                    blocks[label] = {"waivers": {}}
+                    blocks[label] = {"waivers": {}, "scope_version": scope.get("version")}
         elif action == "register-block":
+            scope = state["scope"]
             blocks = state["blocks"]
             if args.label not in blocks:
-                blocks[args.label] = {"waivers": {}}
+                blocks[args.label] = {"waivers": {}, "scope_version": scope.get("version")}
         elif action == "waive-requirement":
             if args.requirement not in WAIVABLE_REQUIREMENTS:
                 raise ManifestError(
@@ -903,6 +1367,7 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
     require_recall_offer = getattr(args, "require_recall_offer", False)
     require_gap_analysis = getattr(args, "require_gap_analysis", False)
     require_low_count_review = getattr(args, "require_low_count_review", False)
+    require_complete_loop = getattr(args, "require_complete_loop", False)
     if (
         args.validate
         or args.check_files
@@ -911,6 +1376,7 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
         or require_recall_offer
         or require_gap_analysis
         or require_low_count_review
+        or require_complete_loop
     ):
         issues = (
             validate_manifest(data, check_files=args.check_files, manifest_path=path)
@@ -966,6 +1432,8 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
                 issues.extend(f"gap-analysis gap: {reason}" for reason in gap_coverage_readiness(state, entries))
         if require_low_count_review:
             issues.extend(low_count_review_readiness(data, path))
+        if require_complete_loop:
+            issues.extend(f"complete-loop gap: {reason}" for reason in complete_loop_readiness(data, path))
         receipt["ok"] = not issues
         receipt["issues"] = issues
     return receipt
@@ -1029,6 +1497,11 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "gap_coverage": gap_coverage,
             "final_topic_count": final_topic_count,
             "low_count_review_required": final_topic_count is not None and final_topic_count < LOW_COUNT_THRESHOLD,
+            "scope": state.get("scope") if isinstance(state, dict) else None,
+            "candidate_screening": state.get("candidate_screening") if isinstance(state, dict) else None,
+            "critic_rounds": state.get("critic_rounds") if isinstance(state, dict) else [],
+            "revision_cycles": state.get("revision_cycles") if isinstance(state, dict) else [],
+            "complete_loop_issues": complete_loop_readiness(data, path) if isinstance(state, dict) else ["build_state not initialized"],
         }
     )
     reminders = build_state_reminders(state) if isinstance(state, dict) else []
@@ -1103,6 +1576,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Low-count gate (opt-in): if final topic-only count is below 500, also fail unless a passing hooks_tool.py low-count-review QA artifact is recorded.",
     )
+    show_parser.add_argument(
+        "--require-complete-loop",
+        action="store_true",
+        help="Combined final-handoff gate: require locked versioned scope, candidate-screening integrity, current block evidence, applicable validation, a passing critic round, final QA, final count/low-count handling, audit output, and no pending decision.",
+    )
 
     report_parser = subparsers.add_parser("report", help="Read-only build dashboard from the manifest (no reruns).")
     report_parser.add_argument("--manifest", default="run_manifest.json", help="Manifest path (default: %(default)s).")
@@ -1141,6 +1619,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_recall_offer.add_argument("value", help=f"Outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.")
 
+    lock_scope = add_state_action(
+        "lock-scope", "Validate and lock the next retrieval-scope JSON version before objective evidence."
+    )
+    lock_scope.add_argument("--scope-file", required=True, help="Versioned retrieval_scope_vN.json artifact.")
+
+    reopen_scope = add_state_action(
+        "reopen-scope", "Reopen the current scope after a structural/scope finding; clears block and candidate-screen state."
+    )
+    reopen_scope.add_argument("--reason", required=True, help="Evidence-backed reason for reopening scope.")
+
+    record_candidate = add_state_action(
+        "record-candidate-screen", "Record a candidate ledger that passed candidate_ledger.py validation."
+    )
+    record_candidate.add_argument("--ledger-file", required=True, help="Validated candidate_ledger.json path.")
+    record_candidate.add_argument(
+        "--validation-file", required=True, help="Passing candidate_ledger.py --output receipt path."
+    )
+
+    resolve_candidate = add_state_action(
+        "resolve-candidate-screening", "Record candidate screening as not applicable with a reason."
+    )
+    resolve_candidate.add_argument("value", choices=["not-applicable"], help="Resolution value.")
+    resolve_candidate.add_argument("--reason", required=True, help="Why no candidate screening was feasible/applicable.")
+
+    record_critic = add_state_action(
+        "record-critic", "Record the next PRESS-informed critic round after critic_tool.py validation."
+    )
+    record_critic.add_argument("--critic-file", required=True, help="critic_round_N.json path.")
+    record_critic.add_argument(
+        "--validation-file", required=True, help="Passing critic_tool.py --output receipt path."
+    )
+
+    record_revision = add_state_action(
+        "record-revision", "Validate and record the next semantic revision-cycle JSON artifact."
+    )
+    record_revision.add_argument("--revision-file", required=True, help="revision_cycle_N.json path.")
+
     register_blocks = add_state_action(
         "register-blocks", "Register essential blocks for the coverage gate from a --blocks-file."
     )
@@ -1161,6 +1676,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_state_action("show", "Print the current build-state block (read-only).", mutating=False)
     add_state_action(
         "check-ready", "Report whether the build is ready for final handoff (read-only; exit 1 if not).", mutating=False
+    )
+    add_state_action(
+        "check-complete", "Run the combined conceptual-objective-critic completion gate (read-only).", mutating=False
     )
     add_state_action(
         "coverage",

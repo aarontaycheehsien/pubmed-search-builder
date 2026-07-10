@@ -52,7 +52,8 @@ class ManifestToolTests(unittest.TestCase):
         for key in manifest_tool.TOP_LEVEL_KEYS:
             self.assertIn(key, data)
         self.assertEqual(data["skill"], "pubmed-search-builder")
-        self.assertEqual(data["manifest_version"], "1.0")
+        self.assertEqual(data["manifest_version"], "1.1")
+        self.assertEqual(data["skill_version"], "2.0.0")
 
         entry = data["entries"][0]
         self.assertEqual(entry["seq"], 1)

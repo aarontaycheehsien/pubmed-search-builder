@@ -287,7 +287,7 @@ class AuditMarkdownTests(unittest.TestCase):
 
     def test_seed_and_recall_template_sections_render_with_defaults(self):
         markdown = audit_markdown.render_audit_markdown(sample_data(), Path("audit.md"))
-        self.assertIn("### Pre-gate seed triage", markdown)
+        self.assertIn("### Post-scope seed fetch and screening", markdown)
         self.assertIn("### Seed-set expansion (related)", markdown)
         self.assertIn("### Relative-recall estimation", markdown)
         self.assertIn("not applicable - no usable seeds", markdown)
@@ -340,8 +340,8 @@ class AuditMarkdownTests(unittest.TestCase):
         }
         markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
 
-        self.assertLess(markdown.index("### MeSH derived from seed records"), markdown.index("### Pre-gate seed triage"))
-        self.assertLess(markdown.index("### Pre-gate seed triage"), markdown.index("### Seed-set expansion (related)"))
+        self.assertLess(markdown.index("### MeSH derived from seed records"), markdown.index("### Post-scope seed fetch and screening"))
+        self.assertLess(markdown.index("### Post-scope seed fetch and screening"), markdown.index("### Seed-set expansion (related)"))
         self.assertLess(markdown.index("### Seed-set expansion (related)"), markdown.index("### MeSH derived from PubMed query translations"))
         self.assertLess(markdown.index("### PubMed CLI checks"), markdown.index("### Relative-recall estimation"))
         self.assertIn("Robot pets in care homes", markdown)

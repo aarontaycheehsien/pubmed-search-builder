@@ -111,6 +111,8 @@ Final search run: [date].
 
 Within scope to flag. State that the strategy was peer reviewed by a second information specialist using a structured instrument (typically PRESS, McGowan et al., 2016, J Clin Epidemiol), or state explicitly that no peer review has occurred.
 
+Report automated `PRESS-informed internal critic` rounds separately as development QA. They do not satisfy Item 14 and must not be named as PRESS peer review.
+
 ```text
 This draft strategy has not yet been peer reviewed. Per PRESS (McGowan et al., 2016), it should be peer reviewed by a second information specialist before being run as the final search.
 ```

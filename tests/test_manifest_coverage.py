@@ -63,7 +63,7 @@ class ManifestCoverageTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         blocks = self.load()["build_state"]["blocks"]
         self.assertEqual(set(blocks), {"malaria", "rdt"})
-        self.assertEqual(blocks["malaria"], {"waivers": {}})
+        self.assertEqual(blocks["malaria"], {"waivers": {}, "scope_version": 0})
 
     def test_register_blocks_from_map_file_and_is_idempotent(self):
         bf = self.write_blocks_file({"malaria": "x", "rdt": "y"})

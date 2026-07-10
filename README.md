@@ -2,7 +2,7 @@
 
 **High-sensitivity Boolean search strategy development for PubMed - built for evidence syntheses.**
 
-A comprehensive toolkit for building, testing, and validating PubMed search strategies that prioritize **recall over precision**. Includes bundled tools for MeSH descriptor lookup, text-word expansion, wildcard testing, seed PMID validation, and PRESS-style QA/reporting.
+A comprehensive toolkit for building, testing, and validating PubMed search strategies that prioritize **recall over precision**. It locks conceptual scope before record evidence, prescreens candidate studies, mines MeSH and author language, validates with held-out records when possible, and runs a versioned PRESS-informed internal critic/revision loop before human peer review.
 
 Used for systematic reviews, scoping reviews, rapid reviews, evidence maps, and narrative syntheses where missing relevant records is costlier than screening extra noise.
 
@@ -62,7 +62,7 @@ All strategies produced by this toolkit are drafts. They must be peer-reviewed b
 
 ### PubMed E-utilities (`scripts/pubmed_tool.py`)
 
-Query PubMed, fetch records, expand seed PMIDs into a candidate relevant set (similar articles and citation chaining), validate seed PMIDs, estimate relative recall against a benchmark set, rank candidate terms by enrichment, and test strategy variants.
+Query PubMed, fetch records, discover candidate studies through similar articles/citation chaining, validate records and blocks, estimate relative recall against a labelled benchmark, rank candidate terms from screened discovery records, and test strategy variants.
 
 **Common commands:**
 
@@ -73,7 +73,7 @@ python scripts/pubmed_tool.py search "asthma[tiab]" --retmax 0
 # Fetch detailed metadata for known PMIDs
 python scripts/pubmed_tool.py fetch --pmids 24102982 21171099 --output seed_fetch.json
 
-# Expand seed PMIDs into a candidate relevant set (similar articles + citation chaining)
+# Discover candidate PMIDs (screen them before term mining)
 python scripts/pubmed_tool.py related --pmids 24102982 21171099 --links similar,citedin
 
 # Sample a few records from a query
@@ -169,7 +169,7 @@ python scripts/manifest_tool.py report --manifest run_manifest.json
 
 ## Workflow
 
-See [`references/workflow.md`](references/workflow.md) for the authoritative step-by-step workflow, including the seed-pause rule, concept gate, MeSH and text-word expansion, PubMed testing, seed validation, revision, final QA, audit Markdown handoff, and PRESS peer-review framing.
+See [`references/workflow.md`](references/workflow.md) for the authoritative scope lock → candidate screening → objective evidence → critic/revision loop → audit/human PRESS handoff.
 
 The README is only a user-facing overview; use the reference workflow when building or auditing a strategy.
 
@@ -271,12 +271,14 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/workflow.md](references/workflow.md)**: Detailed step-by-step workflow
 - **[references/framework-selection.md](references/framework-selection.md)**: Question-type-to-framework selection (PICO, PECO, PIRD, PCC, SPIDER, etc.)
 - **[references/concept-analysis-and-gating.md](references/concept-analysis-and-gating.md)**: Concept-analysis ledger, AND-block admission test, and the concept gate
+- **[references/candidate-screening.md](references/candidate-screening.md)**: Candidate-study screening, discovery/holdout roles, and evidence-set integrity
+- **[references/press-critic.md](references/press-critic.md)**: PRESS-informed internal critic schema, routing, and pass criteria
 - **[references/goal-tracking.md](references/goal-tracking.md)**: Goal tracking state rules, pre-goal intake, blockers, and completion audit
 - **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and the tool-to-stage map
 - **[references/tiab-expansion.md](references/tiab-expansion.md)**: Title/abstract expansion sources and strategies
 - **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, current PubMed wildcard limits, and testing
 - **[references/bramer-reciprocal-gap-analysis.md](references/bramer-reciprocal-gap-analysis.md)**: Conditional controlled-vocabulary/text-word gap analysis
-- **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Seed PMID validation workflow
+- **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Post-scope seed discovery, screening, term mining, and validation
 - **[references/validated-methodological-filters-and-hedges.md](references/validated-methodological-filters-and-hedges.md)**: Cochrane, McMaster, and other validated filters
 - **[references/anti-patterns.md](references/anti-patterns.md)**: Catalogued LLM failure modes with literature anchors
 - **[references/audit-template.md](references/audit-template.md)**: Complete audit report Markdown template
