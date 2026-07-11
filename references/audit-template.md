@@ -112,6 +112,14 @@ If a validated filter or focused variant was also tested:
 - **Saturation history:** [new included studies and new vocabulary per round; consecutive zero-novelty rounds]
 - **Holdout freeze:** [allocation method and ledger path before term mining, or not applicable]
 
+### Active vocabulary learning
+
+- **Newly included records processed:** [PMIDs by round]
+- **Within-concept vocabulary proposals:** [concept, term, source records, accepted/rejected/deferred, reason]
+- **Excluded-record diagnosis:** [separate terminology and exclusion-reason summary; not used for proposals]
+- **Scope challenges:** [new concept or eligibility interpretation; scope re-entry/version, or none]
+- **Accepted-term retests:** [held-out records rescued/still missed, differential count, sample path, PubMed translation]
+
 ## Search strategy (numbered line set)
 
 PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; line numbers (`#n`) reference earlier lines as in the PubMed Advanced Search history.

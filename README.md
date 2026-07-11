@@ -152,6 +152,8 @@ python scripts/strategy_analysis.py fragility-score --concepts-file fragility_co
 
 For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot families, writes a provenance-blinded screening file and a separate source map, tracks study/vocabulary saturation across rounds, and freezes the discovery/holdout ledger only after saturation.
 
+After candidate screening, `scripts/vocabulary_learning.py` extracts terms from newly included records, keeps excluded-record terminology diagnostic-only, blocks scope-changing proposals, and retests accepted within-concept additions against holdouts and differential samples.
+
 ### Audit Markdown (`scripts/audit_markdown.py`)
 
 Render structured audit notes to the required Markdown audit report without

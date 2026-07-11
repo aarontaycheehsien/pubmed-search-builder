@@ -21,6 +21,8 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 6. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`. When roles have not already been frozen, use `--allocate-holdout --ledger-output <path>` for a deterministic allocation.
 7. Mine only records that the validator marks eligible for discovery.
 
+After screening, use `active-vocabulary-learning.md`. Only newly included `discovery`/`both` records may generate proposals. Excluded records receive a separate diagnostic and never supply proposed search terms. Assign every included record to existing locked concepts before extraction; an unknown concept or changed eligibility interpretation requires scope re-entry.
+
 Do not feed a related-record set directly to `term-rank` merely because a PMID has high seed overlap or similarity. Those scores prioritize screening; they do not establish eligibility.
 
 For no-seed discovery, use `no_seed_discovery.py` and screen the generated file without opening its separate provenance map. Merge MeSH-led, exact-phrase-led, operational-description-led, prior-review-led, citation/registry-led, and historical-terminology-led candidates before screening. Reveal provenance only after decisions are saved. Continue rounds until both relevant-study and vocabulary novelty remain zero for the required consecutive rounds; a reached safety cap prevents a saturation claim.

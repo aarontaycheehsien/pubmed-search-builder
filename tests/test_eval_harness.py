@@ -28,6 +28,7 @@ class EvalHarnessTests(unittest.TestCase):
             self.assertTrue((skill_dir / "SKILL.md").is_file())
             self.assertTrue((skill_dir / "scripts" / "strategy_analysis.py").is_file())
             self.assertTrue((skill_dir / "scripts" / "no_seed_discovery.py").is_file())
+            self.assertTrue((skill_dir / "scripts" / "vocabulary_learning.py").is_file())
             self.assertFalse((skill_dir / "evals").exists())
             self.assertFalse((skill_dir / "tests").exists())
             self.assertNotIn("SECRET-FIXTURE", str(run_dir))

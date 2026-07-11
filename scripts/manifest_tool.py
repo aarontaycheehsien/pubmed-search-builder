@@ -1046,6 +1046,48 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 if item.get("human_override") and not str(item.get("override_reason") or "").strip():
                     issues.append(f"fragility-score concept {item.get('label')!r} has an override without a reason")
 
+        vocabulary_entries = operation_entries("vocabulary-learning")
+        if not vocabulary_entries:
+            issues.append("no active vocabulary-learning artifact follows candidate screening")
+        else:
+            vocabulary_entry = vocabulary_entries[-1]
+            analysis_sequences.append(int(vocabulary_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(vocabulary_entry.get("output_path") or "")) or {}
+            if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
+                issues.append("latest vocabulary-learning artifact failed or does not match the current scope version")
+            if payload.get("scope_reentry_required") is not False:
+                issues.append("vocabulary learning has an unresolved scope challenge requiring scope re-entry")
+            if payload.get("assignment_required") is not False or payload.get("processing_blockers") not in ([], None):
+                issues.append("vocabulary learning has unresolved record assignment/content blockers")
+            excluded = payload.get("excluded_record_diagnosis") if isinstance(payload.get("excluded_record_diagnosis"), dict) else {}
+            if excluded.get("used_for_proposals") is not False:
+                issues.append("excluded-record terminology was not kept diagnostic-only")
+            locked_concepts = {normalize_block_key(value) for value in payload.get("locked_concepts", [])}
+            missing_locked = sorted(str(label) for label in blocks if normalize_block_key(label) not in locked_concepts)
+            if missing_locked:
+                issues.append("vocabulary learning does not preserve registered locked concepts: " + ", ".join(missing_locked))
+            proposals = payload.get("proposals") if isinstance(payload.get("proposals"), list) else []
+            accepted = [item for item in proposals if isinstance(item, dict) and item.get("decision") == "accepted"]
+            if payload.get("accepted_term_count") != len(accepted) or payload.get("all_accepted_terms_retested") is not True:
+                issues.append("vocabulary learning does not confirm every accepted term was retested")
+            for item in proposals:
+                if not isinstance(item, dict):
+                    issues.append("vocabulary-learning proposal must be an object")
+                    continue
+                if item.get("decision") not in {"accepted", "rejected", "deferred"} or not str(item.get("decision_reason") or "").strip():
+                    issues.append(f"vocabulary proposal {item.get('proposal_id')!r} lacks a reasoned disposition")
+                if item.get("decision") != "accepted":
+                    continue
+                if item.get("within_locked_concept_attested") is not True or normalize_block_key(item.get("concept")) not in locked_concepts:
+                    issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} is not attested within a locked concept")
+                retest = item.get("retest") if isinstance(item.get("retest"), dict) else {}
+                holdout_test = retest.get("holdout_test") if isinstance(retest.get("holdout_test"), dict) else {}
+                differential_sample = retest.get("differential_sample") if isinstance(retest.get("differential_sample"), dict) else {}
+                if holdout_test.get("status") not in {"independent-holdout-tested", "unavailable-no-independent-holdout"}:
+                    issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a held-out retest status")
+                if not isinstance(differential_sample.get("count"), int) or not isinstance(differential_sample.get("records"), list):
+                    issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a differential sample")
+
     scope_payload = read_manifest_output_json(manifest_path, scope_artifact) if scope_artifact else None
     fragile = bool(isinstance(scope_payload, dict) and scope_payload.get("fragile_topic") is True)
     if isinstance(scope_payload, dict):

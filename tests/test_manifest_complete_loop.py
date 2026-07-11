@@ -301,6 +301,27 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         rc, receipt = self.state("check-complete")
         self.assertEqual(rc, 1)
         self.assertIn("no empirical fragility-score artifact covers the registered blocks", receipt["issues"])
+        self.assertIn("no active vocabulary-learning artifact follows candidate screening", receipt["issues"])
+        vocabulary = self.write_json(
+            "vocabulary_learning.json",
+            {
+                "operation": "vocabulary-learning",
+                "ok": True,
+                "scope_version": 1,
+                "locked_concepts": ["condition"],
+                "scope_reentry_required": False,
+                "assignment_required": False,
+                "processing_blockers": [],
+                "excluded_record_diagnosis": {"used_for_proposals": False},
+                "proposals": [],
+                "accepted_term_count": 0,
+                "all_accepted_terms_retested": True,
+            },
+        )
+        self.add("term-rank", "python scripts/vocabulary_learning.py retest", output=vocabulary)
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertFalse(any("vocabulary learning" in issue or "vocabulary-learning" in issue for issue in receipt["issues"]), receipt["issues"])
 
     def test_valid_ablation_and_two_strand_artifacts_satisfy_new_gates(self):
         self.resolve_base_gates_and_scope()
