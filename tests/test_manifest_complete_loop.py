@@ -371,10 +371,40 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             },
         )
         self.add("variants", "python scripts/strategy_analysis.py two-strand", output=strands)
+        burden = self.write_json(
+            "screening_burden.json",
+            {
+                "operation": "screening-burden",
+                "ok": True,
+                "scope_version": 1,
+                "labels_complete": True,
+                "minimum_heldout_recall": 1.0,
+                "variants": [
+                    {
+                        "label": label,
+                        "precision_estimate": precision,
+                        "precision_confidence_interval_95": {"lower": 0.01, "upper": 0.5},
+                        "estimated_records_screened_per_relevant_report": 1 / precision,
+                        "total_count": 1000 if label == "main" else 500,
+                        "heldout_recall": 1.0,
+                        "recall_requirement_met": True,
+                        "incremental_vs_baseline": {},
+                    }
+                    for label, precision in (("main", 0.1), ("focused", 0.2))
+                ],
+                "selection": {
+                    "burden_used_for_selection": True,
+                    "eligible_variant_labels": ["main", "focused"],
+                    "recommended_variant_label": "focused",
+                },
+            },
+        )
+        self.add("variants", "python scripts/screening_burden.py estimate", output=burden)
         rc, receipt = self.state("check-complete")
         self.assertEqual(rc, 1)
         self.assertFalse(any("concept-ablation" in issue for issue in receipt["issues"]), receipt["issues"])
         self.assertFalse(any("two-strand" in issue for issue in receipt["issues"]), receipt["issues"])
+        self.assertFalse(any("screening-burden" in issue or "multi-strand" in issue for issue in receipt["issues"]), receipt["issues"])
 
     def test_complete_gate_rejects_failed_final_qa_artifact(self):
         self.resolve_base_gates_and_scope()

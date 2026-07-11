@@ -125,6 +125,8 @@ Inspect saved samples whenever relevance, scope, noise, or term discovery inform
 
 For a fragile or very-fragile topic, also run `strategy_analysis.py two-strand`. Keep the recall-first strategy as the authoritative main search and add reasoned narrowing blocks only to the focused prioritization strand. Report both counts, known-item losses, exact unique-record differentials, workload estimates, and narrowing rationales.
 
+Read `references/screening-burden.md` for multi-strand or material variant comparisons. Generate a complete-frame reproducible stratified sample, label likely relevant/irrelevant/uncertain records, and estimate weighted precision with confidence intervals. Compare incremental workload with independent held-out recall. Use burden to choose only among variants that already meet the declared recall threshold.
+
 ## 6. Validate
 
 Prefer held-out screened-in records that did not contribute vocabulary. Report:
@@ -182,6 +184,7 @@ The audit must include:
 - concept-ablation recommendations and differential samples; for fragile topics, both strategy strands, known-item losses, unique records, workload estimates, and narrowing rationales;
 - empirical fragility metrics, dimension scores, hard flags, and any reasoned human override; for no-seed builds, orthogonal pilot coverage, blinded screening, saturation history, and holdout freeze;
 - active vocabulary-learning rounds, newly included records, excluded-record diagnosis, term dispositions, scope challenges, held-out effects, and differential samples;
+- stratified sampling design and seed, label counts including uncertainty, precision confidence intervals, estimated records screened per relevant report, and recall-gated incremental workload comparisons;
 - every critic round and the revision-cycle ledger;
 - final QA, caveats, and external peer-review attention points.
 

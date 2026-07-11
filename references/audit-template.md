@@ -120,6 +120,15 @@ If a validated filter or focused variant was also tested:
 - **Scope challenges:** [new concept or eligibility interpretation; scope re-entry/version, or none]
 - **Accepted-term retests:** [held-out records rescued/still missed, differential count, sample path, PubMed translation]
 
+### Labelled-sample screening burden
+
+- **Sampling design:** [complete-frame strata, shared/unique and rank bands, seed, sample size, date]
+- **Labels:** [likely relevant / irrelevant / uncertain counts by variant and stratum]
+- **Precision:** [weighted estimate, 95% confidence interval, uncertain-label lower/upper bounds]
+- **Screening burden:** [estimated records screened per relevant report and confidence interval]
+- **Incremental comparison:** [exact workload change and held-out recall change versus main]
+- **Recall gate:** [minimum required recall, qualifying variants, whether burden was permitted to select, recommendation or none]
+
 ## Search strategy (numbered line set)
 
 PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; line numbers (`#n`) reference earlier lines as in the PubMed Advanced Search history.
