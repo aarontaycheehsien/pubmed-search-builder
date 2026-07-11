@@ -140,6 +140,18 @@ python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt
 python scripts/hooks_tool.py filter-check --text-file protocol.txt
 ```
 
+### Concept ablation and strategy strands (`scripts/strategy_analysis.py`)
+
+Test every proposed `AND` block by removing it, measuring known-item and workload effects, and fetching differential samples. For fragile topics, compare an authoritative recall-first strategy with a reasoned focused prioritization strand.
+
+```bash
+python scripts/strategy_analysis.py concept-ablation --blocks-file blocks.json --candidate-ledger candidate_ledger.json --scope-version 1 --output concept_ablation.json
+python scripts/strategy_analysis.py two-strand --main-strategy-file final_main_strategy.txt --narrowing-blocks-file focused_blocks.json --candidate-ledger candidate_ledger.json --scope-version 1 --output two_strand.json
+python scripts/strategy_analysis.py fragility-score --concepts-file fragility_concepts.json --candidate-ledger candidate_ledger.json --concept-ablation-json concept_ablation.json --scope-version 1 --output fragility_score.json
+```
+
+For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot families, writes a provenance-blinded screening file and a separate source map, tracks study/vocabulary saturation across rounds, and freezes the discovery/holdout ledger only after saturation.
+
 ### Audit Markdown (`scripts/audit_markdown.py`)
 
 Render structured audit notes to the required Markdown audit report without

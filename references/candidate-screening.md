@@ -14,7 +14,7 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 ## Required sequence
 
 1. Lock and save `retrieval_scope_v1.json` before fetching or mining candidate records.
-2. Collect candidate PMIDs from supplied seeds, a high-precision pilot query, PubMed similar articles, citation links, or independently identified prior-review included studies.
+2. Collect candidate PMIDs from supplied seeds, PubMed similar articles, citation links, or independently identified prior-review included studies. With no seeds, use the six orthogonal pilots below rather than one defining pilot.
 3. Fetch candidate metadata to saved JSON. Inspect titles and abstracts where available; receipt-only stdout is not screening evidence.
 4. Classify every candidate as `include`, `exclude`, or `uncertain` against the locked scope. Give a short eligibility reason.
 5. Assign one use role: `discovery`, `holdout`, `both`, `heuristic`, or `neither`.
@@ -22,6 +22,8 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 7. Mine only records that the validator marks eligible for discovery.
 
 Do not feed a related-record set directly to `term-rank` merely because a PMID has high seed overlap or similarity. Those scores prioritize screening; they do not establish eligibility.
+
+For no-seed discovery, use `no_seed_discovery.py` and screen the generated file without opening its separate provenance map. Merge MeSH-led, exact-phrase-led, operational-description-led, prior-review-led, citation/registry-led, and historical-terminology-led candidates before screening. Reveal provenance only after decisions are saved. Continue rounds until both relevant-study and vocabulary novelty remain zero for the required consecutive rounds; a reached safety cap prevents a saturation claim.
 
 ## Ledger schema
 

@@ -74,7 +74,7 @@ Read `references/candidate-screening.md`. When supplied seeds exist, also read `
 After the scope is locked:
 
 1. Fetch supplied seeds and inspect saved record JSON for identity, retraction, scope, title, abstract, publication type, and indexing.
-2. Discover additional candidates with a high-precision pilot query, similar articles, citation links, or independently identified prior-review studies when useful.
+2. With supplied seeds, discover additional candidates through related/citation/prior-review methods. With no seeds, run the six-family orthogonal-pilot workflow in `no-seed-recall-estimation.md` and keep provenance hidden during screening.
 3. Screen every record that may influence term mining as `include`, `exclude`, or `uncertain` against the locked scope.
 4. Assign `discovery`, `holdout`, `both`, `heuristic`, or `neither` roles.
 5. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`; use deterministic `--allocate-holdout` when roles are not already frozen.
@@ -83,6 +83,8 @@ After the scope is locked:
 Only screened-in `discovery` or `both` records may feed term mining. Do not feed high-overlap related records directly into `term-rank`. Unscreened neighbors may remain a separately labelled heuristic benchmark.
 
 Freeze held-out records before mining. When no independent holdout is feasible, record validation as non-independent.
+
+For no-seed builds, do not begin term mining until repeated rounds add neither screened-in relevant studies nor vocabulary, no retrieval safety cap remains unresolved, and `no_seed_discovery.py adjudicate` has frozen discovery/holdout roles.
 
 ## 4. Build objective evidence and concept blocks
 
@@ -93,7 +95,7 @@ For each essential concept:
 1. Build a variant list from the scope artifact, accepted brainstorm families, accepted discovery records, MeSH entry terms, acronyms, spelling/hyphenation/morphology variants, older/newer terms, and PubMed ATM clues.
 2. Run `mesh_tool.py sweep --details` and complete the MeSH/SCR candidate ledger before drafting the block. Inspect scope, entry terms, tree/explosion context, and plausible rejected descriptors.
 3. Run `pubmed_tool.py term-rank --candidate-ledger candidate_ledger.json` only on screened-in discovery records. Review its diverse MeSH/keyword/acronym/phrase selection and marginal-record coverage; treat coverage/lift output as candidate evidence, never automatic inclusion.
-4. Classify the concept as stable, fragile, or very fragile. Use the exact-label plus descriptive/action safety layer for fragile concepts; offer the sensitive leave-out design for very fragile concepts.
+4. Run `strategy_analysis.py fragility-score` for every block when screened relevant records exist. Use the measured stable/fragile/very-fragile recommendation; require a reason for any human override. Use the exact-label plus descriptive/action safety layer for fragile concepts; offer the sensitive leave-out design for very fragile concepts.
 5. Draft MeSH/SCR, title/abstract, proximity, and wildcard layers. Read `references/tiab-expansion.md` and `references/wildcard-and-truncation.md` when those features are reached.
 6. Test accepted descriptors, plausible rejected descriptors when recall may be affected, major text-word clusters, MeSH-only, text-word-only, and combined blocks.
 7. Use `references/bramer-reciprocal-gap-analysis.md` when reciprocal gap analysis can reveal vocabulary or indexing gaps; otherwise record a reasoned waiver.
@@ -102,6 +104,8 @@ For each essential concept:
 Use `references/validated-methodological-filters-and-hedges.md` to choose a validated PubMed filter where available. Never translate an Ovid/Embase/CINAHL hedge by imitation. Preserve topic-only and topic-plus-filter strategies separately.
 
 ## 5. Probe before asking for adoption
+
+Read `references/concept-ablation-and-strands.md`. After ordinary block probes, run `strategy_analysis.py concept-ablation` across every proposed `AND` block. The critic must receive the saved ablation artifact and differential samples. Reconcile each recommendation with the locked scope; empirical retrieval cannot by itself make a concept essential.
 
 Run reversible, read-only diagnostic comparisons without requiring advance authorization:
 
@@ -116,6 +120,8 @@ Run reversible, read-only diagnostic comparisons without requiring advance autho
 Counts are workload proxies, not precision. A focused or filtered design may be adopted only after the user/protocol accepts its recall trade-off. Gather the comparison evidence before asking.
 
 Inspect saved samples whenever relevance, scope, noise, or term discovery informs a decision. Receipt-only stdout is insufficient.
+
+For a fragile or very-fragile topic, also run `strategy_analysis.py two-strand`. Keep the recall-first strategy as the authoritative main search and add reasoned narrowing blocks only to the focused prioritization strand. Report both counts, known-item losses, exact unique-record differentials, workload estimates, and narrowing rationales.
 
 ## 6. Validate
 
@@ -151,7 +157,7 @@ Repeat objective evidence, testing, validation, and critic review until the late
 
 After the critic passes:
 
-1. Save the final topic-only strategy and any adopted filter/focused variant.
+1. Save the final recall-first topic-only strategy and any adopted filter/focused variant. For fragile topics, preserve both main and focused files; the focused strand cannot replace the main.
 2. Deduplicate exact repeated terms without removing distinct variants.
 3. Run `pubmed_tool.py search --query-file ... --retmax 0` and inspect PubMed translation warnings.
 4. Fix unbalanced syntax and invalid field tags. Check spelling/hyphenation before removing zero-hit terms; remove and document genuine zero-hit terms by default, with free-text future-proofing kept only by explicit decision.
@@ -171,6 +177,8 @@ The audit must include:
 - candidate-screening counts, decisions, evidence roles, and holdout independence;
 - concept/MeSH/text-word evidence and saved record-content files reviewed;
 - strategy variants, counts, samples, validation, and filter effects;
+- concept-ablation recommendations and differential samples; for fragile topics, both strategy strands, known-item losses, unique records, workload estimates, and narrowing rationales;
+- empirical fragility metrics, dimension scores, hard flags, and any reasoned human override; for no-seed builds, orthogonal pilot coverage, blinded screening, saturation history, and holdout freeze;
 - every critic round and the revision-cycle ledger;
 - final QA, caveats, and external peer-review attention points.
 

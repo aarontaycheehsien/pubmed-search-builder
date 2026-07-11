@@ -112,6 +112,33 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.state("resolve-candidate-screening", "not-applicable", "--reason", "No candidate records found")
         self.state("resolve-recall-offer", "declined")
+        orthogonal = self.write_json(
+            "orthogonal_pilot_state.json",
+            {
+                "operation": "orthogonal-pilot-adjudication",
+                "ok": True,
+                "scope_version": 1,
+                "provenance_blinded": True,
+                "pilot_types": [
+                    "mesh-led",
+                    "exact-phrase-led",
+                    "operational-description-led",
+                    "prior-review-led",
+                    "citation-registry-led",
+                    "historical-terminology-led",
+                ],
+                "safety_cap_reached_any": False,
+                "saturation_reached": True,
+                "required_saturated_rounds": 2,
+                "consecutive_saturated_rounds": 2,
+                "new_included_pmids": [],
+                "new_vocabulary_term_count": 0,
+                "stopping_rule": "Two consecutive rounds added no relevant studies or vocabulary.",
+                "ledger_frozen": False,
+                "stop_reason": "No included candidates after saturated orthogonal discovery",
+            },
+        )
+        self.add("artifact", "python scripts/no_seed_discovery.py adjudicate", output=orthogonal)
         self.state("register-block", "condition")
         self.add("mesh", "python scripts/mesh_tool.py sweep --concept condition --output mesh.json", block="condition")
         self.add("search", "python scripts/pubmed_tool.py search --query-file condition.txt --retmax 0", count=2000, block="condition")
@@ -225,6 +252,108 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(state["gates"]["concept"], "pending")
         self.assertEqual(state["blocks"], {})
         self.assertEqual(state["candidate_screening"]["status"], "pending")
+
+    def test_complete_gate_requires_concept_ablation_for_multiple_and_blocks(self):
+        self.resolve_base_gates_and_scope()
+        self.state("register-block", "intervention")
+        self.add("mesh", "python scripts/mesh_tool.py sweep --concept intervention", block="intervention")
+        self.add("search", "python scripts/pubmed_tool.py search intervention", count=100, block="intervention")
+        self.state("waive-requirement", "intervention", "bramer_gap", "Stable concept")
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertIn("no concept-ablation artifact covers the proposed AND blocks", receipt["issues"])
+
+    def test_complete_gate_requires_two_strand_for_explicit_fragile_scope(self):
+        self.resolve_base_gates_and_scope()
+        scope_path = self.dir / "retrieval_scope_v1.json"
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+        scope["fragile_topic"] = True
+        scope_path.write_text(json.dumps(scope), encoding="utf-8")
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertIn("fragile retrieval scope requires a two-strand deliverable", receipt["issues"])
+
+    def test_complete_gate_requires_orthogonal_pilot_saturation_on_no_seed_build(self):
+        self.resolve_base_gates_and_scope()
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["entries"] = [
+            entry for entry in manifest["entries"]
+            if not str(entry.get("output_path") or "").endswith("orthogonal_pilot_state.json")
+        ]
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertIn("no-seed build lacks orthogonal-pilot saturation evidence", receipt["issues"])
+
+    def test_complete_gate_requires_empirical_fragility_when_screened_records_exist(self):
+        self.resolve_base_gates_and_scope()
+        ledger = self.write_json("candidate_ledger.json", {"scope_version": 1, "records": []})
+        validation = self.write_json("candidate_ledger_validation.json", {"operation": "candidate-ledger-validate", "ok": True})
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["build_state"]["candidate_screening"] = {
+            "status": "complete",
+            "artifact": str(ledger),
+            "validation_artifact": str(validation),
+            "summary": {"independent_holdout_available": False},
+            "reason": "",
+        }
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertIn("no empirical fragility-score artifact covers the registered blocks", receipt["issues"])
+
+    def test_valid_ablation_and_two_strand_artifacts_satisfy_new_gates(self):
+        self.resolve_base_gates_and_scope()
+        self.state("register-block", "intervention")
+        self.add("mesh", "python scripts/mesh_tool.py sweep --concept intervention", block="intervention")
+        self.add("search", "python scripts/pubmed_tool.py search intervention", count=100, block="intervention")
+        self.state("waive-requirement", "intervention", "bramer_gap", "Stable concept")
+        scope_path = self.dir / "retrieval_scope_v1.json"
+        scope = json.loads(scope_path.read_text(encoding="utf-8"))
+        scope["fragile_topic"] = True
+        scope_path.write_text(json.dumps(scope), encoding="utf-8")
+        ablation = self.write_json(
+            "concept_ablation.json",
+            {
+                "operation": "concept-ablation",
+                "ok": True,
+                "scope_version": 1,
+                "analyses": [
+                    {
+                        "label": label,
+                        "recommendation": {"disposition": "keep-as-required"},
+                        "development": {},
+                        "holdout": {},
+                        "differential_sample": {},
+                        "workload_change": {},
+                    }
+                    for label in ("condition", "intervention")
+                ],
+            },
+        )
+        self.add("variants", "python scripts/strategy_analysis.py concept-ablation", output=ablation)
+        strands = self.write_json(
+            "two_strand.json",
+            {
+                "operation": "two-strand",
+                "ok": True,
+                "scope_version": 1,
+                "main": {},
+                "focused": {},
+                "development": {},
+                "holdout": {},
+                "records_unique_to_main": {},
+                "records_unique_to_focused": {},
+                "estimated_screening_workload": {},
+                "narrowing_blocks": [{"label": "priority", "rationale": "Prioritization only"}],
+                "safeguards": {"main_is_authoritative": True, "focused_cannot_replace_main": True},
+            },
+        )
+        self.add("variants", "python scripts/strategy_analysis.py two-strand", output=strands)
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertFalse(any("concept-ablation" in issue for issue in receipt["issues"]), receipt["issues"])
+        self.assertFalse(any("two-strand" in issue for issue in receipt["issues"]), receipt["issues"])
 
     def test_complete_gate_rejects_failed_final_qa_artifact(self):
         self.resolve_base_gates_and_scope()

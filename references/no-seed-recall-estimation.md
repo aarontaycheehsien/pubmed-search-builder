@@ -4,7 +4,7 @@ Use this reference only after retrieval scope is locked, candidate anchors are s
 
 ## Why it is heuristic
 
-With no supplied seeds there is no ground truth. A high-precision pilot can find plausible anchors, and PubMed similar-article/citation links can expand them through mechanisms that do not depend on the final Boolean terms. The benchmark is still strategy-adjacent and may be noisy.
+With no supplied seeds there is no ground truth. One high-precision pilot can trap discovery inside one vocabulary cluster. Use orthogonal pilots to find plausible anchors through different representations, then expand them through mechanisms that do not depend on the final Boolean terms. The benchmark is still strategy-adjacent and may be noisy.
 
 Interpret asymmetrically:
 
@@ -15,32 +15,48 @@ Interpret asymmetrically:
 
 - Seed gate resolved to no seeds.
 - Retrieval scope version 1 or later is locked.
-- Pilot anchors that will seed expansion are screened in `candidate_ledger.json`.
+- Orthogonal pilot specifications are saved; their merged candidates will be screened before vocabulary mining or benchmark use.
 - A draft strategy and blocks file exist.
 - The recall check is accepted by the user/protocol, or the protocol authorizes it by default.
 
 Record the outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`.
 
-## Recommended manual pipeline
+## Required orthogonal discovery pipeline
 
-```text
-# 1. Save a high-precision pilot query and retrieve bounded candidate anchors.
-python scripts/pubmed_tool.py search --query-file pilot.txt --retmax 30 --output pilot_search.json
+Create `orthogonal_pilots.json` with exactly one deliberately different pilot from each family:
 
-# 2. Fetch/sample and screen the anchors against the locked scope.
-python scripts/pubmed_tool.py sample --query-file pilot.txt --retmax 30 --output pilot_sample.json
+- `mesh-led`
+- `exact-phrase-led`
+- `operational-description-led`
+- `prior-review-led`
+- `citation-registry-led`
+- `historical-terminology-led`
 
-# 3. Save discovery/holdout/heuristic roles, then validate the ledger.
+Each object supplies `type` and either `query` or `anchor_pmids`. Citation/registry pilots may also set `expand_links`, `links`, and `max_per_seed`.
+
+```bash
+# Discover and merge candidates; provenance is written separately.
+python scripts/no_seed_discovery.py discover \
+  --pilots-file orthogonal_pilots.json --scope-version 1 --round 1 \
+  --screening-output screening_round_1.json \
+  --provenance-output provenance_round_1.json
+
+# Screen screening_round_1.json without opening provenance_round_1.json, then adjudicate.
+python scripts/no_seed_discovery.py adjudicate \
+  --screening-file screening_round_1.json \
+  --provenance-file provenance_round_1.json \
+  --scope-version 1 --state-output saturation_state_1.json \
+  --ledger-output candidate_ledger.json
+
+# Once saturation writes the frozen ledger, validate and record it normally.
 python scripts/candidate_ledger.py candidate_ledger.json --output candidate_ledger_validation.json
-
-# 4. Expand only screened-in anchor PMIDs.
-python scripts/pubmed_tool.py related --pmids <screened-in anchors> --links similar,citedin,refs --output related.json
-
-# 5. Measure draft retrieval against the related candidate set.
-python scripts/pubmed_tool.py recall --query-file draft_strategy.txt --benchmark-json related.json --min-seed-overlap 2 --blocks-file blocks.json --output recall.json
 ```
 
-Inspect the saved anchor sample before expansion. Related neighbors used only for the benchmark may remain unscreened but must be called heuristic candidates, never relevant studies. Screen any neighbor before harvesting its vocabulary.
+For later rounds, pass `--previous-state saturation_state_<N>.json` to both commands. The screening file contains records and blinded candidate IDs but no per-record pilot provenance. The provenance map is opened only after screening decisions are saved.
+
+Discovery stops only after the required consecutive rounds add neither a screened-in relevant study nor new vocabulary from screened-in records. A pilot retrieval safety cap is an operational ceiling, not a stopping rule; if reached, saturation is blocked until the pilot is narrowed or retrieval is completed. On saturation, the adjudicator deterministically freezes discovery and holdout roles and writes the candidate ledger before term mining.
+
+Related neighbors used only for the benchmark may remain unscreened but must be called heuristic candidates, never relevant studies. Screen any neighbor before harvesting its vocabulary.
 
 Record candidate, related, and recall artifacts in the manifest.
 
@@ -48,17 +64,18 @@ Record candidate, related, and recall artifacts in the manifest.
 
 `recall --pilot-query-file --auto-expand` can chain pilot retrieval and related expansion, but it cannot insert candidate screening between them. Use it only as a heuristic smoke test. It does not satisfy candidate-screening integrity, and its raw anchors or neighbors must not feed term mining.
 
-## Pilot construction
+## Orthogonal pilot construction
 
-Favor precision rather than coverage. Even a small clean anchor set can seed related-record discovery.
+Favor precision within each strand, but maximize representational difference across strands.
 
-- Use the most distinctive one or two locked concepts.
-- Tight phrases and specific MeSH are acceptable for the pilot.
-- A pilot-only `[Majr]` restriction may be used with explicit labelling.
-- Avoid broad wildcards and optional eligibility concepts.
-- Where possible, include vocabulary the main draft might under-cover.
+- MeSH-led: established descriptors/SCRs and, if justified, pilot-only major-topic focus.
+- Exact-phrase-led: canonical named phrases and distinctive labels.
+- Operational-description-led: actions, workflows, or procedures without requiring the preferred construct label.
+- Prior-review-led: independently identified review titles, included-study identifiers, or review-specific anchors.
+- Citation/registry-led: citation links, trial registrations, registry identifiers, or study-family anchors.
+- Historical-terminology-led: obsolete, regional, disciplinary, or era-specific wording.
 
-The pilot query is a discovery device, not a smaller version of the final strategy.
+Pilots are discovery devices, not smaller versions of the final strategy. Do not let one pilot's vocabulary define screening scope.
 
 ## Act on results
 
@@ -84,4 +101,4 @@ As a development heuristic, overall recall below 70% or any essential block belo
 
 ## Audit
 
-Record the pilot query, screened anchor ledger, link types and caps, benchmark size and screening status, reachable denominator, relative and per-block recall, missed-record screening, revisions, retest result, and whether the user/protocol accepted or declined the check.
+Record every pilot query/anchor set, per-pilot counts and safety caps, the blinded screening artifact, separate provenance map, study/vocabulary novelty by round, saturation decision, frozen holdout allocation, benchmark size and screening status, reachable denominator, relative and per-block recall, missed-record screening, revisions, retest result, and whether the user/protocol accepted or declined the check.
