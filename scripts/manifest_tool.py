@@ -938,8 +938,189 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         if not isinstance(spec, dict) or spec.get("scope_version") != scope_version:
             issues.append(f"block {label!r} is not registered against the current scope version")
 
+    def operation_entries(operation: str) -> list[dict[str, object]]:
+        found = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            output_value = str(entry.get("output_path") or "")
+            if not output_value:
+                continue
+            payload = read_manifest_output_json(manifest_path, output_value)
+            if isinstance(payload, dict) and payload.get("operation") == operation:
+                found.append(entry)
+        return sorted(found, key=lambda item: int(item.get("seq") or 0))
+
+    analysis_sequences: list[int] = []
+    if len(blocks) >= 2:
+        ablation_entries = operation_entries("concept-ablation")
+        if not ablation_entries:
+            issues.append("no concept-ablation artifact covers the proposed AND blocks")
+        else:
+            ablation_entry = ablation_entries[-1]
+            analysis_sequences.append(int(ablation_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(ablation_entry.get("output_path") or "")) or {}
+            if payload.get("ok") is not True:
+                issues.append("latest concept-ablation artifact did not complete successfully")
+            if payload.get("scope_version") != scope_version:
+                issues.append("latest concept-ablation artifact does not match the current retrieval-scope version")
+            analyses = payload.get("analyses") if isinstance(payload.get("analyses"), list) else []
+            analysed_labels = {
+                normalize_block_key(item.get("label"))
+                for item in analyses
+                if isinstance(item, dict)
+            }
+            missing_labels = sorted(
+                str(label) for label in blocks if normalize_block_key(label) not in analysed_labels
+            )
+            if missing_labels:
+                issues.append("concept-ablation does not cover registered blocks: " + ", ".join(missing_labels))
+            allowed = {
+                "keep-as-required",
+                "move-inside-another-or-block",
+                "handle-at-screening",
+                "focused-variant-only",
+            }
+            for item in analyses:
+                if not isinstance(item, dict):
+                    continue
+                recommendation = item.get("recommendation") if isinstance(item.get("recommendation"), dict) else {}
+                if recommendation.get("disposition") not in allowed:
+                    issues.append(f"concept-ablation block {item.get('label')!r} lacks a valid recommendation")
+                if not isinstance(item.get("development"), dict) or not isinstance(item.get("holdout"), dict):
+                    issues.append(f"concept-ablation block {item.get('label')!r} lacks development/holdout evidence")
+                if not isinstance(item.get("differential_sample"), dict) or not isinstance(item.get("workload_change"), dict):
+                    issues.append(f"concept-ablation block {item.get('label')!r} lacks differential/workload evidence")
+
+    if screening_status == "complete" and blocks:
+        fragility_entries = operation_entries("fragility-score")
+        if not fragility_entries:
+            issues.append("no empirical fragility-score artifact covers the registered blocks")
+        else:
+            fragility_entry = fragility_entries[-1]
+            analysis_sequences.append(int(fragility_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(fragility_entry.get("output_path") or "")) or {}
+            if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
+                issues.append("latest fragility-score artifact failed or does not match the current scope version")
+            concepts = payload.get("concepts") if isinstance(payload.get("concepts"), list) else []
+            scored_labels = {
+                normalize_block_key(item.get("label"))
+                for item in concepts
+                if isinstance(item, dict)
+            }
+            missing_labels = sorted(str(label) for label in blocks if normalize_block_key(label) not in scored_labels)
+            if missing_labels:
+                issues.append("fragility-score does not cover registered blocks: " + ", ".join(missing_labels))
+            required_metrics = {
+                "explicit_title_abstract_naming_percent",
+                "mesh_coverage_percent",
+                "exact_label_coverage_percent",
+                "additional_descriptive_coverage_percent",
+                "noise_added_by_safety_layer",
+                "heldout_misses_attributable_to_block",
+                "terminology_variation_across_eras",
+            }
+            for item in concepts:
+                if not isinstance(item, dict):
+                    continue
+                metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+                missing_metrics = sorted(required_metrics - set(metrics))
+                if missing_metrics:
+                    issues.append(f"fragility-score concept {item.get('label')!r} lacks metrics: {', '.join(missing_metrics)}")
+                if item.get("final_recommendation") not in {"stable", "fragile", "very-fragile"}:
+                    issues.append(f"fragility-score concept {item.get('label')!r} lacks a valid recommendation")
+                if item.get("empirical_recommendation") not in {"stable", "fragile", "very-fragile"}:
+                    issues.append(f"fragility-score concept {item.get('label')!r} lacks an empirical recommendation")
+                dimensions = item.get("dimension_scores") if isinstance(item.get("dimension_scores"), dict) else {}
+                required_dimensions = {
+                    "terminology_stability",
+                    "controlled_vocabulary_indexing",
+                    "author_reporting_explicitness",
+                    "retrieval_noise_behavior",
+                    "validation_evidence",
+                }
+                if set(dimensions) != required_dimensions or any(value not in {0, 1, 2} for value in dimensions.values()):
+                    issues.append(f"fragility-score concept {item.get('label')!r} has invalid dimension scores")
+                if dimensions and item.get("total_score") != sum(dimensions.values()):
+                    issues.append(f"fragility-score concept {item.get('label')!r} total does not match dimensions")
+                if item.get("human_override") and not str(item.get("override_reason") or "").strip():
+                    issues.append(f"fragility-score concept {item.get('label')!r} has an override without a reason")
+
+    scope_payload = read_manifest_output_json(manifest_path, scope_artifact) if scope_artifact else None
+    fragile = bool(isinstance(scope_payload, dict) and scope_payload.get("fragile_topic") is True)
+    if isinstance(scope_payload, dict):
+        fragility = str(scope_payload.get("topic_fragility") or "").strip().casefold()
+        fragile = fragile or fragility in {"fragile", "very-fragile", "very fragile"}
+        essential = scope_payload.get("essential_blocks")
+        if isinstance(essential, list):
+            fragile = fragile or any(
+                isinstance(item, dict)
+                and str(item.get("fragility") or "").strip().casefold() in {"fragile", "very-fragile", "very fragile"}
+                for item in essential
+            )
+    if fragile:
+        strand_entries = operation_entries("two-strand")
+        if not strand_entries:
+            issues.append("fragile retrieval scope requires a two-strand deliverable")
+        else:
+            strand_entry = strand_entries[-1]
+            analysis_sequences.append(int(strand_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(strand_entry.get("output_path") or "")) or {}
+            if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
+                issues.append("latest two-strand artifact failed or does not match the current scope version")
+            safeguards = payload.get("safeguards") if isinstance(payload.get("safeguards"), dict) else {}
+            if safeguards.get("main_is_authoritative") is not True or safeguards.get("focused_cannot_replace_main") is not True:
+                issues.append("two-strand artifact does not protect the recall-first main strategy")
+            for key in ("main", "focused", "development", "holdout", "records_unique_to_main", "records_unique_to_focused", "estimated_screening_workload"):
+                if not isinstance(payload.get(key), dict):
+                    issues.append(f"two-strand artifact lacks {key}")
+            narrowing = payload.get("narrowing_blocks") if isinstance(payload.get("narrowing_blocks"), list) else []
+            if not narrowing or any(not str(item.get("rationale") or "").strip() for item in narrowing if isinstance(item, dict)):
+                issues.append("two-strand artifact lacks reasoned narrowing blocks")
+
     if seed_gate_is_no_seed(state):
         issues.extend(recall_offer_readiness(state))
+        discovery_entries = operation_entries("orthogonal-pilot-adjudication")
+        if not discovery_entries:
+            issues.append("no-seed build lacks orthogonal-pilot saturation evidence")
+        else:
+            discovery_entry = discovery_entries[-1]
+            analysis_sequences.append(int(discovery_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(discovery_entry.get("output_path") or "")) or {}
+            required_pilots = {
+                "mesh-led",
+                "exact-phrase-led",
+                "operational-description-led",
+                "prior-review-led",
+                "citation-registry-led",
+                "historical-terminology-led",
+            }
+            pilot_types = {str(value) for value in payload.get("pilot_types", [])}
+            if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
+                issues.append("orthogonal-pilot adjudication failed or does not match the current scope version")
+            if payload.get("provenance_blinded") is not True:
+                issues.append("orthogonal-pilot screening was not provenance blinded")
+            if missing := sorted(required_pilots - pilot_types):
+                issues.append("orthogonal-pilot evidence is missing pilot types: " + ", ".join(missing))
+            if payload.get("safety_cap_reached_any") is True:
+                issues.append("orthogonal-pilot safety cap was reached; saturation cannot be claimed")
+            if payload.get("saturation_reached") is not True:
+                issues.append("orthogonal-pilot discovery has not reached study-and-vocabulary saturation")
+            required_rounds = payload.get("required_saturated_rounds")
+            consecutive_rounds = payload.get("consecutive_saturated_rounds")
+            if (
+                not isinstance(required_rounds, int)
+                or required_rounds < 2
+                or not isinstance(consecutive_rounds, int)
+                or consecutive_rounds < required_rounds
+            ):
+                issues.append("orthogonal-pilot saturation lacks the required repeated zero-novelty rounds")
+            if payload.get("new_included_pmids") != [] or payload.get("new_vocabulary_term_count") != 0:
+                issues.append("orthogonal-pilot final round still added relevant studies or vocabulary")
+            if not str(payload.get("stopping_rule") or "").strip():
+                issues.append("orthogonal-pilot artifact lacks its saturation stopping rule")
+            if screening_status == "complete" and payload.get("ledger_frozen") is not True:
+                issues.append("orthogonal-pilot holdout was not frozen before term mining")
 
     critics = state.get("critic_rounds") if isinstance(state.get("critic_rounds"), list) else []
     if not critics:
@@ -954,6 +1135,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             issues.append("latest critic round still has open actionable findings")
         if latest.get("scope_version") != scope_version:
             issues.append("latest critic round does not match the current retrieval-scope version")
+        if analysis_sequences and latest_critic_seq <= max(analysis_sequences):
+            issues.append("latest critic round was not run after the latest empirical analysis/discovery artifact")
         if latest.get("critic_version") != 2:
             issues.append("latest critic round does not use the evidence-backed critic_version 2 contract")
         for key, label in (("artifact", "critic"), ("validation_artifact", "critic validation")):

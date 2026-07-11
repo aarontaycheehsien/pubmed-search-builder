@@ -129,6 +129,10 @@ python scripts/pubmed_tool.py mine --pmids 24102982 21171099 --strategy-file str
 python scripts/pubmed_tool.py term-rank --pmids 24102982 21171099 --fields tiab,mesh --max-terms 40
 python scripts/pubmed_tool.py term-rank --mine-json mine.json --strategy-file strategy.txt
 python scripts/pubmed_tool.py term-rank --relevant-query-file pilot.txt --fields tiab,mesh --relevant-retmax 150
+python scripts/strategy_analysis.py concept-ablation --blocks-file blocks.json --candidate-ledger candidate_ledger.json --scope-version 1 --output concept_ablation.json
+python scripts/strategy_analysis.py two-strand --main-strategy-file final_main_strategy.txt --narrowing-blocks-file focused_blocks.json --candidate-ledger candidate_ledger.json --scope-version 1 --output two_strand.json
+python scripts/strategy_analysis.py fragility-score --concepts-file fragility_concepts.json --candidate-ledger candidate_ledger.json --concept-ablation-json concept_ablation.json --scope-version 1 --output fragility_score.json
+python scripts/no_seed_discovery.py discover --pilots-file orthogonal_pilots.json --scope-version 1 --round 1 --screening-output screening_1.json --provenance-output provenance_1.json
 python scripts/pubmed_tool.py validate "(Pressure Ulcer[Mesh] OR pressure ulcer*[tiab])" --pmids 24102982
 python scripts/pubmed_tool.py recall --query-file strategy.txt --benchmark-json related.json --blocks-file blocks.json
 python scripts/pubmed_tool.py recall --query-file strategy.txt --benchmark-pmids 24102982 21171099
@@ -384,7 +388,11 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 | Scope lock | `manifest_tool.py state lock-scope` | Validate and save protocol-only retrieval scope before record evidence. |
 | Candidate discovery/screening | `fetch`, `sample`, `related`; `candidate_ledger.py`; `state record-candidate-screen` | Screen before mining; freeze discovery and holdout roles. |
 | Objective evidence | `term-rank --pmids`; `mesh_tool.py sweep --details`, `tree`; PubMed ATM checks | Use screened discovery records and complete the MeSH candidate ledger. |
+| Empirical fragility | `strategy_analysis.py fragility-score` | Measure naming, MeSH, safety-layer, validation, noise, and era variation; reason every override. |
+| No-seed discovery | `no_seed_discovery.py discover`, `adjudicate` | Merge six orthogonal pilots, blind provenance, stop on study/vocabulary saturation, then freeze holdout. |
 | Block testing/validation | `search`, `batch`, `variants`, `term-diff`, `validate`, `recall` | Run reversible comparisons, diagnose bottlenecks, and label validation independence. |
+| AND-block admission | `strategy_analysis.py concept-ablation` | Test every proposed required block against workload, differential samples, and development/holdout retrieval. |
+| Fragile-topic strands | `strategy_analysis.py two-strand` | Preserve the recall-first main strategy and add a reasoned focused prioritization strand. |
 | Critic/revision | `critic_tool.py`; `state record-critic`, `record-revision`, `reopen-scope` | Route findings, version scope/strategy changes, and rerun affected probes. |
 | Final QA | `search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`, `low-count-review` | Run after the passing critic round and save QA output. |
 | Audit output | `audit-scaffold` → `audit_markdown.py`; `show --require-complete-loop` | Author judgment placeholders, render the audit, and pass the combined gate. |

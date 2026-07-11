@@ -94,6 +94,24 @@ If a validated filter or focused variant was also tested:
 - **Focused/precision-supporting variant count:** [count and label, or not performed]
 - **Main variant chosen:** [sensitive/main by default, or user/protocol-selected alternative with reason]
 
+### AND-block ablation and two-strand delivery
+
+- **Concept-ablation artifact:** [path; every proposed AND block covered]
+- **Per-block disposition:** [keep required / move inside OR / screening-only / focused-only, with workload change, development/holdout effect, and differential sample path]
+- **Recall-first main strand:** [query file, count, known-item retrieval, estimated screening workload]
+- **Focused prioritization strand:** [query file, count, known-item losses, records unique to each strand, estimated screening workload]
+- **Narrowing rationales:** [one reason per additional focused block]
+- **Non-substitution safeguard:** The focused strand does not replace the recall-first main search.
+
+### Empirical fragility and no-seed discovery
+
+- **Fragility metrics by block:** [explicit title/abstract naming %, MeSH coverage %, exact-label coverage %, descriptive rescue %, safety-layer noise, held-out attributable misses, era variation]
+- **Empirical and final handling:** [stable / fragile / very-fragile; human override and required reason, or none]
+- **Orthogonal no-seed pilots:** [MeSH / exact phrase / operational description / prior review / citation-registry / historical terminology, or not applicable]
+- **Provenance-blinded screening:** [yes/no/not applicable]
+- **Saturation history:** [new included studies and new vocabulary per round; consecutive zero-novelty rounds]
+- **Holdout freeze:** [allocation method and ledger path before term mining, or not applicable]
+
 ## Search strategy (numbered line set)
 
 PubMed, searched [date]. Rendered by `audit_markdown.py` from `concept_blocks`; line numbers (`#n`) reference earlier lines as in the PubMed Advanced Search history.

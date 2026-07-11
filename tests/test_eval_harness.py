@@ -26,6 +26,8 @@ class EvalHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             skill_dir, run_dir = generate.isolated_run_workspace(ROOT, Path(td))
             self.assertTrue((skill_dir / "SKILL.md").is_file())
+            self.assertTrue((skill_dir / "scripts" / "strategy_analysis.py").is_file())
+            self.assertTrue((skill_dir / "scripts" / "no_seed_discovery.py").is_file())
             self.assertFalse((skill_dir / "evals").exists())
             self.assertFalse((skill_dir / "tests").exists())
             self.assertNotIn("SECRET-FIXTURE", str(run_dir))

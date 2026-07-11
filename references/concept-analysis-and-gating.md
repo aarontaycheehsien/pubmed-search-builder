@@ -64,6 +64,8 @@ Determine fragility in two passes:
 2. During MeSH lookup and title/abstract expansion, revise the score using PubMed ATM/translation behavior, MeSH mapping, known-item or pilot misses, block counts, sample-record wording, and whether exact-label plus context-tethered descriptive layers retrieve plausible records.
 3. Record the final score, dimension scores, evidence sources, hard red flags, and search consequence in the concept ledger and audit. If evidence for a dimension is genuinely unknown, score it as `1` rather than `0`; use `0` only when there is positive evidence of stability.
 
+When screened relevant records exist, replace manual final scoring with `strategy_analysis.py fragility-score` as specified in `empirical-fragility.md`. The provisional pre-search score remains a human judgment. The final score must report measured exact-label, MeSH, descriptive-rescue, safety-noise, held-out-miss, and publication-era variation evidence. A human override is allowed only with a recorded reason.
+
 Score each dimension:
 
 - `0` = stable/searchable
@@ -221,6 +223,8 @@ Sensitivity-dangerous concepts include outcomes, comparators, mechanisms, mediat
 
 Do not ask about ordinary term expansion that stays inside an existing `OR` block. Ask by default at the concept gate whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, or focused variant is identified, unless the protocol already decides it. During later testing, ask again only if new evidence materially changes the trade-off context.
 
+After drafting two or more proposed `AND` blocks, operationalize this admission test with `references/concept-ablation-and-strands.md`. Leave-one-block-out counts, known-item effects, and differential samples challenge over-structured designs but never redefine the locked question. For fragile topics, default to separate recall-first and focused strands.
+
 ## User-facing output labels
 
 When summarising the concept-gate result to the user, the role taxonomy above may be too granular. Use these user-facing labels as a compact summary in the audit Markdown or final response:
@@ -274,7 +278,7 @@ If the user says there are no seed PMIDs or asks to proceed without seeds:
 1. Treat seed status as resolved.
 2. Run the formal concept analysis and concept gate before MeSH/PubMed exploration.
 3. Lock scope from question/protocol evidence and mark seed evidence unavailable.
-4. After scope lock, use a high-precision pilot to discover candidate anchors and screen them before term mining.
+4. After scope lock, run the orthogonal-pilot workflow in `no-seed-recall-estimation.md`; do not rely on one high-precision vocabulary cluster.
 5. For methodological or automation topics where recall-first is requested and the protocol does not explicitly narrow the scope, apply the scope breadth check and default the main workflow block to the broader workflow rather than only the exact narrow action wording.
 6. Record post-lock evidence from candidate screening, MeSH sweeps, PubMed ATM/query translations, sample-record patterns, block counts, objective term ranking, final QA, and filter checks.
 6a. Feed only screened-in pilot anchors to `term-rank --pmids` or an accepted whitelist. Do not treat raw pilot-query hits as a relevant set merely because the pilot was precise.
