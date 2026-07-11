@@ -73,6 +73,24 @@
       "status": "canonical"
     },
     {
+      "id": "revision.explicit-no-harm-gate",
+      "rule": "no-harm-revisions.md owns the mandatory safety proof and fallback disposition for critic and vocabulary revisions.",
+      "canonical_owner": "references/no-harm-revisions.md",
+      "assertions": [
+        "named defect fixed",
+        "held-out retrieval preserved",
+        "no unjustified required block",
+        "syntax and translation stable",
+        "scope unchanged or explicitly versioned",
+        "workload effect recorded",
+        "revert-to-baseline",
+        "experimental-only"
+      ],
+      "pointer_locations": ["SKILL.md", "references/workflow.md", "references/press-critic.md", "references/active-vocabulary-learning.md"],
+      "guarded_by": "none",
+      "status": "canonical"
+    },
+    {
       "id": "goal.tracking-ownership",
       "rule": "goal-tracking.md owns the /goal state machine and completion audit.",
       "canonical_owner": "references/goal-tracking.md",

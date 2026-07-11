@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pubmed_tool
+import revision_guard
 
 
 class VocabularyLearningError(ValueError):
@@ -296,6 +297,12 @@ def load_blocks(path: str) -> dict[str, dict[str, Any]]:
     return blocks
 
 
+def translation_drift_issues(search: dict[str, Any]) -> list[dict[str, Any]]:
+    hook = search.get("query_translation_hook") if isinstance(search.get("query_translation_hook"), dict) else {}
+    issues = hook.get("issues") if isinstance(hook.get("issues"), list) else []
+    return [item for item in issues if isinstance(item, dict) and item.get("severity") in {"warning", "error"}]
+
+
 def retest_learning(
     client: pubmed_tool.NcbiClient,
     extraction: dict[str, Any],
@@ -342,6 +349,8 @@ def retest_learning(
         pubmed_tool.assert_plain_query(str(proposal.get("proposal_id") or index), term_query)
         current_query = str(blocks[concept.casefold()]["query"])
         expanded_query = f"({current_query}) OR ({term_query})"
+        current_search = pubmed_tool.esearch(client, current_query, retmax=0, retstart=0, sort=None)
+        expanded_search = pubmed_tool.esearch(client, expanded_query, retmax=0, retstart=0, sort=None)
         if holdout:
             current_retrieved = pubmed_tool.retrieve_against_pmids(client, current_query, holdout)
             expanded_retrieved = pubmed_tool.retrieve_against_pmids(client, expanded_query, holdout)
@@ -359,6 +368,32 @@ def retest_learning(
         search = pubmed_tool.esearch(client, differential_query, retmax=max(1, sample_size), retstart=0, sort=None)
         pmids = [str(value) for value in search.get("pmids", [])]
         fetched = pubmed_tool.efetch(client, pmids) if pmids else {"records": []}
+        current_heldout = set(holdout_test.get("current_retrieved", []))
+        expanded_heldout = set(holdout_test.get("expanded_retrieved", []))
+        lost_heldout = sorted(current_heldout - expanded_heldout, key=int)
+        drift_issues = translation_drift_issues(expanded_search)
+        syntax_ok = expanded_query.count("(") == expanded_query.count(")") and expanded_query.count('"') % 2 == 0
+        workload = {
+            "baseline_count": int(current_search.get("count", 0) or 0),
+            "revised_count": int(expanded_search.get("count", 0) or 0),
+        }
+        workload["absolute_change"] = workload["revised_count"] - workload["baseline_count"]
+        workload["percent_change"] = round((workload["absolute_change"] / workload["baseline_count"]) * 100, 2) if workload["baseline_count"] else None
+        defect_fixed = bool(holdout_test.get("rescued_pmids") or int(search.get("count", 0) or 0) > 0)
+        checks = [
+            revision_guard.check("named-defect-fixed", defect_fixed, {"proposal_id": proposal.get("proposal_id"), "rescued_pmids": holdout_test.get("rescued_pmids", []), "differential_count": int(search.get("count", 0) or 0)}, "accepted term adds no observed retrieval and does not fix the named vocabulary gap"),
+            revision_guard.check("heldout-preserved", not lost_heldout, {"current_retrieved": sorted(current_heldout, key=int), "expanded_retrieved": sorted(expanded_heldout, key=int), "lost_pmids": lost_heldout}, "expanded block loses a previously retrieved held-out record"),
+            revision_guard.check("required-blocks-justified", proposal.get("within_locked_concept_attested") is True, {"added_required_blocks": [], "concept": concept}, "vocabulary revision is not confined to an existing OR block"),
+            revision_guard.check("syntax-translation-stable", syntax_ok and not drift_issues, {"syntax_ok": syntax_ok, "translation_drift_issues": drift_issues, "query_translation": expanded_search.get("query_translation", "")}, "expanded block introduces syntax or PubMed translation drift"),
+            revision_guard.check("scope-unchanged-or-explicit", extraction.get("scope_reentry_required") is False and concept.casefold() in locked, {"scope_version": scope_version, "concept": concept, "scope_reentry_required": extraction.get("scope_reentry_required")}, "vocabulary revision silently changes scope"),
+            revision_guard.check("workload-recorded", True, workload, "before/after result counts are unavailable"),
+        ]
+        experimental = {
+            "retain_if_failed": proposal.get("retain_experimental_if_failed") is True,
+            "variant_id": proposal.get("experimental_variant_id"),
+            "label": proposal.get("experimental_variant_label"),
+        }
+        no_harm_passed, guard_disposition = revision_guard.disposition_for_checks(checks, experimental)
         row["retest"] = {
             "required": True,
             "term_query": term_query,
@@ -373,9 +408,27 @@ def retest_learning(
                 "query_translation": search.get("query_translation", ""),
                 "query_translation_hook": search.get("query_translation_hook", {}),
             },
+            "before_after_workload": workload,
+            "expanded_query_translation": expanded_search.get("query_translation", ""),
+            "expanded_query_translation_hook": expanded_search.get("query_translation_hook", {}),
         }
+        row["no_harm"] = {
+            "guard_version": 1,
+            "checks": checks,
+            "no_harm_passed": no_harm_passed,
+            "failed_checks": [item["name"] for item in checks if not item["passed"]],
+            "disposition": guard_disposition,
+            "authoritative_block_query": expanded_query if guard_disposition == "adopt" else current_query,
+            "experimental_block_query": expanded_query if guard_disposition == "experimental-only" else None,
+            "experimental_variant": experimental if guard_disposition == "experimental-only" else None,
+            "workload_effect": workload,
+        }
+        row["effective_decision"] = "adopted" if guard_disposition == "adopt" else guard_disposition
         retested.append(row)
     accepted = [item for item in retested if item.get("decision") == "accepted"]
+    adopted = [item for item in accepted if item.get("effective_decision") == "adopted"]
+    experimental = [item for item in accepted if item.get("effective_decision") == "experimental-only"]
+    reverted = [item for item in accepted if item.get("effective_decision") == "revert-to-baseline"]
     result = {
         "operation": "vocabulary-learning",
         "ok": True,
@@ -390,8 +443,12 @@ def retest_learning(
         "assignment_required": False,
         "processing_blockers": [],
         "proposals": retested,
-        "accepted_term_count": len(accepted),
-        "all_accepted_terms_retested": all(isinstance(item.get("retest"), dict) and item["retest"].get("required") is True for item in accepted),
+        "accepted_term_count": len(adopted),
+        "authored_accepted_term_count": len(accepted),
+        "experimental_term_count": len(experimental),
+        "reverted_term_count": len(reverted),
+        "all_accepted_terms_retested": all(isinstance(item.get("retest"), dict) and item["retest"].get("required") is True and isinstance(item.get("no_harm"), dict) for item in accepted),
+        "no_harm_checks_complete": all(isinstance(item.get("no_harm"), dict) and len(item["no_harm"].get("checks", [])) == 6 for item in accepted),
         "note": "Accepted terms are additions within locked concepts only. New concepts or eligibility interpretations require scope re-entry.",
         "request_info": client.metadata(),
     }

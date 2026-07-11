@@ -113,7 +113,8 @@ For each round:
 2. Route every finding and record its disposition.
 3. Save a new strategy or scope version for material changes; never overwrite silently.
 4. Rerun every required probe named by the finding.
-5. Run a new critic round against the revised artifacts.
+5. Run `revision_guard.py` and adopt the revision only when all six checks in `no-harm-revisions.md` pass. Otherwise restore the baseline automatically or retain the revision only as a labelled experimental variant.
+6. Run a new critic round against the authoritative post-guard artifacts.
 
 The internal critic passes only when:
 

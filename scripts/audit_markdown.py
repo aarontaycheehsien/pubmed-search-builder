@@ -363,17 +363,20 @@ def render_revision_cycles(data: dict[str, Any]) -> list[str]:
                     item.get("change"),
                     item.get("before_after_evidence") or item.get("evidence_files"),
                     item.get("validation_effect"),
+                    item.get("no_harm_disposition"),
+                    item.get("failed_no_harm_checks"),
+                    item.get("workload_effect"),
                     item.get("disposition"),
                     item.get("artifact"),
                 ]
             )
         else:
-            rows.append([item] + [DEFAULT_STATUS] * 9)
+            rows.append([item] + [DEFAULT_STATUS] * 12)
     return [
         "## Revision-cycle ledger",
         "",
         markdown_table(
-            ["Revision", "Critic round", "Scope", "Class", "Trigger", "Change", "Before/after evidence", "Validation effect", "Disposition", "Artifact"],
+            ["Revision", "Critic round", "Scope", "Class", "Trigger", "Change", "Before/after evidence", "Validation effect", "No-harm result", "Failed checks", "Workload effect", "Disposition", "Artifact"],
             rows,
         ),
         "",

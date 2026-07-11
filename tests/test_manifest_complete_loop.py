@@ -20,6 +20,7 @@ def load_module(name: str, filename: str):
 
 manifest_tool = load_module("manifest_tool_complete", "manifest_tool.py")
 critic_tool = load_module("critic_tool_complete", "critic_tool.py")
+revision_guard = load_module("revision_guard_complete", "revision_guard.py")
 
 
 class ManifestCompleteLoopTests(unittest.TestCase):
@@ -174,19 +175,37 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertTrue(any("latest critic round has not passed" in issue for issue in receipt["issues"]))
 
+        strategy_v1 = self.dir / "strategy_v1.txt"
+        strategy_v2 = self.dir / "strategy_v2.txt"
+        strategy_v2.write_text("randomized[tiab] OR alternate[tiab]", encoding="utf-8")
+        guard_input = {
+            "guard_version": 1,
+            "revision_id": "R001",
+            "revision_kind": "critic",
+            "protocol_id": None,
+            "named_defect": {"id": "F001", "description": "Missing historical synonym", "fixed": True, "evidence": ["sample.json"]},
+            "baseline": {"strategy_file": strategy_v1.name, "strategy_sha256": revision_guard.sha256_file(strategy_v1), "heldout_retrieved_pmids": [], "required_block_ids": ["condition"], "syntax_ok": True, "translation_drift_issues": [], "scope_version": 1, "protocol_sha256": None, "result_count": 100},
+            "revised": {"strategy_file": strategy_v2.name, "strategy_sha256": revision_guard.sha256_file(strategy_v2), "heldout_retrieved_pmids": [], "required_block_ids": ["condition"], "syntax_ok": True, "translation_drift_issues": [], "scope_version": 1, "protocol_sha256": None, "result_count": 110},
+            "authorized_required_block_ids": [],
+            "scope_change": {"changed": False, "authorized": False, "reason": ""},
+            "experimental_variant": {"retain_if_failed": False, "variant_id": None, "label": None},
+        }
+        guard_result = revision_guard.evaluate_payload(guard_input, base=self.dir)
+        guard_file = self.write_json("revision_no_harm_1.json", guard_result)
         revision = self.write_json(
             "revision_cycle_1.json",
             {
                 "revision_round": 1,
                 "critic_round": 1,
                 "scope_version": 1,
-                "trigger_finding": "Missing historical synonym",
+                "trigger_finding": "F001",
                 "classification": "lexical",
                 "change": "Added legacy condition term",
                 "evidence_files": ["sample.json"],
                 "required_reprobe": ["condition block count"],
                 "strategy_file": "strategy_v2.txt",
                 "disposition": "accepted",
+                "no_harm_file": guard_file.name,
             },
         )
         self.state("record-revision", "--revision-file", revision)
@@ -315,7 +334,10 @@ class ManifestCompleteLoopTests(unittest.TestCase):
                 "excluded_record_diagnosis": {"used_for_proposals": False},
                 "proposals": [],
                 "accepted_term_count": 0,
+                "experimental_term_count": 0,
+                "reverted_term_count": 0,
                 "all_accepted_terms_retested": True,
+                "no_harm_checks_complete": True,
             },
         )
         self.add("term-rank", "python scripts/vocabulary_learning.py retest", output=vocabulary)

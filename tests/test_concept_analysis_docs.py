@@ -59,6 +59,7 @@ class SkillContractTests(unittest.TestCase):
             "framework-selection.md",
             "concept-analysis-and-gating.md",
             "candidate-screening.md",
+            "no-harm-revisions.md",
             "press-critic.md",
             "mesh-and-pubmed-tools.md",
             "tiab-expansion.md",
@@ -71,6 +72,22 @@ class SkillContractTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_every_revision_has_an_executable_no_harm_gate(self):
+        workflow = read_doc("references/workflow.md").lower()
+        guard = read_doc("references/no-harm-revisions.md").lower()
+        self.assertIn("revision_guard.py", workflow)
+        for phrase in (
+            "named defect fixed",
+            "held-out retrieval preserved",
+            "no unjustified required block",
+            "syntax and translation stable",
+            "scope unchanged or explicitly versioned",
+            "workload effect recorded",
+            "revert-to-baseline",
+            "experimental-only",
+        ):
+            self.assertIn(phrase, guard)
+
     def test_scope_lock_precedes_candidate_and_objective_evidence(self):
         workflow = read_doc("references/workflow.md").lower()
         sequence = [

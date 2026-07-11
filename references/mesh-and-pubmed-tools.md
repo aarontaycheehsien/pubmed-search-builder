@@ -394,12 +394,12 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 | Objective evidence | `term-rank --pmids`; `mesh_tool.py sweep --details`, `tree`; PubMed ATM checks | Use screened discovery records and complete the MeSH candidate ledger. |
 | Empirical fragility | `strategy_analysis.py fragility-score` | Measure naming, MeSH, safety-layer, validation, noise, and era variation; reason every override. |
 | No-seed discovery | `no_seed_discovery.py discover`, `adjudicate` | Merge six orthogonal pilots, blind provenance, stop on study/vocabulary saturation, then freeze holdout. |
-| Active vocabulary learning | `vocabulary_learning.py extract`, `retest` | Learn only inside locked concepts; quarantine scope challenges and retest every accepted term. |
+| Active vocabulary learning | `vocabulary_learning.py extract`, `retest` | Learn only inside locked concepts; quarantine scope challenges and run the six no-harm checks for every accepted term. |
 | Screening burden | `screening_burden.py sample`, `estimate` | Use complete-frame stratified labels and precision intervals; compare only recall-qualified variants. |
 | Block testing/validation | `search`, `batch`, `variants`, `term-diff`, `validate`, `recall` | Run reversible comparisons, diagnose bottlenecks, and label validation independence. |
 | AND-block admission | `strategy_analysis.py concept-ablation` | Test every proposed required block against workload, differential samples, and development/holdout retrieval. |
 | Fragile-topic strands | `strategy_analysis.py two-strand` | Preserve the recall-first main strategy and add a reasoned focused prioritization strand. |
-| Critic/revision | `critic_tool.py`; `state record-critic`, `record-revision`, `reopen-scope` | Route findings, version scope/strategy changes, and rerun affected probes. |
+| Critic/revision | `critic_tool.py`; `revision_guard.py`; `state record-critic`, `record-revision`, `reopen-scope` | Route findings, run the six no-harm checks, restore the baseline on failure, and rerun affected probes. |
 | Final QA | `search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`, `low-count-review` | Run after the passing critic round and save QA output. |
 | Audit output | `audit-scaffold` → `audit_markdown.py`; `show --require-complete-loop` | Author judgment placeholders, render the audit, and pass the combined gate. |
 

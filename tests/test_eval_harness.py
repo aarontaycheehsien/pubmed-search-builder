@@ -43,6 +43,7 @@ class EvalHarnessTests(unittest.TestCase):
             self.assertTrue((skill_dir / "scripts" / "vocabulary_learning.py").is_file())
             self.assertTrue((skill_dir / "scripts" / "screening_burden.py").is_file())
             self.assertTrue((skill_dir / "scripts" / "protocol_tool.py").is_file())
+            self.assertTrue((skill_dir / "scripts" / "revision_guard.py").is_file())
             self.assertTrue((skill_dir / "schemas" / "review-protocol.schema.json").is_file())
             self.assertFalse((skill_dir / "evals").exists())
             self.assertFalse((skill_dir / "tests").exists())

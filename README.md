@@ -171,6 +171,8 @@ After candidate screening, `scripts/vocabulary_learning.py` extracts terms from 
 
 For strategy variants, `scripts/screening_burden.py` builds reproducible complete-frame stratified samples, estimates weighted precision with confidence intervals, reports records screened per relevant report, and permits burden-based selection only among variants meeting the independent held-out recall requirement.
 
+Every critic or vocabulary revision also passes `scripts/revision_guard.py`: the named defect must be fixed without losing prior held-out retrieval, adding an unauthorized required block, introducing syntax/translation drift, silently changing scope, or omitting before/after workload counts. Failed revisions automatically keep the baseline authoritative or remain labelled experimental-only.
+
 ### Audit Markdown (`scripts/audit_markdown.py`)
 
 Render structured audit notes to the required Markdown audit report without
