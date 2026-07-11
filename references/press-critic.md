@@ -13,6 +13,7 @@ Run the critic in fresh context when possible. Give it the raw artifacts needed 
 - plain-language review question and protocol decisions;
 - current versioned retrieval-scope artifact;
 - candidate-screening ledger and discovery/holdout summary;
+- active vocabulary-learning artifacts, including excluded-record diagnosis, scope challenges, term dispositions, held-out retests, and differential samples;
 - current strategy and concept-block files;
 - MeSH candidate ledger and title/abstract expansion log;
 - PubMed translations, counts, samples, seed/holdout results, gap analyses, and filter comparisons;
