@@ -1120,6 +1120,65 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if not narrowing or any(not str(item.get("rationale") or "").strip() for item in narrowing if isinstance(item, dict)):
                 issues.append("two-strand artifact lacks reasoned narrowing blocks")
 
+        burden_entries = operation_entries("screening-burden")
+        if not burden_entries:
+            issues.append("fragile multi-strand deliverable lacks labelled-sample screening-burden evidence")
+        else:
+            burden_entry = burden_entries[-1]
+            analysis_sequences.append(int(burden_entry.get("seq") or 0))
+            payload = read_manifest_output_json(manifest_path, str(burden_entry.get("output_path") or "")) or {}
+            if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
+                issues.append("latest screening-burden artifact failed or does not match the current scope version")
+            if payload.get("labels_complete") is not True:
+                issues.append("screening-burden sample labels are incomplete")
+            minimum_recall = payload.get("minimum_heldout_recall")
+            if not isinstance(minimum_recall, (int, float)) or isinstance(minimum_recall, bool) or not 0 <= minimum_recall <= 1:
+                issues.append("screening-burden artifact lacks a valid held-out recall requirement")
+            variants = payload.get("variants") if isinstance(payload.get("variants"), list) else []
+            if len(variants) < 2:
+                issues.append("screening-burden artifact must compare at least two variants")
+            eligible_labels = set()
+            eligible_rows = []
+            for item in variants:
+                if not isinstance(item, dict):
+                    issues.append("screening-burden variant must be an object")
+                    continue
+                if not isinstance(item.get("precision_confidence_interval_95"), dict):
+                    issues.append(f"screening-burden variant {item.get('label')!r} lacks a precision confidence interval")
+                if "estimated_records_screened_per_relevant_report" not in item:
+                    issues.append(f"screening-burden variant {item.get('label')!r} lacks records-per-relevant burden")
+                recall_value = item.get("heldout_recall")
+                if not isinstance(recall_value, (int, float)) or isinstance(recall_value, bool) or not isinstance(item.get("incremental_vs_baseline"), dict):
+                    issues.append(f"screening-burden variant {item.get('label')!r} lacks held-out/incremental comparison")
+                elif isinstance(minimum_recall, (int, float)) and not isinstance(minimum_recall, bool):
+                    expected_qualified = recall_value >= minimum_recall
+                    if item.get("recall_requirement_met") is not expected_qualified:
+                        issues.append(f"screening-burden variant {item.get('label')!r} has an incorrect recall-gate result")
+                if item.get("recall_requirement_met") is True and item.get("precision_estimate") is not None:
+                    eligible_labels.add(str(item.get("label")))
+                    eligible_rows.append(item)
+            selection = payload.get("selection") if isinstance(payload.get("selection"), dict) else {}
+            recorded_eligible = {str(value) for value in selection.get("eligible_variant_labels", [])}
+            if recorded_eligible != eligible_labels:
+                issues.append("screening-burden eligible variants do not match recall-qualified variants")
+            used = selection.get("burden_used_for_selection")
+            recommended = selection.get("recommended_variant_label")
+            if used is True:
+                expected_recommended = None
+                if len(eligible_rows) >= 2:
+                    expected_recommended = min(
+                        eligible_rows,
+                        key=lambda row: (
+                            float(row.get("estimated_records_screened_per_relevant_report") or float("inf")),
+                            int(row.get("total_count") or 0),
+                            str(row.get("label")),
+                        ),
+                    ).get("label")
+                if len(eligible_labels) < 2 or str(recommended) not in eligible_labels or recommended != expected_recommended:
+                    issues.append("screening burden was used to select a variant that did not meet the recall gate")
+            elif used is not False or recommended is not None:
+                issues.append("screening-burden selection must remain unused when fewer than two variants meet recall")
+
     if seed_gate_is_no_seed(state):
         issues.extend(recall_offer_readiness(state))
         discovery_entries = operation_entries("orthogonal-pilot-adjudication")

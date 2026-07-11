@@ -55,3 +55,5 @@ python scripts/strategy_analysis.py two-strand \
 The focused query is always `main AND (reasoned narrowing block[s])`. The artifact reports both counts, development/holdout losses, exact unique-record differentials with samples, workload reduction, and each narrowing rationale. Its safeguards declare the main strand authoritative and prohibit silent replacement.
 
 Search and retain the recall-first main results. Use the focused strand only to prioritize screening or as an explicitly secondary search strand. Run the critic after both artifacts exist, and cite both in the audit.
+
+Read `screening-burden.md`. Draw and label a reproducible stratified sample for both strands, estimate precision and records screened per relevant report, and compare incremental workload with held-out recall. Burden may select a strand only if both meet the declared recall requirement; otherwise retain the recall-qualified design regardless of apparent workload savings.

@@ -154,6 +154,8 @@ For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot fam
 
 After candidate screening, `scripts/vocabulary_learning.py` extracts terms from newly included records, keeps excluded-record terminology diagnostic-only, blocks scope-changing proposals, and retests accepted within-concept additions against holdouts and differential samples.
 
+For strategy variants, `scripts/screening_burden.py` builds reproducible complete-frame stratified samples, estimates weighted precision with confidence intervals, reports records screened per relevant report, and permits burden-based selection only among variants meeting the independent held-out recall requirement.
+
 ### Audit Markdown (`scripts/audit_markdown.py`)
 
 Render structured audit notes to the required Markdown audit report without

@@ -2049,7 +2049,7 @@ def compare_variants(
         "results": compared,
         "pmid_comparison_note": "PMID overlap is based only on returned samples when retmax > 0; counts are complete PubMed counts.",
         "seed_validation_note": SEED_VALIDATION_WARNING if seed_pmids else "",
-        "nnr_note": "NNR is estimated only from relevance-labelled pilot samples; counts alone are workload proxies, not precision.",
+        "nnr_note": "Legacy unstratified pilot estimate only. Counts alone are workload proxies; use screening_burden.py for complete-frame stratified precision intervals and recall-gated comparison.",
         "request_info": client.metadata(),
     }
 
