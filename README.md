@@ -76,6 +76,9 @@ python scripts/pubmed_tool.py fetch --pmids 24102982 21171099 --output seed_fetc
 # Discover candidate PMIDs (screen them before term mining)
 python scripts/pubmed_tool.py related --pmids 24102982 21171099 --links similar,citedin
 
+# Discover candidate companion reports and group shared trial registrations
+python scripts/pubmed_tool.py study-family --candidate-ledger candidate_ledger.json
+
 # Sample a few records from a query
 python scripts/pubmed_tool.py sample --query-file asthma_block.txt --retmax 3 --output sample_asthma_block.json
 
@@ -85,8 +88,8 @@ python scripts/pubmed_tool.py validate "(asthma[Mesh] OR asthma[tiab])" --pmids 
 # Estimate relative recall against a benchmark set, with per-concept-block miss diagnosis
 python scripts/pubmed_tool.py recall --query-file strategy.txt --benchmark-json related.json --blocks-file blocks.json
 
-# Rank tiab/MeSH terms by enrichment in a seed set vs. PubMed background
-python scripts/pubmed_tool.py term-rank --pmids 24102982 21171099 --fields tiab,mesh
+# Rank tiab/MeSH terms from role-safe screened discovery records
+python scripts/pubmed_tool.py term-rank --candidate-ledger candidate_ledger.json --fields tiab,mesh
 
 # Batch-test multiple variants (queries.json or tab-delimited text)
 python scripts/pubmed_tool.py batch queries.json
@@ -155,15 +158,18 @@ printed.
 ### Run Manifest (`scripts/manifest_tool.py`)
 
 Maintain a canonical `run_manifest.json` provenance ledger for a build - an
-append-only record of every command run, its output path, the date, the result
-count, and any superseded file. No network access.
+append-only record of every successful command, its output path and hash, input
+hashes, scope version, date, result count, and any superseded file. No network access.
 
 ```bash
 python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug demo
-python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "pubmed_tool.py search --query-file q.txt --retmax 0" --count 1234 --label "main strategy"
-python scripts/manifest_tool.py show --manifest run_manifest.json --validate
+python scripts/workflow_tool.py --manifest run_manifest.json --kind search --output search.json --input q.txt --scope-version 1 -- python scripts/pubmed_tool.py search --query-file q.txt --retmax 0 --output search.json
+python scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files --require-complete-loop
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
+
+`workflow_tool.py` registers a stage only when its process succeeds. The complete-loop gate parses
+validation and final-QA artifacts, verifies hashes, and requires an evidence-backed version-2 critic.
 
 ---
 

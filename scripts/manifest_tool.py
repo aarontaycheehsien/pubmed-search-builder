@@ -59,6 +59,7 @@ run (mirrors the "summarize tool work performed from available outputs" guardrai
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -196,6 +197,24 @@ class ManifestError(Exception):
 def utc_now() -> str:
     """UTC timestamp such as ``2026-05-31T12:40:00Z`` (matches the other bundled tools)."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_artifact_path(value: str, manifest_path: Path) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    manifest_relative = manifest_path.parent / path
+    if manifest_relative.exists():
+        return manifest_relative
+    return Path.cwd() / path
 
 
 def write_json(data: dict[str, object]) -> None:
@@ -397,6 +416,19 @@ def validate_manifest(
             output_paths.add(out)
             if check_files and not output_path_exists(out, manifest_path=manifest_path, data=data):
                 issues.append(f"entry seq={seq} output_path does not exist: {out}")
+            recorded_hash = entry.get("output_sha256")
+            if check_files and recorded_hash:
+                resolved = resolve_artifact_path(out, manifest_path or Path("run_manifest.json"))
+                if not resolved.is_file() or sha256_file(resolved) != recorded_hash:
+                    issues.append(f"entry seq={seq} output artifact hash no longer matches: {out}")
+        input_hashes = entry.get("input_sha256")
+        if check_files and isinstance(input_hashes, dict):
+            for input_path, recorded_hash in input_hashes.items():
+                resolved = resolve_artifact_path(str(input_path), manifest_path or Path("run_manifest.json"))
+                if not resolved.is_file():
+                    issues.append(f"entry seq={seq} input artifact does not exist: {input_path}")
+                elif sha256_file(resolved) != recorded_hash:
+                    issues.append(f"entry seq={seq} input artifact hash no longer matches: {input_path}")
         command = str(entry.get("command", ""))
         command_match = RECORD_CONTENT_COMMAND_RE.search(command)
         command_kind = command_match.group(1).lower() if command_match else None
@@ -570,6 +602,9 @@ def validated_receipt(path_value: str, expected_operation: str) -> dict[str, obj
     summary = data.get("summary")
     if not isinstance(summary, dict):
         raise ManifestError(f"validation receipt lacks a summary object: {path_value}")
+    for key in ("artifact_sha256", "evidence_bundle_sha256"):
+        if data.get(key):
+            summary[key] = data[key]
     return summary
 
 
@@ -919,12 +954,44 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             issues.append("latest critic round still has open actionable findings")
         if latest.get("scope_version") != scope_version:
             issues.append("latest critic round does not match the current retrieval-scope version")
+        if latest.get("critic_version") != 2:
+            issues.append("latest critic round does not use the evidence-backed critic_version 2 contract")
         for key, label in (("artifact", "critic"), ("validation_artifact", "critic validation")):
             path_value = str(latest.get(key) or "")
             if not path_value:
                 issues.append(f"latest {label} artifact is not recorded")
             elif not output_path_exists(path_value, manifest_path=manifest_path, data=data):
                 issues.append(f"latest {label} artifact does not exist: {path_value}")
+        critic_artifact = str(latest.get("artifact") or "")
+        bundle_value = str(latest.get("evidence_bundle") or "")
+        if not bundle_value:
+            issues.append("latest critic round lacks a hashed evidence bundle")
+        elif critic_artifact:
+            critic_path = resolve_artifact_path(critic_artifact, manifest_path)
+            expected_critic_hash = str(latest.get("artifact_sha256") or "")
+            if critic_path.is_file() and expected_critic_hash and sha256_file(critic_path) != expected_critic_hash:
+                issues.append("latest critic artifact changed after validation")
+            bundle_path = Path(bundle_value)
+            if not bundle_path.is_absolute():
+                bundle_path = critic_path.parent / bundle_path
+            if not bundle_path.is_file():
+                issues.append(f"latest critic evidence bundle does not exist: {bundle_path}")
+            else:
+                expected_bundle_hash = str(latest.get("evidence_bundle_sha256") or "")
+                if expected_bundle_hash and sha256_file(bundle_path) != expected_bundle_hash:
+                    issues.append("latest critic evidence bundle changed after validation")
+                try:
+                    bundle_payload = json.loads(bundle_path.read_text(encoding="utf-8"))
+                    for item in bundle_payload.get("artifacts", []):
+                        if not isinstance(item, dict):
+                            continue
+                        evidence_path = Path(str(item.get("path") or ""))
+                        if not evidence_path.is_absolute():
+                            evidence_path = bundle_path.parent / evidence_path
+                        if not evidence_path.is_file() or sha256_file(evidence_path) != str(item.get("sha256") or ""):
+                            issues.append(f"latest critic evidence changed after review: {item.get('role')}")
+                except (OSError, json.JSONDecodeError, AttributeError):
+                    issues.append("latest critic evidence bundle is not valid JSON")
 
     revisions = state.get("revision_cycles") if isinstance(state.get("revision_cycles"), list) else []
     revision_critic_rounds = {
@@ -942,15 +1009,41 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         entry for entry in entries
         if isinstance(entry, dict) and entry.get("kind") in {"validate", "recall"}
     ]
+    validation_entries.sort(key=lambda entry: int(entry.get("seq") or 0))
     if needs_validation and not validation_entries:
         issues.append("seed/holdout validation is required but no validate or recall artifact is recorded")
-    elif needs_validation and not any(
-        isinstance(entry.get("output_path"), str)
-        and entry.get("output_path")
-        and output_path_exists(str(entry["output_path"]), manifest_path=manifest_path, data=data)
-        for entry in validation_entries
-    ):
-        issues.append("recorded validation lacks an existing output artifact")
+    elif needs_validation:
+        latest_validation = validation_entries[-1]
+        output_value = str(latest_validation.get("output_path") or "")
+        if not output_value or not output_path_exists(output_value, manifest_path=manifest_path, data=data):
+            issues.append("latest required validation lacks an existing output artifact")
+        else:
+            validation_payload = read_manifest_output_json(manifest_path, output_value)
+            if validation_payload is None:
+                issues.append("latest required validation output is not a valid JSON object")
+            else:
+                operation = validation_payload.get("operation")
+                if operation not in {"validate", "recall"}:
+                    issues.append("latest required validation output is not a validate/recall artifact")
+                if validation_payload.get("ok") is not True:
+                    issues.append("latest required validation output did not complete successfully")
+                missed = validation_payload.get("missed_pmids")
+                if not isinstance(missed, list):
+                    issues.append("latest required validation output lacks a missed_pmids list")
+                elif missed:
+                    issues.append(
+                        "latest required validation has unresolved missed PMIDs: "
+                        + ", ".join(str(pmid) for pmid in missed[:20])
+                    )
+        if latest_validation.get("scope_version") not in (None, scope_version):
+            issues.append("latest required validation does not match the current retrieval-scope version")
+        revisions = state.get("revision_cycles") if isinstance(state.get("revision_cycles"), list) else []
+        latest_revision_seq = max(
+            (int(item.get("entry_seq") or 0) for item in revisions if isinstance(item, dict)),
+            default=0,
+        )
+        if latest_revision_seq and int(latest_validation.get("seq") or 0) <= latest_revision_seq:
+            issues.append("required validation was not rerun after the latest revision cycle")
 
     final_qa_entries = [
         entry for entry in entries
@@ -970,10 +1063,41 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         output_value = str(final_qa.get("output_path") or "")
         if not output_value or not output_path_exists(output_value, manifest_path=manifest_path, data=data):
             issues.append("latest final-qa entry lacks an existing output artifact")
+        else:
+            final_qa_payload = read_manifest_output_json(manifest_path, output_value)
+            if final_qa_payload is None:
+                issues.append("latest final-qa output is not a valid JSON object")
+            elif final_qa_payload.get("hook") != "pre_final_strategy_qa":
+                issues.append(
+                    "latest final-qa output is not a pre_final_strategy_qa artifact"
+                )
+            elif final_qa_payload.get("ok") is not True:
+                payload_issues = final_qa_payload.get("issues")
+                if not isinstance(payload_issues, list):
+                    payload_issues = []
+                error_codes = [
+                    str(item.get("code"))
+                    for item in payload_issues
+                    if isinstance(item, dict)
+                    and item.get("severity") == "error"
+                    and item.get("code")
+                ]
+                detail = f"; errors: {', '.join(error_codes)}" if error_codes else ""
+                issues.append(f"latest final-qa output did not pass (ok is not true){detail}")
 
-    if latest_final_topic_count(entries) is None:
+    final_topic_entries = [
+        entry for entry in entries if isinstance(entry, dict) and looks_like_final_topic_search(entry)
+    ]
+    final_topic_entries.sort(key=lambda entry: int(entry.get("seq") or 0))
+    if not final_topic_entries:
         issues.append("no final topic-only strategy count is recorded")
     else:
+        if needs_validation and validation_entries:
+            final_hashes = final_topic_entries[-1].get("input_sha256")
+            validation_hashes = validation_entries[-1].get("input_sha256")
+            if isinstance(final_hashes, dict) and final_hashes and isinstance(validation_hashes, dict) and validation_hashes:
+                if set(final_hashes.values()).isdisjoint(set(validation_hashes.values())):
+                    issues.append("final topic search and required validation are not bound to the same strategy input hash")
         issues.extend(low_count_review_readiness(data, manifest_path))
 
     audit_entries = [
@@ -1202,10 +1326,26 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             summary = validated_receipt(args.validation_file, "critic-artifact-validate")
             if summary.get("scope_version") != scope.get("version"):
                 raise ManifestError("critic scope_version does not match the locked retrieval scope")
+            if summary.get("critic_version") != 2:
+                raise ManifestError("recorded critic rounds must use critic_version 2 with a hashed evidence bundle")
             rounds = state["critic_rounds"]
             expected_round = len(rounds) + 1
             if summary.get("round") != expected_round:
                 raise ManifestError(f"critic round must be sequential: expected {expected_round}")
+            if rounds:
+                previous = rounds[-1] if isinstance(rounds[-1], dict) else {}
+                previous_statuses = previous.get("finding_statuses") if isinstance(previous.get("finding_statuses"), dict) else {}
+                current_statuses = summary.get("finding_statuses") if isinstance(summary.get("finding_statuses"), dict) else {}
+                dropped = sorted(
+                    finding_id
+                    for finding_id, status in previous_statuses.items()
+                    if status == "open" and finding_id not in current_statuses
+                )
+                if dropped:
+                    raise ManifestError(
+                        "critic finding continuity failed; previously open finding IDs were omitted: "
+                        + ", ".join(dropped)
+                    )
             entry_seq = append_internal_entry(
                 data,
                 now=now,
@@ -1314,6 +1454,17 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
     count = parse_count(args.count)
     output_path = args.output or None
     supersedes = args.supersedes or None
+    output_sha256 = None
+    if output_path:
+        resolved_output = resolve_artifact_path(output_path, path)
+        if resolved_output.is_file():
+            output_sha256 = sha256_file(resolved_output)
+    input_sha256: dict[str, str] = {}
+    for input_value in args.input or []:
+        resolved_input = resolve_artifact_path(input_value, path)
+        if not resolved_input.is_file():
+            raise ManifestError(f"--input file does not exist: {input_value}")
+        input_sha256[input_value] = sha256_file(resolved_input)
 
     # The lock serializes the whole read-modify-write so concurrent adds get unique seqs.
     with manifest_lock(path):
@@ -1334,6 +1485,10 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
                 "supersedes": supersedes,
                 "note": args.note or "",
                 "open_decision": bool(args.open_decision),
+                "scope_version": args.scope_version,
+                "returncode": args.returncode,
+                "output_sha256": output_sha256,
+                "input_sha256": input_sha256,
             }
         )
         if supersedes:
@@ -1532,6 +1687,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--kind", required=True, help=f"Entry kind, one of: {', '.join(ENTRY_KINDS)}.")
     add_parser.add_argument("--command", required=True, help="The exact command or agent action this entry records.")
     add_parser.add_argument("--output", help="Output file path produced by this command, if any.")
+    add_parser.add_argument("--input", action="append", default=[], help="Input artifact path to hash and bind to this entry; repeatable.")
+    add_parser.add_argument("--scope-version", type=int, help="Retrieval-scope version this evidence belongs to.")
+    add_parser.add_argument("--returncode", type=int, default=0, help="Recorded process exit code (default: 0).")
     add_parser.add_argument("--count", help="PubMed result count, if any (integer).")
     add_parser.add_argument("--supersedes", help="Path of a file that this entry's output replaces.")
     add_parser.add_argument("--note", default="", help="Short free-text note.")

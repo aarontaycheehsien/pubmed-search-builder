@@ -96,6 +96,50 @@ class CandidateLedgerTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["summary"]["non_independent_validation_pmids"], ["9"])
 
+    def test_holdout_allocator_is_reproducible_and_independent_for_six_records(self):
+        data = {
+            "scope_version": 1,
+            "records": [
+                {
+                    "pmid": str(i),
+                    "provenance": "prior-review",
+                    "decision": "include",
+                    "title_abstract_reviewed": True,
+                    "eligibility_reason": "In scope",
+                    "use": "both",
+                }
+                for i in range(1, 7)
+            ],
+        }
+        first, metadata = candidate_ledger.allocate_holdout(json.loads(json.dumps(data)), seed="fixed")
+        second, _ = candidate_ledger.allocate_holdout(json.loads(json.dumps(data)), seed="fixed")
+        self.assertEqual(first, second)
+        self.assertEqual(metadata["assignment"], "independent-holdout")
+        self.assertEqual(len(metadata["holdout_pmids"]), 2)
+        issues, summary = candidate_ledger.validate_ledger(first)
+        self.assertEqual(issues, [])
+        self.assertEqual(len(summary["holdout_pmids"]), 2)
+        self.assertEqual(len(summary["eligible_discovery_pmids"]), 4)
+
+    def test_small_candidate_set_is_explicitly_non_independent(self):
+        data = {
+            "scope_version": 1,
+            "records": [
+                {
+                    "pmid": str(i),
+                    "provenance": "prior-review",
+                    "decision": "include",
+                    "title_abstract_reviewed": True,
+                    "eligibility_reason": "In scope",
+                    "use": "discovery",
+                }
+                for i in range(1, 4)
+            ],
+        }
+        allocated, metadata = candidate_ledger.allocate_holdout(data)
+        self.assertEqual(metadata["assignment"], "non-independent-both")
+        self.assertTrue(all(record["use"] == "both" for record in allocated["records"]))
+
 
 if __name__ == "__main__":
     unittest.main()

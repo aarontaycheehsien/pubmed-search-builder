@@ -119,6 +119,8 @@ def score(
     *,
     strategy_override: str | Path | None = None,
     blocks_override: str | Path | None = None,
+    seen_pmids: set[str] | None = None,
+    mined_pmids: set[str] | None = None,
 ) -> dict:
     """Score a strategy against the fixture's gold set.
 
@@ -130,7 +132,8 @@ def score(
     """
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     base = fixture_path.parent
-    gold = [str(p) for p in fixture["gold_relevant_pmids"]]
+    gold_field = "evaluation_gold_pmids" if fixture.get("evaluation_gold_pmids") else "gold_relevant_pmids"
+    gold = [str(p) for p in fixture[gold_field]]
     if strategy_override is not None:
         strategy_file = Path(strategy_override)
         blocks_file = Path(blocks_override) if blocks_override else None
@@ -164,6 +167,14 @@ def score(
 
     total_hits = strategy_total_count(tool, strategy_file)
     nnr_proxy = round(total_hits / retrieved_n) if retrieved_n else None
+    seen_set = {str(pmid) for pmid in (seen_pmids or set())}
+    mined_set = {str(pmid) for pmid in (mined_pmids or set())}
+    retrieved_set = set(retrieved)
+    seen_gold = in_pubmed & seen_set
+    unseen_gold = in_pubmed - seen_set
+    mined_gold = in_pubmed & mined_set
+    seen_retrieved = seen_gold & retrieved_set
+    unseen_retrieved = unseen_gold & retrieved_set
 
     # Per-block recall recomputed over the *reachable* denominator.
     blocks_out = []
@@ -190,6 +201,7 @@ def score(
         "id": fixture.get("id"),
         "suite": fixture.get("suite"),
         "question": fixture.get("question"),
+        "gold_field": gold_field,
         "gold_total": len(gold),
         "gold_in_pubmed": reachable_n,
         "gold_unreachable": unreachable,
@@ -198,6 +210,23 @@ def score(
         "missed_in_pubmed": missed_reachable,
         "strategy_total_hits": total_hits,
         "nnr_proxy": nnr_proxy,
+        "development_evidence": {
+            "reviewed_pmids": sorted(seen_set),
+            "mined_pmids": sorted(mined_set),
+            "gold_seen_or_reviewed": len(seen_gold),
+            "gold_mined": len(mined_gold),
+        },
+        "unseen_evaluation": {
+            "gold_in_pubmed": len(unseen_gold),
+            "retrieved": len(unseen_retrieved),
+            "recall_percent": round(len(unseen_retrieved) / len(unseen_gold) * 100, 1) if unseen_gold else None,
+            "missed_pmids": sorted(unseen_gold - retrieved_set),
+        },
+        "seen_evaluation": {
+            "gold_in_pubmed": len(seen_gold),
+            "retrieved": len(seen_retrieved),
+            "recall_percent": round(len(seen_retrieved) / len(seen_gold) * 100, 1) if seen_gold else None,
+        },
         "block_recall": blocks_out,
         "and_interaction_misses": and_interaction,
         "fixture": str(fixture_path),
@@ -220,6 +249,12 @@ def render(card: dict) -> str:
         f"recall (of reachable) ...... {card['recall_reachable_percent']}%"
         f"   ({card['retrieved']}/{card['gold_in_pubmed']})"
     )
+    unseen = card.get("unseen_evaluation") or {}
+    if unseen.get("recall_percent") is not None:
+        lines.append(
+            f"recall (never reviewed) ... {unseen['recall_percent']}%"
+            f"   ({unseen['retrieved']}/{unseen['gold_in_pubmed']})"
+        )
     missed = card["missed_in_pubmed"]
     if missed:
         shown = ", ".join(missed[:10]) + (" ..." if len(missed) > 10 else "")

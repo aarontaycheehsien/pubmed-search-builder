@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -137,6 +139,62 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     return issues, summary
 
 
+def allocate_holdout(
+    data: dict[str, Any],
+    *,
+    seed: str = "pubmed-search-builder",
+    minimum_confirmed: int = 6,
+    fraction: float = 0.20,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Deterministically freeze discovery/holdout roles for screened-in records.
+
+    With fewer than ``minimum_confirmed`` eligible records, all records use ``both`` and validation
+    is explicitly non-independent. Otherwise reserve at least two records or ``fraction`` of the set,
+    whichever is larger. Hash ordering makes the split reproducible without depending on input order.
+    """
+    records = data.get("records")
+    if not isinstance(records, list):
+        raise CandidateLedgerError("records must be a list before holdout allocation")
+    eligible = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and record.get("decision") == "include"
+        and record.get("title_abstract_reviewed") is True
+        and normalize_pmid(record.get("pmid"))
+    ]
+    if not eligible:
+        raise CandidateLedgerError("no screened-in records are eligible for discovery/holdout allocation")
+    ranked = sorted(
+        eligible,
+        key=lambda record: hashlib.sha256(
+            f"{seed}:{normalize_pmid(record.get('pmid'))}".encode("utf-8")
+        ).hexdigest(),
+    )
+    if len(ranked) < max(1, minimum_confirmed):
+        holdout_pmids: set[str] = set()
+        assignment = "non-independent-both"
+        for record in ranked:
+            record["use"] = "both"
+    else:
+        holdout_n = min(len(ranked) - 1, max(2, math.ceil(len(ranked) * max(0.0, fraction))))
+        holdout_pmids = {normalize_pmid(record.get("pmid")) for record in ranked[:holdout_n]}
+        assignment = "independent-holdout"
+        for record in ranked:
+            record["use"] = "holdout" if normalize_pmid(record.get("pmid")) in holdout_pmids else "discovery"
+    metadata = {
+        "method": "sha256-deterministic",
+        "seed": seed,
+        "eligible_count": len(ranked),
+        "minimum_confirmed": minimum_confirmed,
+        "fraction": fraction,
+        "assignment": assignment,
+        "holdout_pmids": sorted(holdout_pmids),
+    }
+    data["holdout_allocation"] = metadata
+    return data, metadata
+
+
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -146,13 +204,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate a candidate evidence screening ledger.")
     parser.add_argument("ledger", help="Path to candidate_ledger.json.")
     parser.add_argument("--output", help="Optional path for the validation receipt JSON.")
+    parser.add_argument("--allocate-holdout", action="store_true", help="Deterministically assign discovery/holdout roles before validation.")
+    parser.add_argument("--ledger-output", help="Required with --allocate-holdout; writes the allocated ledger without overwriting the input.")
+    parser.add_argument("--allocation-seed", default="pubmed-search-builder")
+    parser.add_argument("--minimum-confirmed", type=int, default=6)
+    parser.add_argument("--holdout-fraction", type=float, default=0.20)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    allocation = None
     try:
         data = load_json(Path(args.ledger))
+        if args.allocate_holdout:
+            if not args.ledger_output:
+                raise CandidateLedgerError("--ledger-output is required with --allocate-holdout")
+            data, allocation = allocate_holdout(
+                data,
+                seed=args.allocation_seed,
+                minimum_confirmed=max(1, args.minimum_confirmed),
+                fraction=max(0.0, min(1.0, args.holdout_fraction)),
+            )
+            write_json(Path(args.ledger_output), data)
         issues, summary = validate_ledger(data)
     except CandidateLedgerError as exc:
         issues, summary = [str(exc)], {}
@@ -163,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
         "issues": issues,
         "summary": summary,
     }
+    if allocation is not None:
+        receipt["allocation"] = allocation
+        receipt["allocated_ledger"] = args.ledger_output
     if args.output:
         write_json(Path(args.output), receipt)
     print(json.dumps(receipt, indent=2, ensure_ascii=False))

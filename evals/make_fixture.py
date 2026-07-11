@@ -5,9 +5,8 @@ The eval harness is source-agnostic: a fixture is just a question + a gold set
 of relevant PMIDs + a protocol. CLEF TAR is one source; this helper builds a
 fixture from any of:
 
-  * PMIDs you already have (a published review's included studies, a curated set)
-  * DOIs (resolved to PMIDs via PubMed [AID])
-  * a "defining query" (its PubMed results become the gold set)
+  * adjudicated PMIDs you already have (a published review's included studies, a curated set)
+  * adjudicated DOIs (resolved to PMIDs via PubMed [AID])
 
 It resolves the gold set to a deduplicated PMID list, reports DOIs/PMIDs that do
 not resolve or are not in PubMed, and writes ``datasets/<suite>/<id>.json`` with
@@ -19,9 +18,6 @@ Examples:
 
   python evals/make_fixture.py --id SR2024 --question-file q.txt \
       --gold-dois-file included_dois.txt --suite my-reviews
-
-  python evals/make_fixture.py --id PRIORSEARCH --question "..." \
-      --gold-query-file prior_search.txt --gold-retmax 500
 
 Then build a strategy for it and score:
   python evals/generate.py MYREVIEW
@@ -93,8 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     gold.add_argument("--gold-pmids", nargs="+", help="Gold relevant PMIDs.")
     gold.add_argument("--gold-pmids-file", help="File of gold PMIDs (whitespace/comma/newline separated).")
     gold.add_argument("--gold-dois-file", help="File of gold DOIs (resolved to PMIDs via PubMed [AID]).")
-    gold.add_argument("--gold-query-file", help="UTF-8 file with a query whose PubMed results define the gold set.")
-    parser.add_argument("--gold-retmax", type=int, default=1000, help="Cap for --gold-query-file results (default: 1000).")
+    parser.add_argument(
+        "--development-pmids",
+        nargs="*",
+        default=[],
+        help="Optional development/seed PMIDs exposed to the skill; never included in hidden evaluation metrics unless also present in gold.",
+    )
+    parser.add_argument("--review-search-date", help="Original review search cutoff (YYYY-MM-DD), for update/time-split fixtures.")
+    parser.add_argument("--adjudication", default="user-confirmed relevant set", help="How relevance was screened/adjudicated.")
     parser.add_argument("--protocol-json", help="JSON file with a protocol object (else a default template is written).")
     parser.add_argument("--source", help="Free-text provenance note for the fixture.")
     parser.add_argument("--pubmed-tool", default=str(DEFAULT_TOOL))
@@ -121,10 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         dois = _read_tokens(Path(args.gold_dois_file))
         pmids, unresolved_dois = resolve_dois(tool, dois)
         gold_source = f"DOIs file ({args.gold_dois_file}); {len(pmids)}/{len(dois)} resolved via [AID]"
-    else:  # gold_query_file
-        query = Path(args.gold_query_file).read_text(encoding="utf-8")
-        pmids = _search_pmids(tool, query, args.gold_retmax)
-        gold_source = f"defining query ({args.gold_query_file}), retmax {args.gold_retmax}"
+    else:  # pragma: no cover - argparse requires one source
+        raise SystemExit("an adjudicated PMID or DOI gold source is required")
 
     pmids = run_eval.dedup_preserving_order(pmids) if hasattr(run_eval, "dedup_preserving_order") else list(dict.fromkeys(pmids))
     if not pmids:
@@ -140,10 +140,14 @@ def main(argv: list[str] | None = None) -> int:
         "suite": args.suite,
         "question": question,
         "gold_relevant_pmids": [int(p) for p in pmids],
+        "evaluation_gold_pmids": [int(p) for p in pmids],
         "source": args.source or f"custom fixture; gold from {gold_source}",
         "gold_source": gold_source,
+        "gold_adjudication": args.adjudication,
+        "review_search_date": args.review_search_date,
         "protocol": protocol,
-        "seed_pmids_given_to_skill": [],
+        "seed_pmids_given_to_skill": [int(p) for p in args.development_pmids],
+        "development_pmids_given_to_skill": [int(p) for p in args.development_pmids],
         "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). "
                  "Harness reports reachable vs. unreachable gold separately.",
     }

@@ -1395,6 +1395,56 @@ def related_pmids(
     }
 
 
+TRIAL_REGISTRY_PATTERN = re.compile(
+    r"\b(?:NCT\d{8}|ISRCTN\d{8}|ACTRN\d{14}|(?:Chi|NL|DRKS|JPRN|UMIN)[- ]?[A-Za-z0-9-]{4,})\b",
+    re.IGNORECASE,
+)
+
+
+def study_family_index(
+    seed_pmids: list[str],
+    related_result: dict[str, object],
+    records: list[dict[str, object]],
+) -> dict[str, object]:
+    """Build screening candidates for companion reports; never classify relevance automatically."""
+    provenance = {
+        str(item.get("pmid")): item
+        for item in related_result.get("candidate_pmids", [])
+        if isinstance(item, dict) and item.get("pmid")
+    }
+    registry_groups: defaultdict[str, list[str]] = defaultdict(list)
+    indexed: list[dict[str, object]] = []
+    for record in records:
+        pmid = str(record.get("pmid") or "").strip()
+        haystack = " ".join(
+            [str(record.get("title") or ""), str(record.get("abstract") or "")]
+            + [str(value) for value in (record.get("keywords") or [])]
+        )
+        registry_ids = sorted({match.upper().replace(" ", "-") for match in TRIAL_REGISTRY_PATTERN.findall(haystack)})
+        for registry_id in registry_ids:
+            registry_groups[registry_id].append(pmid)
+        source = provenance.get(pmid, {})
+        indexed.append(
+            {
+                "pmid": pmid,
+                "title": record.get("title") or "",
+                "registry_ids": registry_ids,
+                "via": source.get("via", []),
+                "seed_sources": source.get("seed_sources", []),
+                "screening_status": "pending",
+            }
+        )
+    return {
+        "operation": "study-family",
+        "seed_pmids": seed_pmids,
+        "links_used": related_result.get("links_used", []),
+        "candidate_count": len(indexed),
+        "candidates": indexed,
+        "registry_groups": dict(sorted(registry_groups.items())),
+        "note": "Candidate companion reports require human screening; shared registry IDs and citation links are discovery signals, not relevance decisions.",
+    }
+
+
 def sample(client: NcbiClient, query: str, retmax: int, sort: str | None) -> dict[str, object]:
     search_result = esearch(client, query, retmax=retmax, retstart=0, sort=sort)
     pmids = list(search_result.get("pmids", []))
@@ -2092,6 +2142,7 @@ def term_rank_candidates(
     document_frequency: defaultdict[tuple[str, str], int] = defaultdict(int)
     display: dict[tuple[str, str], str] = {}
     sources: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    record_support: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
     want_tiab = "tiab" in fields
     want_mesh = "mesh" in fields
 
@@ -2118,6 +2169,9 @@ def term_rank_candidates(
             if key not in counted_keys:
                 counted_keys.add(key)
                 document_frequency[key] += 1
+                pmid = str(record.get("pmid") or "").strip()
+                if pmid:
+                    record_support[key].add(pmid)
 
     rows: list[dict[str, object]] = []
     for key, count in document_frequency.items():
@@ -2130,10 +2184,60 @@ def term_rank_candidates(
                 "relevant_df": count,
                 "coverage": round(count / total, 4) if total else 0.0,
                 "sources": sorted(sources[key]),
+                "supporting_pmids": sorted(record_support[key]),
                 "in_strategy": in_strategy(term, strategy_text) if strategy_text else False,
             }
         )
     return rows, total
+
+
+def select_diverse_term_candidates(rows: list[dict[str, object]], max_terms: int) -> list[dict[str, object]]:
+    """Select the background-count budget without letting one extraction layer monopolize it.
+
+    Candidates are first ordered by relevant-set support, then selected round-robin from MeSH,
+    author-keyword, acronym, and phrase buckets. Within each bucket, terms that cover records not
+    yet represented in the selected set receive a deterministic marginal-coverage preference.
+    """
+    if max_terms <= 0:
+        return []
+    buckets: dict[str, list[dict[str, object]]] = {key: [] for key in ("mesh", "keyword", "acronym", "phrase")}
+    for row in rows:
+        sources = set(row.get("sources") or [])
+        bucket = "mesh" if row.get("field") == "mesh" else next(
+            (name for name in ("keyword", "acronym", "phrase") if name in sources), "phrase"
+        )
+        buckets[bucket].append(row)
+    for bucket_rows in buckets.values():
+        bucket_rows.sort(key=lambda row: (-int(row["relevant_df"]), str(row["term"]).lower()))
+
+    selected: list[dict[str, object]] = []
+    covered: set[str] = set()
+    active = [name for name in ("mesh", "keyword", "acronym", "phrase") if buckets[name]]
+    while active and len(selected) < max_terms:
+        next_active: list[str] = []
+        for name in active:
+            candidates = buckets[name]
+            if not candidates:
+                continue
+            candidates.sort(
+                key=lambda row: (
+                    -len(set(row.get("supporting_pmids") or []) - covered),
+                    -int(row["relevant_df"]),
+                    str(row["term"]).lower(),
+                )
+            )
+            row = candidates.pop(0)
+            support = set(row.get("supporting_pmids") or [])
+            row["marginal_record_count_at_selection"] = len(support - covered)
+            row["selection_bucket"] = name
+            covered.update(support)
+            selected.append(row)
+            if candidates:
+                next_active.append(name)
+            if len(selected) >= max_terms:
+                break
+        active = next_active
+    return selected
 
 
 def term_rank(
@@ -2153,7 +2257,7 @@ def term_rank(
             str(row["term"]).lower(),
         )
     )
-    scored = rows[:max_terms]
+    scored = select_diverse_term_candidates(rows, max_terms)
     pubmed_total = max(int(pubmed_total), 1)
 
     for row in scored:
@@ -2206,6 +2310,61 @@ def load_json_file(path: str) -> dict[str, object]:
     if not isinstance(data, dict):
         raise PubMedError(f"JSON file must contain an object: {path}")
     return data
+
+
+def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str, object]]:
+    """Resolve role-safe PMIDs from a validated candidate ledger.
+
+    Discovery consumers receive only screened-in ``discovery``/``both`` records. Validation
+    consumers receive frozen ``holdout`` records when available, otherwise screened-in ``both``
+    records and are explicitly marked non-independent.
+    """
+    data = load_json_file(path)
+    records = data.get("records")
+    if not isinstance(records, list) or not records:
+        raise PubMedError(f"Candidate ledger has no records: {path}")
+    eligible: dict[str, list[str]] = {"discovery": [], "holdout": [], "both": []}
+    for index, item in enumerate(records, start=1):
+        if not isinstance(item, dict):
+            raise PubMedError(f"Candidate ledger record {index} is not an object: {path}")
+        pmid = str(item.get("pmid") or "").strip()
+        use = str(item.get("use") or "").strip()
+        if use not in eligible:
+            continue
+        if not pmid.isdigit():
+            raise PubMedError(f"Candidate ledger record {index} has an invalid PMID: {path}")
+        if item.get("decision") != "include" or item.get("title_abstract_reviewed") is not True:
+            raise PubMedError(
+                f"Candidate ledger record {index} uses {use} without screened include/title-abstract review"
+            )
+        if not str(item.get("eligibility_reason") or "").strip():
+            raise PubMedError(f"Candidate ledger record {index} uses {use} without an eligibility reason")
+        eligible[use].append(pmid)
+    if purpose == "discovery":
+        pmids = dedup_preserving_order(eligible["discovery"] + eligible["both"])
+        independent = False
+        uses = ["discovery", "both"]
+    elif purpose == "validation":
+        if eligible["holdout"]:
+            pmids = dedup_preserving_order(eligible["holdout"])
+            independent = True
+            uses = ["holdout"]
+        else:
+            pmids = dedup_preserving_order(eligible["both"])
+            independent = False
+            uses = ["both"]
+    else:  # pragma: no cover - internal contract
+        raise PubMedError(f"Unknown candidate-ledger purpose: {purpose}")
+    if not pmids:
+        raise PubMedError(f"Candidate ledger has no eligible PMIDs for {purpose}: {path}")
+    return pmids, {
+        "candidate_ledger": path,
+        "scope_version": data.get("scope_version"),
+        "purpose": purpose,
+        "uses": uses,
+        "independent": independent,
+        "pmid_count": len(pmids),
+    }
 
 
 def sheet_name(value: str, fallback: str) -> str:
@@ -3883,7 +4042,9 @@ def build_parser() -> argparse.ArgumentParser:
         "related",
         help="Discover candidate PMIDs from screened anchors via PubMed eLink (similar articles, cited-by, references); candidates still require screening.",
     )
-    related_parser.add_argument("--pmids", nargs="+", required=True, help="Seed PMIDs to expand.")
+    related_source = related_parser.add_mutually_exclusive_group(required=True)
+    related_source.add_argument("--pmids", nargs="+", help="Screened discovery PMIDs to expand.")
+    related_source.add_argument("--candidate-ledger", help="Validated candidate ledger; expands only discovery/both PMIDs.")
     related_parser.add_argument(
         "--links",
         default="similar",
@@ -3902,8 +4063,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hard cap on the deduplicated candidate set (default: %(default)s).",
     )
 
+    family_parser = subparsers.add_parser(
+        "study-family",
+        help="Expand screened discovery anchors through similar/citation links and index candidate companion reports by trial registry ID.",
+    )
+    family_source = family_parser.add_mutually_exclusive_group(required=True)
+    family_source.add_argument("--pmids", nargs="+", help="Screened discovery PMIDs to expand.")
+    family_source.add_argument("--candidate-ledger", help="Validated candidate ledger; expands only discovery/both PMIDs.")
+    family_parser.add_argument("--links", default="similar,citedin,refs")
+    family_parser.add_argument("--max-per-seed", type=int, default=RELATED_MAX_PER_SEED)
+    family_parser.add_argument("--max-total", type=int, default=RELATED_MAX_TOTAL)
+
     mine_parser = subparsers.add_parser("mine", help="Fetch seed PMIDs and mine MeSH, keywords, phrases, and acronyms.")
-    mine_parser.add_argument("--pmids", nargs="+", required=True)
+    mine_source = mine_parser.add_mutually_exclusive_group(required=True)
+    mine_source.add_argument("--pmids", nargs="+")
+    mine_source.add_argument("--candidate-ledger", help="Validated candidate ledger; mines only discovery/both PMIDs.")
     mine_parser.add_argument("--strategy", help="Optional existing strategy text for gap checks.")
     mine_parser.add_argument("--strategy-file", help="Optional UTF-8 strategy file for gap checks.")
     mine_parser.add_argument("--max-phrases", type=int, default=80)
@@ -3917,6 +4091,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     term_rank_source = term_rank_parser.add_mutually_exclusive_group(required=True)
     term_rank_source.add_argument("--pmids", nargs="+", help="Relevant/seed PMIDs to fetch and analyse.")
+    term_rank_source.add_argument("--candidate-ledger", help="Validated candidate ledger; ranks terms only from discovery/both PMIDs.")
     term_rank_source.add_argument("--mine-json", help="JSON output from the mine command; its found PMIDs become the relevant set.")
     term_rank_source.add_argument("--relevant-query-file", help="UTF-8 file with a PubMed query defining a pilot relevant set. Use '-' for stdin.")
     term_rank_parser.add_argument(
@@ -3980,7 +4155,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="Check whether a query retrieves supplied seed PMIDs.")
     add_query_input_arguments(validate_parser)
-    validate_parser.add_argument("--pmids", nargs="+", required=True)
+    validate_source = validate_parser.add_mutually_exclusive_group(required=True)
+    validate_source.add_argument("--pmids", nargs="+")
+    validate_source.add_argument("--candidate-ledger", help="Validated candidate ledger; validates only holdout PMIDs, or both when no independent holdout exists.")
 
     recall_parser = subparsers.add_parser(
         "recall",
@@ -3989,6 +4166,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_query_input_arguments(recall_parser)
     recall_source = recall_parser.add_mutually_exclusive_group(required=True)
     recall_source.add_argument("--benchmark-pmids", nargs="+", help="Benchmark relevant PMIDs (e.g. an independent gold standard).")
+    recall_source.add_argument("--candidate-ledger", help="Validated candidate ledger; benchmarks only frozen holdout PMIDs, or both when non-independent validation is unavoidable.")
     recall_source.add_argument("--benchmark-json", help="JSON from related/mine, or a bare PMID list, defining the benchmark set.")
     recall_source.add_argument("--benchmark-query-file", help="UTF-8 file with a query defining the benchmark set. Use '-' for stdin.")
     recall_source.add_argument(
@@ -4147,17 +4325,43 @@ def main(argv: list[str] | None = None) -> int:
             emit_record_content_receipt(args.command, attach_hook(efetch(client, args.pmids), preflight), args)
         elif args.command == "related":
             links = parse_related_links(args.links, parser)
+            ledger_meta = None
+            related_pmids_input = [str(pmid) for pmid in (args.pmids or [])]
+            if args.candidate_ledger:
+                related_pmids_input, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "discovery")
             preflight = pre_command_hook(client, args)
             if not preflight["ok"]:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = related_pmids(
                 client,
-                args.pmids,
+                related_pmids_input,
                 links=links,
                 max_per_seed=max(1, args.max_per_seed),
                 max_total=max(1, args.max_total),
             )
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
+            emit(args.command, attach_hook(result, preflight), args)
+        elif args.command == "study-family":
+            links = parse_related_links(args.links, parser)
+            ledger_meta = None
+            seeds = [str(pmid) for pmid in (args.pmids or [])]
+            if args.candidate_ledger:
+                seeds, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "discovery")
+            preflight = pre_command_hook(client, args)
+            if not preflight["ok"]:
+                write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
+                return 2
+            related_result = related_pmids(
+                client, seeds, links=links, max_per_seed=max(1, args.max_per_seed), max_total=max(1, args.max_total)
+            )
+            candidate_pmids = [str(item.get("pmid")) for item in related_result.get("candidate_pmids", []) if isinstance(item, dict)]
+            records = efetch(client, candidate_pmids).get("records", []) if candidate_pmids else []
+            result = study_family_index(seeds, related_result, records)
+            result["request_info"] = client.metadata()
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
             emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "mine":
             if args.strategy and args.strategy_file:
@@ -4165,18 +4369,24 @@ def main(argv: list[str] | None = None) -> int:
             strategy_text = args.strategy or ""
             if args.strategy_file:
                 strategy_text = read_text_source(args.strategy_file)
+            ledger_meta = None
+            mine_pmids = [str(pmid) for pmid in (args.pmids or [])]
+            if args.candidate_ledger:
+                mine_pmids, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "discovery")
             preflight = pre_command_hook(client, args)
             if not preflight["ok"]:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
             result = mine_seed_pmids(
                 client,
-                args.pmids,
+                mine_pmids,
                 strategy_text=strategy_text,
                 max_phrases=max(0, args.max_phrases),
                 max_acronyms=max(0, args.max_acronyms),
                 min_phrase_count=max(1, args.min_phrase_count),
             )
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
             emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
         elif args.command == "term-rank":
             if args.strategy and args.strategy_file:
@@ -4186,9 +4396,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.strategy_file:
                 strategy_text = read_text_source(args.strategy_file)
             pmids: list[str] = []
+            ledger_meta = None
             relevant_query: str | None = None
             if args.pmids:
                 pmids = [str(pmid) for pmid in args.pmids]
+            elif args.candidate_ledger:
+                pmids, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "discovery")
             elif args.mine_json:
                 mine_payload = load_json_file(args.mine_json)
                 pmids = [
@@ -4225,6 +4438,8 @@ def main(argv: list[str] | None = None) -> int:
                 pubmed_total=args.pubmed_total,
             )
             result["relevant_pmids"] = pmids
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
             if excluded_present:
                 result["excluded_pmids"] = excluded_present
             emit(args.command, attach_hook(result, preflight), args)
@@ -4249,11 +4464,17 @@ def main(argv: list[str] | None = None) -> int:
             emit_record_content_receipt(args.command, attach_hook(result, preflight), args)
         elif args.command == "validate":
             query = resolve_query(args, parser)
+            ledger_meta = None
+            validation_pmids = [str(pmid) for pmid in (args.pmids or [])]
+            if args.candidate_ledger:
+                validation_pmids, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "validation")
             preflight = pre_command_hook(client, args, query=query)
             if not preflight["ok"]:
                 write_json({"error": "Pre-command hook blocked PubMed command.", "pre_command_hook": preflight, "request_info": client.metadata()})
                 return 2
-            result = validate(client, query, args.pmids)
+            result = validate(client, query, validation_pmids)
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
             emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "recall":
             query = resolve_query(args, parser)
@@ -4269,9 +4490,13 @@ def main(argv: list[str] | None = None) -> int:
             pilot_meta: dict[str, object] | None = None
             benchmark_source = ""
             benchmark_seed_pmids: list[str] = []
+            ledger_meta = None
             if args.benchmark_pmids:
                 benchmark_seed_pmids = [str(pmid) for pmid in args.benchmark_pmids]
                 benchmark_source = "benchmark-pmids"
+            elif args.candidate_ledger:
+                benchmark_seed_pmids, ledger_meta = candidate_ledger_pmids(args.candidate_ledger, "validation")
+                benchmark_source = f"candidate-ledger:{args.candidate_ledger}"
             elif args.benchmark_json:
                 payload = load_benchmark_or_blocks_json(args.benchmark_json)
                 benchmark_seed_pmids = extract_benchmark_pmids(payload, min_seed_overlap=max(0, args.min_seed_overlap))
@@ -4357,6 +4582,8 @@ def main(argv: list[str] | None = None) -> int:
                 result["excluded_pmids"] = excluded_present
             if pilot_meta is not None:
                 result["pilot_expansion"] = pilot_meta
+            if ledger_meta:
+                result["candidate_ledger_source"] = ledger_meta
             emit(args.command, attach_hook(result, preflight), args)
         elif args.command == "batch":
             queries = parse_batch_queries(read_text_source(args.queries_file))

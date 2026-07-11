@@ -141,6 +141,17 @@ class RelatedTests(unittest.TestCase):
         self.assertEqual(result["candidate_count"], 0)
         self.assertEqual(result["link_counts"], {"similar": 0})
 
+    def test_study_family_indexes_registry_ids_and_keeps_screening_pending(self):
+        related = {
+            "candidate_pmids": [{"pmid": "10", "via": ["citedin"], "seed_sources": ["1"]}],
+            "links_used": ["citedin"],
+        }
+        records = [{"pmid": "10", "title": "Follow-up of NCT12345678", "abstract": "", "keywords": []}]
+        result = pubmed_tool.study_family_index(["1"], related, records)
+        self.assertEqual(result["registry_groups"], {"NCT12345678": ["10"]})
+        self.assertEqual(result["candidates"][0]["screening_status"], "pending")
+        self.assertEqual(result["candidates"][0]["via"], ["citedin"])
+
 
 if __name__ == "__main__":
     unittest.main()

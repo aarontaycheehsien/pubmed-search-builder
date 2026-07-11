@@ -18,7 +18,7 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 3. Fetch candidate metadata to saved JSON. Inspect titles and abstracts where available; receipt-only stdout is not screening evidence.
 4. Classify every candidate as `include`, `exclude`, or `uncertain` against the locked scope. Give a short eligibility reason.
 5. Assign one use role: `discovery`, `holdout`, `both`, `heuristic`, or `neither`.
-6. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`.
+6. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`. When roles have not already been frozen, use `--allocate-holdout --ledger-output <path>` for a deterministic allocation.
 7. Mine only records that the validator marks eligible for discovery.
 
 Do not feed a related-record set directly to `term-rank` merely because a PMID has high seed overlap or similarity. Those scores prioritize screening; they do not establish eligibility.
@@ -56,6 +56,10 @@ An `exclude` record must use `neither`. An `uncertain` record may use only `heur
 ## Development and holdout allocation
 
 Freeze the holdout before mining. When the confirmed relevant set is large and diverse enough, reserve a representative subset across eras, terminology, indexing status, and study types. As a practical heuristic, with at least six confirmed records reserve at least two records or about 20%, whichever is larger, unless that would make the discovery set unusably small.
+
+After validation, pass the ledger itself to `pubmed_tool.py related`, `mine`, `term-rank`, `study-family`, `validate`, and `recall` with `--candidate-ledger`. The tool resolves role-safe PMIDs: discovery commands cannot consume holdouts, and validation prefers holdouts. Avoid copying PMID lists by hand.
+
+Use `pubmed_tool.py study-family --candidate-ledger candidate_ledger.json` to discover candidate companion reports through similar/cited/reference links and group records sharing trial registration IDs. Every result remains `screening_status: pending`; family linkage is a discovery signal, not an inclusion decision.
 
 When the set is too small, use `both` and state that known-item validation is non-independent. Never imply that re-finding records used for term discovery demonstrates sensitivity.
 
