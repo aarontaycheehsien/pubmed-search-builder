@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -22,6 +23,110 @@ def read_json(path: str) -> Any:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise StrategyAnalysisError(f"Could not read JSON {path}: {exc}") from exc
+
+
+def protocol_policy(path: str | None, scope_version: int) -> dict[str, Any] | None:
+    if not path:
+        return None
+    protocol_path = Path(path)
+    data = read_json(path)
+    if not isinstance(data, dict) or data.get("dsl_version") != 1:
+        raise StrategyAnalysisError("Protocol file must be a review protocol using dsl_version 1")
+    if data.get("scope_version") != scope_version:
+        raise StrategyAnalysisError("Protocol scope_version does not match --scope-version")
+    protocol_id = str(data.get("protocol_id") or "").strip()
+    if not protocol_id:
+        raise StrategyAnalysisError("Protocol file requires protocol_id")
+    variants = data.get("focused_variants", [])
+    if not isinstance(variants, list):
+        raise StrategyAnalysisError("Protocol focused_variants must be a list")
+    variant_ids = {
+        str(item.get("id") or "").strip()
+        for item in variants
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    variant_specs = {
+        str(item.get("id")): item
+        for item in variants
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    filters = data.get("filters_and_limits") if isinstance(data.get("filters_and_limits"), dict) else {}
+    filter_limit_ids = {
+        str(item.get("id") or "").strip()
+        for item in filters.get("decisions", [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    return {
+        "protocol_id": protocol_id,
+        "protocol_sha256": hashlib.sha256(
+            json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "dsl_version": 1,
+        "permitted_focused_variant_ids": sorted(variant_ids),
+        "focused_variant_specs": variant_specs,
+        "filter_limit_ids": sorted(filter_limit_ids),
+    }
+
+
+def load_block_registry(path: str | None, policy: dict[str, Any] | None, scope_version: int) -> dict[str, dict[str, Any]] | None:
+    if not path:
+        if policy:
+            raise StrategyAnalysisError("--block-registry is required with --protocol-file")
+        return None
+    raw = read_json(path)
+    if not isinstance(raw, dict) or raw.get("artifact_type") != "block-registry":
+        raise StrategyAnalysisError("Block registry must be a generated block-registry artifact")
+    if raw.get("scope_version") != scope_version:
+        raise StrategyAnalysisError("Block registry scope_version does not match --scope-version")
+    generated = raw.get("generated_from")
+    if policy and (
+        raw.get("protocol_id") != policy.get("protocol_id")
+        or not isinstance(generated, dict)
+        or generated.get("sha256") != policy.get("protocol_sha256")
+    ):
+        raise StrategyAnalysisError("Block registry does not match the supplied protocol")
+    registry: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(raw.get("blocks", []), start=1):
+        if not isinstance(item, dict):
+            raise StrategyAnalysisError(f"Block registry row {index} must be an object")
+        block_id = str(item.get("block_id") or "").strip()
+        if not block_id or block_id in registry:
+            raise StrategyAnalysisError(f"Block registry row {index} has an empty or duplicate block_id")
+        registry[block_id] = item
+    if not registry:
+        raise StrategyAnalysisError("Block registry contains no blocks")
+    return registry
+
+
+def bind_blocks_to_registry(
+    blocks: list[dict[str, Any]],
+    registry: dict[str, dict[str, Any]] | None,
+    filter_limit_ids: set[str] | None = None,
+) -> None:
+    if registry is None:
+        return
+    seen: set[str] = set()
+    allowed_filters = filter_limit_ids or set()
+    for index, block in enumerate(blocks, start=1):
+        filter_id = str(block.get("filter_limit_id") or "").strip()
+        if filter_id:
+            if filter_id not in allowed_filters:
+                raise StrategyAnalysisError(f"Executable filter/limit {filter_id!r} is not declared in the protocol")
+            if filter_id in seen:
+                raise StrategyAnalysisError(f"Executable blocks duplicate filter_limit_id {filter_id!r}")
+            seen.add(filter_id)
+            continue
+        block_id = str(block.get("block_id") or block.get("concept_id") or "").strip()
+        if not block_id:
+            raise StrategyAnalysisError(f"Executable block {index} requires block_id with a protocol registry")
+        if block_id in seen:
+            raise StrategyAnalysisError(f"Executable blocks duplicate block_id {block_id!r}")
+        seen.add(block_id)
+        registered = registry.get(block_id)
+        if not registered:
+            raise StrategyAnalysisError(f"Executable block {block_id!r} is not declared in the protocol registry")
+        if str(block.get("label") or "").strip() != str(registered.get("label") or "").strip():
+            raise StrategyAnalysisError(f"Executable block {block_id!r} label does not match the protocol registry")
 
 
 def load_blocks(path: str, *, require_rationale: bool = False) -> list[dict[str, Any]]:
@@ -513,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
     ablation.add_argument("--development-pmids", nargs="*", default=[])
     ablation.add_argument("--holdout-pmids", nargs="*", default=[])
     ablation.add_argument("--scope-version", type=int, required=True)
+    ablation.add_argument("--protocol-file")
+    ablation.add_argument("--block-registry")
     ablation.add_argument("--sample-size", type=int, default=10)
     ablation.add_argument("--output", required=True)
     strands = sub.add_parser("two-strand")
@@ -522,6 +629,9 @@ def build_parser() -> argparse.ArgumentParser:
     strands.add_argument("--development-pmids", nargs="*", default=[])
     strands.add_argument("--holdout-pmids", nargs="*", default=[])
     strands.add_argument("--scope-version", type=int, required=True)
+    strands.add_argument("--protocol-file")
+    strands.add_argument("--block-registry")
+    strands.add_argument("--focused-variant-id", help="Declared protocol variant ID; undeclared or omitted variants remain diagnostic-only.")
     strands.add_argument("--sample-size", type=int, default=10)
     strands.add_argument("--output", required=True)
     fragility = sub.add_parser("fragility-score")
@@ -531,6 +641,8 @@ def build_parser() -> argparse.ArgumentParser:
     fragility.add_argument("--holdout-pmids", nargs="*", default=[])
     fragility.add_argument("--concept-ablation-json")
     fragility.add_argument("--scope-version", type=int, required=True)
+    fragility.add_argument("--protocol-file")
+    fragility.add_argument("--block-registry")
     fragility.add_argument("--sample-size", type=int, default=10)
     fragility.add_argument("--output", required=True)
     return parser
@@ -540,6 +652,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     client = pubmed_tool.NcbiClient()
     try:
+        policy = protocol_policy(args.protocol_file, args.scope_version)
+        registry = load_block_registry(args.block_registry, policy, args.scope_version)
         ledger_development, ledger_holdout, ledger_meta = ledger_sets(args.candidate_ledger)
         development = pubmed_tool.dedup_preserving_order(ledger_development + [str(v) for v in args.development_pmids])
         holdout = pubmed_tool.dedup_preserving_order(ledger_holdout + [str(v) for v in args.holdout_pmids])
@@ -547,6 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         pubmed_tool.assert_numeric_pmids(holdout, source="holdout PMID input")
         if args.command == "concept-ablation":
             blocks = load_blocks(args.blocks_file)
+            bind_blocks_to_registry(blocks, registry, set(policy.get("filter_limit_ids", [])) if policy else set())
             result = concept_ablation(
                 client,
                 blocks,
@@ -559,6 +674,20 @@ def main(argv: list[str] | None = None) -> int:
             main_query = pubmed_tool.normalize_query(pubmed_tool.read_text_source(args.main_strategy_file))
             pubmed_tool.assert_plain_query("main strategy", main_query)
             blocks = load_blocks(args.narrowing_blocks_file, require_rationale=True)
+            bind_blocks_to_registry(blocks, registry, set(policy.get("filter_limit_ids", [])) if policy else set())
+            requested_variant = str(args.focused_variant_id or "").strip()
+            specs = policy.get("focused_variant_specs", {}) if policy else {}
+            if requested_variant and requested_variant in specs:
+                spec = specs[requested_variant]
+                expected = set(spec.get("optional_concept_ids", [])) | set(spec.get("filter_limit_ids", []))
+                actual = {
+                    str(block.get("filter_limit_id") or block.get("block_id") or block.get("concept_id") or "").strip()
+                    for block in blocks
+                }
+                if actual != expected:
+                    raise StrategyAnalysisError(
+                        f"Focused variant {requested_variant!r} realization IDs do not match the protocol declaration"
+                    )
             result = two_strand(
                 client,
                 main_query,
@@ -570,6 +699,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             concepts = load_concepts(args.concepts_file)
+            if registry is not None:
+                concept_ids = {str(item.get("concept_id") or item.get("block_id") or "") for item in concepts}
+                unknown = sorted(value for value in concept_ids if value and value not in registry)
+                if unknown:
+                    raise StrategyAnalysisError("Fragility concepts are not in the protocol registry: " + ", ".join(unknown))
             ablation_data = read_json(args.concept_ablation_json) if args.concept_ablation_json else None
             if ablation_data is not None and not isinstance(ablation_data, dict):
                 raise StrategyAnalysisError("Concept-ablation JSON must contain an object")
@@ -584,6 +718,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         if ledger_meta:
             result["candidate_ledger_source"] = ledger_meta
+        if policy:
+            result.update({
+                key: value for key, value in policy.items()
+                if key not in {"permitted_focused_variant_ids", "focused_variant_specs", "filter_limit_ids"}
+            })
+        if args.command == "two-strand":
+            requested = str(args.focused_variant_id or "").strip()
+            permitted = set(policy.get("permitted_focused_variant_ids", [])) if policy else set()
+            declared = bool(requested and requested in permitted)
+            result["focused_variant_policy"] = {
+                "variant_id": requested or None,
+                "declared_in_protocol": declared,
+                "diagnostic_only": not declared,
+                "adoption_eligible": declared,
+                "rule": "Undeclared variants may be tested, but require a new protocol version before adoption, registration, or handoff.",
+            }
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

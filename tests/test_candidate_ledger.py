@@ -13,6 +13,41 @@ SPEC.loader.exec_module(candidate_ledger)
 
 
 class CandidateLedgerTests(unittest.TestCase):
+    def test_generated_template_instantiates_without_mutating_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            protocol = root / "review_protocol_v1.json"
+            protocol.write_text("{}", encoding="utf-8")
+            template = root / "candidate_ledger_template_v1.json"
+            template.write_text(
+                json.dumps(
+                    {
+                        "artifact_type": "candidate-ledger-template",
+                        "artifact_version": 1,
+                        "protocol_id": "demo",
+                        "scope_version": 1,
+                        "dsl_version": 1,
+                        "generated_from": {"path": str(protocol), "sha256": "abc"},
+                        "ledger_status": "template",
+                        "records": [{"pmid": "1", "provenance": "user-seed", "requested_role": "holdout-candidate", "decision": "pending"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "candidate_ledger.json"
+            self.assertEqual(
+                candidate_ledger.main(["--instantiate-template", str(template), "--ledger-output", str(output)]),
+                0,
+            )
+            working = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(working["artifact_type"], "candidate-ledger")
+            self.assertEqual(working["ledger_status"], "screening")
+            self.assertEqual(working["records"][0]["decision"], "pending")
+            self.assertEqual(working["records"][0]["use"], "neither")
+            self.assertEqual(json.loads(template.read_text(encoding="utf-8"))["ledger_status"], "template")
+            issues, _ = candidate_ledger.validate_ledger(working)
+            self.assertTrue(any("pending" in issue for issue in issues))
+
     def test_valid_ledger_separates_discovery_holdout_and_heuristic(self):
         data = {
             "scope_version": 1,

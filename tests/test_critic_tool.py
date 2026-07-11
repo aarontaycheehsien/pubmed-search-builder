@@ -46,6 +46,34 @@ def v2_payload(bundle_name, *, findings=None, overall_status="pass"):
 
 
 class CriticToolTests(unittest.TestCase):
+    def test_protocol_packet_binds_bundle_and_critic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            strategy = root / "strategy.txt"
+            strategy.write_text("randomized[tiab]", encoding="utf-8")
+            packet = root / "critic_packet_v1.json"
+            packet.write_text(json.dumps({
+                "artifact_type": "critic-packet", "artifact_version": 1,
+                "protocol_id": "demo", "scope_version": 1, "dsl_version": 1,
+                "generated_from": {"path": "review_protocol_v1.json", "sha256": "protocol-hash"},
+            }), encoding="utf-8")
+            bundle_path = root / "bundle.json"
+            bundle = critic_tool.build_evidence_bundle(
+                [f"strategy={strategy}", f"critic_packet={packet}"], bundle_path
+            )
+            self.assertEqual(bundle["protocol_sha256"], "protocol-hash")
+            payload = v2_payload(bundle_path.name)
+            payload.update({"protocol_id": "demo", "protocol_sha256": "protocol-hash"})
+            issues, _ = critic_tool.validate_artifact(
+                payload, evidence_bundle={**bundle, "roles": ["strategy", "critic_packet"]}
+            )
+            self.assertEqual(issues, [])
+            payload["protocol_sha256"] = "wrong"
+            issues, _ = critic_tool.validate_artifact(
+                payload, evidence_bundle={**bundle, "roles": ["strategy", "critic_packet"]}
+            )
+            self.assertTrue(any("protocol_sha256" in issue for issue in issues))
+
     def test_revise_requires_open_actionable_finding(self):
         data = {
             "round": 1,

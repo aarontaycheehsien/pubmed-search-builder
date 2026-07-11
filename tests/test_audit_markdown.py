@@ -61,6 +61,27 @@ def sample_data():
 
 
 class AuditMarkdownTests(unittest.TestCase):
+    def test_protocol_outline_generates_bound_headings(self):
+        data = sample_data()
+        data.update({
+            "protocol_id": "demo",
+            "scope_version": 1,
+            "protocol_sha256": "abc123",
+            "audit_outline": {
+                "protocol_id": "demo",
+                "scope_version": 1,
+                "sections": [
+                    {"id": "concept-emergency-care", "title": "Emergency care concept", "required": True},
+                    {"id": "focused-quasi-random", "title": "Focused quasi-randomization variant", "required": False},
+                ],
+            },
+        })
+        markdown = audit_markdown.render_audit_markdown(data)
+        self.assertIn("## Protocol-defined audit outline", markdown)
+        self.assertIn("### Emergency care concept", markdown)
+        self.assertIn("### Focused quasi-randomization variant", markdown)
+        self.assertIn("abc123", markdown)
+
     def test_writes_markdown_and_returns_compact_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "audit.md"

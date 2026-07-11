@@ -18,13 +18,13 @@ Create `vocabulary_config.json` against the current scope version:
 }
 ```
 
-Every assignment label must already exist in `retrieval_scope_v<N>.json` as an essential block. Assigning a new concept produces a scope challenge, not a vocabulary proposal. Record new eligibility interpretations in the candidate ledger as `scope_challenge` or `eligibility_interpretation_change`; either requires scope re-entry.
+Every assignment label or ID must already exist in `review_protocol_v<N>.json` as an essential searchable concept. Assigning a new concept produces a scope challenge, not a vocabulary proposal. Record new eligibility interpretations in the candidate ledger as `scope_challenge` or `eligibility_interpretation_change`; either requires a new protocol version.
 
 ## Extract
 
 ```bash
 python scripts/vocabulary_learning.py extract \
-  --scope-file retrieval_scope_v1.json \
+  --scope-file review_protocol_v1.json \
   --candidate-ledger candidate_ledger.json \
   --records-file screened_records.json \
   --config-file vocabulary_config.json \

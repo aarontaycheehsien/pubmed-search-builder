@@ -15,6 +15,7 @@ RUNTIME_FILES = ("SKILL.md",)
 RUNTIME_GLOBS = {
     "agents": ("*.yaml",),
     "references": ("*.md",),
+    "schemas": ("*.json",),
     "scripts": ("*.py",),
 }
 

@@ -19,12 +19,14 @@ free (run_eval.py).
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -159,7 +161,7 @@ def resolve_fixture(arg: str) -> Path:
     raise SystemExit(f"fixture/topic not found: {arg}\navailable topics: {', '.join(available) or '(none)'}")
 
 
-def build_prompt(fixture: dict, run_dir: Path) -> str:
+def build_legacy_prompt(fixture: dict, run_dir: Path) -> str:
     p = fixture.get("protocol", {})
     seeds = fixture.get("development_pmids_given_to_skill") or fixture.get("seed_pmids_given_to_skill") or []
     run_posix = run_dir.resolve().as_posix()
@@ -204,6 +206,88 @@ def build_prompt(fixture: dict, run_dir: Path) -> str:
         f"      {run_posix}/final_strategy.txt",
         "    Write ONLY the Boolean query text in that file (no commentary, no line numbers).",
         f"  - If you can, also save your concept blocks as a JSON list of objects with",
+        f'      "label" and "query" keys to: {run_posix}/final_blocks.json',
+        f"  - Write any audit Markdown and run_manifest.json into: {run_posix}",
+        "  - Run the manifest complete-loop gate and do not finish unless it passes.",
+        "",
+        "When finished, reply with the final PubMed result count and confirm the path you",
+        "saved final_strategy.txt to. You have everything you need; proceed now without asking.",
+    ]
+    return "\n".join(lines)
+
+
+def fixture_protocol(fixture: dict) -> tuple[dict | None, dict | None]:
+    """Return ``(review_protocol, legacy_protocol)`` with a visible legacy warning."""
+    review_protocol = fixture.get("review_protocol")
+    if review_protocol is not None:
+        if not isinstance(review_protocol, dict):
+            raise ValueError("fixture review_protocol must be a JSON object")
+        return copy.deepcopy(review_protocol), None
+    legacy = fixture.get("protocol")
+    if legacy is not None:
+        if not isinstance(legacy, dict):
+            raise ValueError("fixture protocol must be a JSON object")
+        warnings.warn(
+            "fixture field 'protocol' is deprecated; migrate it to the structured "
+            "'review_protocol' DSL",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return None, copy.deepcopy(legacy)
+    raise ValueError("fixture requires review_protocol (or deprecated protocol)")
+
+
+def build_prompt(fixture: dict, run_dir: Path) -> str:
+    review_protocol, legacy = fixture_protocol(fixture)
+    if review_protocol is None:
+        legacy_fixture = dict(fixture)
+        legacy_fixture["protocol"] = legacy or {}
+        return build_legacy_prompt(legacy_fixture, run_dir)
+
+    seeds = fixture.get("development_pmids_given_to_skill") or fixture.get("seed_pmids_given_to_skill") or []
+    protocol_seed_records = review_protocol.setdefault("seeds", {}).setdefault("records", [])
+    if seeds and not protocol_seed_records:
+        protocol_seed_records.extend(
+            {
+                "pmid": str(seed),
+                "role": "discovery-candidate",
+                "rationale": "Development PMID supplied by the evaluation fixture.",
+            }
+            for seed in seeds
+        )
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    protocol_file = run_dir / "review_protocol.json"
+    protocol_file.write_text(
+        json.dumps(review_protocol, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    run_posix = run_dir.resolve().as_posix()
+    protocol_posix = protocol_file.resolve().as_posix()
+    compile_dir = (run_dir / "protocol_v1").resolve().as_posix()
+    compile_receipt = (run_dir / "protocol_v1" / "protocol_compile_v1.json").resolve().as_posix()
+    lines = [
+        "Follow the instructions in ./SKILL.md to build a high-sensitivity PubMed search",
+        "strategy for an evidence synthesis, using the bundled scripts in ./scripts.",
+        "Work fully autonomously and DO NOT ask me questions: the locked structured",
+        "review protocol is the complete decision source for this evaluation.",
+        "",
+        "REVIEW PROTOCOL DSL (authoritative):",
+        f"  {protocol_posix}",
+        "",
+        "Before any candidate-record, MeSH, or PubMed work:",
+        "  1. Validate the protocol in lock mode with scripts/protocol_tool.py.",
+        f"  2. Compile it to {compile_dir}",
+        f"     and save the compile receipt to {compile_receipt}",
+        "  3. Use compiled files as derived workflow inputs; do not edit them to",
+        "     change protocol scope.",
+        "  4. Treat priorities.recall.policy as resolving the no-seed recall-check",
+        "     gate and record that resolution in the manifest when applicable.",
+        "",
+        "OUTPUT (required):",
+        "  - Save the FINAL topic-only PubMed strategy as UTF-8 to this exact path:",
+        f"      {run_posix}/final_strategy.txt",
+        "    Write ONLY the Boolean query text in that file (no commentary, no line numbers).",
+        "  - If you can, also save concept blocks as a JSON list of objects with",
         f'      "label" and "query" keys to: {run_posix}/final_blocks.json',
         f"  - Write any audit Markdown and run_manifest.json into: {run_posix}",
         "  - Run the manifest complete-loop gate and do not finish unless it passes.",

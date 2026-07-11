@@ -133,7 +133,7 @@ python scripts/strategy_analysis.py concept-ablation --blocks-file blocks.json -
 python scripts/strategy_analysis.py two-strand --main-strategy-file final_main_strategy.txt --narrowing-blocks-file focused_blocks.json --candidate-ledger candidate_ledger.json --scope-version 1 --output two_strand.json
 python scripts/strategy_analysis.py fragility-score --concepts-file fragility_concepts.json --candidate-ledger candidate_ledger.json --concept-ablation-json concept_ablation.json --scope-version 1 --output fragility_score.json
 python scripts/no_seed_discovery.py discover --pilots-file orthogonal_pilots.json --scope-version 1 --round 1 --screening-output screening_1.json --provenance-output provenance_1.json
-python scripts/vocabulary_learning.py extract --scope-file retrieval_scope_v1.json --candidate-ledger candidate_ledger.json --records-file screened_records.json --config-file vocabulary_config.json --scope-version 1 --output vocabulary_extract_1.json
+python scripts/vocabulary_learning.py extract --scope-file review_protocol_v1.json --candidate-ledger candidate_ledger.json --records-file screened_records.json --config-file vocabulary_config.json --scope-version 1 --output vocabulary_extract_1.json
 python scripts/vocabulary_learning.py retest --extraction-file vocabulary_extract_1.json --blocks-file blocks.json --scope-version 1 --output vocabulary_learning_1.json
 python scripts/screening_burden.py sample --variants-file variants.json --baseline-label main --scope-version 1 --sample-size 60 --output burden_sample.json
 python scripts/screening_burden.py estimate --sample-file burden_sample.json --candidate-ledger candidate_ledger.json --minimum-heldout-recall 1.0 --scope-version 1 --output screening_burden.json
@@ -322,10 +322,10 @@ python scripts/manifest_tool.py state set-stage scope-lock
 python scripts/manifest_tool.py state resolve-gate framework PECO
 python scripts/manifest_tool.py state resolve-gate seed provided
 python scripts/manifest_tool.py state resolve-gate filter none
-python scripts/manifest_tool.py state lock-scope --scope-file retrieval_scope_v1.json
+python scripts/manifest_tool.py state lock-protocol --protocol-file review_protocol_v1.json --compile-receipt protocol_compile_v1.json
 python scripts/candidate_ledger.py candidate_ledger.json --output candidate_ledger_validation.json
 python scripts/manifest_tool.py state record-candidate-screen --ledger-file candidate_ledger.json --validation-file candidate_ledger_validation.json
-python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence scope=retrieval_scope_v1.json --output critic_evidence_1.json
+python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence critic_packet=critic_packet_v1.json --output critic_evidence_1.json
 python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
 python scripts/manifest_tool.py state record-critic --critic-file critic_round_1.json --validation-file critic_round_1_validation.json
 python scripts/manifest_tool.py state check-complete

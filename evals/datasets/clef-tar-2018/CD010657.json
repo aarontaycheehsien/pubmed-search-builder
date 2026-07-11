@@ -2,23 +2,19 @@
   "id": "CD010657",
   "suite": "clef-tar-2018",
   "question": "Dimercaptosuccinic acid (DMSA) scan or ultrasound in screening for vesicoureteral reflux among children with urinary tract infections (a diagnostic-test-accuracy review: in children with urinary tract infection, what is the accuracy of DMSA renal scan or ultrasound for detecting vesicoureteral reflux?)",
-  "gold_relevant_pmids": [
-    1327798, 1343562, 3523415, 8935409, 9028852, 9924638, 10353409, 10835062,
-    11793131, 12023172, 12172762, 12529459, 12650294, 12883980, 14758509,
-    15378148, 15379054, 16082551, 16205610, 17188624, 17273861, 17626605,
-    17665222, 17875650, 18035134, 19397555, 19593590, 19798584, 20708748,
-    22040289, 22048628, 22089774, 22374404, 23203209, 23354031
-  ],
+  "gold_relevant_pmids": [1327798, 1343562, 3523415, 8935409, 9028852, 9924638, 10353409, 10835062, 11793131, 12023172, 12172762, 12529459, 12650294, 12883980, 14758509, 15378148, 15379054, 16082551, 16205610, 17188624, 17273861, 17626605, 17665222, 17875650, 18035134, 19397555, 19593590, 19798584, 20708748, 22040289, 22048628, 22089774, 22374404, 23203209, 23354031],
   "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD010657.",
   "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
-  "protocol": {
-    "seeds": "none — proceed under the no-seed workflow",
-    "framework": "diagnostic (PIRD / diagnostic PICO). Index tests = DMSA renal scan OR renal/urinary ultrasound; target condition = vesicoureteral reflux; population = children with urinary tract infection.",
-    "essential_concepts": "vesicoureteral reflux; index test (DMSA scan OR renal/urinary ultrasound). Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
-    "optional_blocks": "DECLINE all optional secondary AND blocks — do NOT add a reference-standard / diagnostic-accuracy block, and do NOT require a separate children/UTI population AND block (handle the paediatric/UTI population at screening to protect recall).",
-    "methodological_filter": "none",
-    "limits": "none (no date, language, species, or age limits)",
-    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  "review_protocol": {
+    "dsl_version": 1, "protocol_id": "eval-cd010657", "scope_version": 1,
+    "version_change": {"previous_scope_version": null, "reason": "Initial evaluation protocol.", "decision_source": "CLEF topic description and fixture author decisions."},
+    "review": {"question": "Dimercaptosuccinic acid (DMSA) scan or ultrasound in screening for vesicoureteral reflux among children with urinary tract infections (a diagnostic-test-accuracy review: in children with urinary tract infection, what is the accuracy of DMSA renal scan or ultrasound for detecting vesicoureteral reflux?)", "framework": {"name": "PIRD", "rationale": "Diagnostic-test-accuracy review; the condition and index-test family are searchable, while population and reference-standard details are screened.", "slots": [{"id": "population", "label": "Population", "description": "Children with urinary tract infection."}, {"id": "index_test", "label": "Index test", "description": "DMSA renal scan or renal/urinary ultrasound."}, {"id": "target_condition", "label": "Target condition", "description": "Vesicoureteral reflux."}, {"id": "reference_standard", "label": "Reference standard", "description": "Eligible standard assessed during screening."}]}},
+    "eligibility": {"inclusion": [{"id": "inc_reflux", "label": "Vesicoureteral reflux", "description": "Addresses detection of vesicoureteral reflux."}, {"id": "inc_index", "label": "DMSA or ultrasound", "description": "Evaluates DMSA renal scan or renal/urinary ultrasound."}, {"id": "inc_population", "label": "Paediatric UTI", "description": "Children with urinary tract infection."}, {"id": "inc_accuracy", "label": "Diagnostic evaluation", "description": "Reports eligible diagnostic evaluation."}], "exclusion": [{"id": "exc_outside", "label": "Outside diagnostic scope", "description": "Does not address the eligible index test and condition."}]},
+    "searchable_scope": {"concepts": [{"id": "vesicoureteral_reflux", "label": "Vesicoureteral reflux", "role": "essential", "eligibility_refs": ["inc_reflux"], "framework_slots": ["target_condition"], "definition": "Vesicoureteral reflux and equivalent clinical terminology.", "rationale": "Stable target-condition anchor.", "provisional_fragility": "stable", "term_families": ["vesicoureteral reflux", "VUR"]}, {"id": "renal_imaging", "label": "DMSA scan or ultrasound", "role": "essential", "eligibility_refs": ["inc_index"], "framework_slots": ["index_test"], "definition": "Dimercaptosuccinic acid renal scan and renal or urinary ultrasound.", "rationale": "Central index-test family.", "provisional_fragility": "fragile", "term_families": ["DMSA", "dimercaptosuccinic acid", "renal ultrasound", "ultrasonography"]}]},
+    "screening_only": {"properties": [{"id": "population_scope", "label": "Children with urinary tract infection", "eligibility_refs": ["inc_population"], "instructions": "Confirm paediatric UTI population during screening.", "recall_rationale": "Population details are often sparse in title and abstract."}, {"id": "diagnostic_accuracy", "label": "Accuracy and reference standard", "eligibility_refs": ["inc_accuracy"], "instructions": "Confirm diagnostic design and reference standard during screening.", "recall_rationale": "Accuracy and reference-standard reporting is inconsistent."}]},
+    "filters_and_limits": {"decisions": [{"id": "diagnostic_filter", "type": "filter", "label": "Diagnostic filter", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No diagnostic hedge in the recall-first search."}, {"id": "database_limits", "type": "limit", "label": "Database limits", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No date, language, age, species, or publication-status limits."}]},
+    "date_boundaries": {"eligibility": {"start": null, "end": null}, "search": {"start": null, "end": null}, "rationale": "No date boundary."}, "seeds": {"records": []},
+    "priorities": {"recall": {"policy": "Recall first; hidden gold is scored independently.", "minimum_heldout_recall": 1.0}, "workload": {"policy": "Do not narrow solely for workload.", "selection_rule": "Compare workload only among recall-qualified variants."}}, "focused_variants": []
   },
   "seed_pmids_given_to_skill": [],
   "notes": "Diagnostic-test-accuracy review. Gold set = 35 included studies. No hand-built baseline strategy: use evals/generate.py (Phase 2) to have the skill build one. Several gold studies are from the 1990s; the harness reports reachable vs. unreachable separately."

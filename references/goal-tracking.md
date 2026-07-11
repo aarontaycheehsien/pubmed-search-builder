@@ -13,7 +13,7 @@ Use these states for `/goal` PubMed work:
 3. `goal_active_blocked`: An unexpected human-input blocker appears after goal creation. Ask once and stop. On later resumes before the user answers, do not call tools, do not restate the workflow, do not run a completion audit, and do not repeat the full checkpoint. Reply only: `Still paused for user input: [specific missing decision]. No further PubMed work can continue until that is answered.`
 4. `goal_completion_audit`: Use only after the final strategy appears complete. Run the completion audit, then call `update_goal` only if no required work remains.
 
-Before goal creation, require an independently stated plain-language research/review question. A supplied strategy is a review object, not scope evidence. Resolve seed status and required scope/filter decisions from question/protocol evidence, then lock retrieval scope version 1. Do not fetch or mine seeds/candidates, run MeSH/PubMed exploration, or test blocks before that scope baseline exists.
+Before goal creation, require an independently stated plain-language research/review question. A supplied strategy is a review object, not scope evidence. Resolve seed status and required scope/filter decisions in a lock-valid review protocol version 1, then compile and lock it. Do not fetch or mine seeds/candidates, run MeSH/PubMed exploration, or test blocks before that scope baseline exists.
 
 If a goal already exists, use it only when it clearly matches the current PubMed task. If it does not match, explain that a new active goal cannot be created in this thread and continue without claiming goal tracking.
 

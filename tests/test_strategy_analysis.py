@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,6 +21,32 @@ class FakeClient:
 
 
 class StrategyAnalysisTests(unittest.TestCase):
+    def test_protocol_policy_marks_only_declared_variant_adoptable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol = Path(tmp) / "review_protocol_v1.json"
+            protocol.write_text(json.dumps({
+                "dsl_version": 1, "protocol_id": "demo", "scope_version": 1,
+                "focused_variants": [{"id": "focused-priority"}],
+            }), encoding="utf-8")
+            policy = strategy_analysis.protocol_policy(str(protocol), 1)
+            self.assertEqual(policy["permitted_focused_variant_ids"], ["focused-priority"])
+            self.assertEqual(len(policy["protocol_sha256"]), 64)
+
+    def test_protocol_bound_blocks_require_registry_ids_and_labels(self):
+        registry = {
+            "allocation": {"block_id": "allocation", "label": "Allocation method", "role": "essential"},
+        }
+        valid = [{"block_id": "allocation", "label": "Allocation method", "query": "allocat*[tiab]"}]
+        strategy_analysis.bind_blocks_to_registry(valid, registry)
+        with self.assertRaisesRegex(strategy_analysis.StrategyAnalysisError, "label does not match"):
+            strategy_analysis.bind_blocks_to_registry(
+                [{"block_id": "allocation", "label": "Renamed", "query": "allocat*[tiab]"}], registry
+            )
+        with self.assertRaisesRegex(strategy_analysis.StrategyAnalysisError, "not declared"):
+            strategy_analysis.bind_blocks_to_registry(
+                [{"block_id": "new_scope", "label": "New", "query": "new[tiab]"}], registry
+            )
+
     def test_concept_ablation_reports_evidence_and_requested_dispositions(self):
         blocks = [
             {"label": "optional A", "query": "A[tiab]", "role": "optional", "fragility": "fragile"},

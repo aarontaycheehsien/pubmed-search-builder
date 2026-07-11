@@ -173,6 +173,7 @@ STOPWORDS = {
 }
 
 VARIANT_METADATA_FIELDS = (
+    "variant_id",
     "role",
     "hypothesis",
     "changes_from_baseline",
@@ -2320,6 +2321,15 @@ def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str
     records and are explicitly marked non-independent.
     """
     data = load_json_file(path)
+    if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
+        raise PubMedError(f"Candidate ledger template must be instantiated and screened before {purpose}: {path}")
+    if data.get("artifact_type") and data.get("artifact_type") != "candidate-ledger":
+        raise PubMedError(f"Candidate ledger artifact_type is invalid for {purpose}: {path}")
+    generated = data.get("generated_from")
+    if data.get("protocol_id") and (
+        not isinstance(generated, dict) or not str(generated.get("sha256") or "").strip()
+    ):
+        raise PubMedError(f"Protocol-bound candidate ledger lacks generated_from.sha256: {path}")
     records = data.get("records")
     if not isinstance(records, list) or not records:
         raise PubMedError(f"Candidate ledger has no records: {path}")
@@ -2360,6 +2370,8 @@ def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str
     return pmids, {
         "candidate_ledger": path,
         "scope_version": data.get("scope_version"),
+        "protocol_id": data.get("protocol_id"),
+        "protocol_sha256": generated.get("sha256") if isinstance(generated, dict) else None,
         "purpose": purpose,
         "uses": uses,
         "independent": independent,
@@ -2989,6 +3001,7 @@ def build_audit_scaffold(
     audit_workbook: str | None,
     sources: dict[str, str],
     blocks_data: object | None = None,
+    audit_outline_data: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build a partial audit JSON (audit_markdown.py contract) from saved tool outputs.
 
@@ -3000,6 +3013,19 @@ def build_audit_scaffold(
     filled: list[str] = []
     placeholders: list[str] = []
     audit: dict[str, object] = {}
+
+    if audit_outline_data is not None:
+        if audit_outline_data.get("artifact_type") != "audit-outline":
+            raise PubMedError("--audit-outline-json must contain an audit-outline artifact")
+        generated = audit_outline_data.get("generated_from")
+        if not isinstance(generated, dict) or not str(generated.get("sha256") or "").strip():
+            raise PubMedError("audit outline lacks generated_from.sha256")
+        audit["protocol_id"] = audit_outline_data.get("protocol_id")
+        audit["scope_version"] = audit_outline_data.get("scope_version")
+        audit["dsl_version"] = audit_outline_data.get("dsl_version")
+        audit["protocol_sha256"] = generated.get("sha256")
+        audit["audit_outline"] = audit_outline_data
+        filled.append("protocol/audit_outline")
 
     slug = topic_slug or str((manifest_data or {}).get("topic_slug") or "")
     if slug:
@@ -3356,6 +3382,10 @@ def run_audit_scaffold(args: argparse.Namespace) -> dict[str, object]:
         blocks_data = load_benchmark_or_blocks_json(args.blocks_file)
         validate_recall_blocks(blocks_data)
         sources["blocks_file"] = args.blocks_file
+    audit_outline_data = None
+    if args.audit_outline_json:
+        audit_outline_data = load_json_file(args.audit_outline_json)
+        sources["audit_outline"] = args.audit_outline_json
 
     audit, receipt = build_audit_scaffold(
         topic_slug=args.topic_slug or "",
@@ -3373,6 +3403,7 @@ def run_audit_scaffold(args: argparse.Namespace) -> dict[str, object]:
         audit_workbook=args.audit_workbook,
         sources=sources,
         blocks_data=blocks_data,
+        audit_outline_data=audit_outline_data,
     )
     output = scaffold_resolve_output(Path(args.output), args.if_exists)
     dump_json_to_path(output, audit)
@@ -4267,6 +4298,7 @@ def build_parser() -> argparse.ArgumentParser:
     scaffold_parser.add_argument("--related-json", help="Saved related --output JSON for seed-set expansion.")
     scaffold_parser.add_argument("--recall-json", help="Saved recall --output JSON for relative-recall estimation.")
     scaffold_parser.add_argument("--blocks-file", help="JSON list of {label, query} concept blocks (or a {label: query} map) to populate concept_blocks for the numbered line set; counts are matched from labelled manifest search entries.")
+    scaffold_parser.add_argument("--audit-outline-json", help="Generated audit_outline_vN.json from protocol_tool.py compile; binds headings and protocol hash.")
     scaffold_parser.add_argument("--audit-workbook", help="Path of an exported .xlsx audit workbook, if any.")
     scaffold_parser.add_argument("--topic-slug", default="", help="Topic slug for the audit title (defaults to the manifest topic_slug).")
     scaffold_parser.add_argument("--date-searched", help="Override audit date searched (YYYY-MM-DD), useful for local/reporting-date alignment.")

@@ -2,6 +2,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,17 @@ run_eval = load_module("eval_run_eval_test", ROOT / "evals" / "run_eval.py")
 
 
 class EvalHarnessTests(unittest.TestCase):
+    def test_bundled_fixtures_use_structured_review_protocol(self):
+        for path in sorted((ROOT / "evals" / "datasets").glob("**/*.json")):
+            if path.name.endswith(".blocks.json"):
+                continue
+            fixture = json.loads(path.read_text(encoding="utf-8-sig"))
+            with self.subTest(path=path):
+                self.assertNotIn("protocol", fixture)
+                protocol = fixture["review_protocol"]
+                self.assertEqual(protocol["dsl_version"], 1)
+                self.assertEqual(protocol["review"]["question"], fixture["question"])
+
     def test_isolated_workspace_excludes_answer_keys_and_uses_opaque_prompt_path(self):
         with tempfile.TemporaryDirectory() as td:
             skill_dir, run_dir = generate.isolated_run_workspace(ROOT, Path(td))
@@ -30,19 +42,41 @@ class EvalHarnessTests(unittest.TestCase):
             self.assertTrue((skill_dir / "scripts" / "no_seed_discovery.py").is_file())
             self.assertTrue((skill_dir / "scripts" / "vocabulary_learning.py").is_file())
             self.assertTrue((skill_dir / "scripts" / "screening_burden.py").is_file())
+            self.assertTrue((skill_dir / "scripts" / "protocol_tool.py").is_file())
+            self.assertTrue((skill_dir / "schemas" / "review-protocol.schema.json").is_file())
             self.assertFalse((skill_dir / "evals").exists())
             self.assertFalse((skill_dir / "tests").exists())
             self.assertNotIn("SECRET-FIXTURE", str(run_dir))
             fixture = {
                 "id": "SECRET-FIXTURE",
                 "question": "Does X improve Y?",
-                "protocol": {},
+                "review_protocol": {
+                    "dsl_version": 1,
+                    "protocol_id": "opaque-protocol",
+                    "seeds": {"records": []},
+                    "priorities": {"recall": {"policy": "recall first"}},
+                },
                 "evaluation_gold_pmids": [11111111],
             }
             prompt = generate.build_prompt(fixture, run_dir)
             self.assertNotIn("SECRET-FIXTURE", prompt)
             self.assertNotIn("11111111", prompt)
             self.assertIn(run_dir.as_posix(), prompt)
+            self.assertIn("REVIEW PROTOCOL DSL", prompt)
+            saved_protocol = json.loads((run_dir / "review_protocol.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved_protocol["protocol_id"], "opaque-protocol")
+
+    def test_legacy_protocol_still_loads_with_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = {
+                "question": "Does X improve Y?",
+                "protocol": {"framework": "PICO", "seeds": "none"},
+            }
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                prompt = generate.build_prompt(fixture, Path(td))
+            self.assertTrue(any("deprecated" in str(item.message) for item in caught))
+            self.assertIn("PICO", prompt)
 
     def test_candidate_evidence_pmids_separates_reviewed_from_mined(self):
         with tempfile.TemporaryDirectory() as td:

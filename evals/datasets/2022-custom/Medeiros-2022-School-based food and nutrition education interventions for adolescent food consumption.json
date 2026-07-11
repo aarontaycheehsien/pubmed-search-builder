@@ -2,33 +2,23 @@
   "id": "Medeiros-2022-School-based food and nutrition education interventions for adolescent food consumption",
   "suite": "2022-custom",
   "question": "School-based food and nutrition education interventions for adolescent food consumption",
-  "gold_relevant_pmids": [
-    17535489,
-    17411463,
-    17605839,
-    19781127,
-    29228946,
-    22625222,
-    12137237,
-    25797051,
-    23451237
-  ],
+  "gold_relevant_pmids": [17535489, 17411463, 17605839, 19781127, 29228946, 22625222, 12137237, 25797051, 23451237],
   "source": "custom fixture; gold from DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
   "gold_source": "DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
-  "protocol": {
-    "seeds": "none \u2014 proceed under the no-seed workflow",
-    "framework": "choose the appropriate framework yourself (PICO / PECO / PIRD / PCC / SPIDER) for this question",
-    "essential_concepts": "identify the essential concepts yourself; prefer fewer AND blocks per the skill's anti-pattern guidance",
-    "optional_blocks": "decline materially-optional secondary AND blocks (outcomes, comparators, reference standards) unless central to scope",
-    "methodological_filter": "none",
-    "limits": "none (no date, language, species, or age limits)",
-    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  "review_protocol": {
+    "dsl_version": 1, "protocol_id": "eval-medeiros-2022-school-nutrition", "scope_version": 1,
+    "version_change": {"previous_scope_version": null, "reason": "Initial evaluation protocol.", "decision_source": "Fixture author."},
+    "review": {"question": "School-based food and nutrition education interventions for adolescent food consumption", "framework": {"name": "PICO", "rationale": "The intervention and school context define retrieval; consumption outcomes are screened for sensitivity.", "slots": [{"id": "population", "label": "Population", "description": "Adolescents and school students."}, {"id": "intervention", "label": "Intervention", "description": "Food or nutrition education."}, {"id": "context", "label": "Context", "description": "School setting."}, {"id": "outcome", "label": "Outcome", "description": "Food consumption."}]}},
+    "eligibility": {"inclusion": [{"id": "inc_education", "label": "Nutrition education", "description": "School-based food or nutrition education intervention."}, {"id": "inc_adolescent", "label": "Adolescent students", "description": "Adolescents or school students."}, {"id": "inc_school", "label": "School setting", "description": "Delivered through a school."}, {"id": "inc_consumption", "label": "Food consumption", "description": "Reports eligible food-consumption outcome."}], "exclusion": [{"id": "exc_outside", "label": "Outside review scope", "description": "Does not address eligible education in a school context."}]},
+    "searchable_scope": {"concepts": [{"id": "nutrition_education", "label": "Food and nutrition education", "role": "essential", "eligibility_refs": ["inc_education"], "framework_slots": ["intervention"], "definition": "Food, nutrition, dietary, or health education interventions.", "rationale": "Intervention anchor.", "provisional_fragility": "fragile", "term_families": ["nutrition education", "food education", "dietary education"]}, {"id": "school_context", "label": "School setting", "role": "essential", "eligibility_refs": ["inc_school"], "framework_slots": ["context"], "definition": "Schools and school-based programmes.", "rationale": "Context anchor.", "provisional_fragility": "stable", "term_families": ["school", "school-based"]}]},
+    "screening_only": {"properties": [{"id": "adolescent_population", "label": "Adolescent population", "eligibility_refs": ["inc_adolescent"], "instructions": "Confirm adolescent population during screening.", "recall_rationale": "Age groups are variably reported and may be mixed."}, {"id": "food_consumption", "label": "Food consumption outcome", "eligibility_refs": ["inc_consumption"], "instructions": "Confirm eligible food-consumption outcome during screening.", "recall_rationale": "Outcome language is unsafe as a required search block."}]},
+    "filters_and_limits": {"decisions": [{"id": "method_filter", "type": "filter", "label": "Methodological filter", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No study-design filter in recall-first search."}, {"id": "database_limits", "type": "limit", "label": "Database limits", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No date, language, age, or publication-status limits."}]},
+    "date_boundaries": {"eligibility": {"start": null, "end": null}, "search": {"start": null, "end": null}, "rationale": "No date boundary."}, "seeds": {"records": []},
+    "priorities": {"recall": {"policy": "Recall first.", "minimum_heldout_recall": 1.0}, "workload": {"policy": "Do not narrow solely for workload.", "selection_rule": "Compare workload only among recall-qualified variants."}}, "focused_variants": []
   },
   "seed_pmids_given_to_skill": [],
-  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
-  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
-  "unresolved_dois": [
-    "10.1177/001789699705600204"
-  ],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable separately.",
+  "protocol_note": "Auto-generated default review protocol — review and tighten it before running generate.py.",
+  "unresolved_dois": ["10.1177/001789699705600204"],
   "strategy_file": "Medeiros-2022-School-based food and nutrition education interventions for adolescent food consumption.strategy.txt"
 }

@@ -14,7 +14,7 @@
       "canonical_owner": "references/workflow.md",
       "assertions": [
         "stages 5-9 form a loop",
-        "save `retrieval_scope_v1.json`",
+        "save `review_protocol_v1.json`",
         "repeat objective evidence, testing, validation, and critic review",
         "--require-complete-loop",
         "mesh does not replace free text",

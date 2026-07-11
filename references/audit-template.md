@@ -1,4 +1,13 @@
 ````markdown
+## Review protocol provenance
+
+- **Protocol DSL used:** [yes / no]
+- **Protocol ID and DSL version:** [identifier / version or not applicable]
+- **Locked scope version:** [N]
+- **Source protocol file and hash:** [path / SHA-256]
+- **Compile receipt and verification result:** [path / pass-fail]
+- **Superseded protocol versions and change reasons:** [list or none]
+
 ## Search structure
 
 - **Framework:** [framework, question type, and reason]
@@ -15,12 +24,12 @@
 
 - **Current version:** [positive integer]
 - **Status:** [locked]
-- **Current artifact:** [retrieval_scope_vN.json]
+- **Current artifact:** [review_protocol_vN.json and protocol_compile_vN.json]
 - **Scope-change rationale:** [not applicable for v1, or critic finding/user decision that triggered re-entry]
 
 | Version | Artifact | Reason | Locked UTC |
 |---:|---|---|---|
-| [1] | [retrieval_scope_v1.json] | [initial protocol-only scope lock] | [timestamp] |
+| [1] | [review_protocol_v1.json / protocol_compile_v1.json] | [initial protocol-only scope lock] | [timestamp] |
 
 ## Stage Trace
 

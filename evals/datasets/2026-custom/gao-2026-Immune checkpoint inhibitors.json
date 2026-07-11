@@ -1,31 +1,17 @@
 {
-  "id": "gao-2026-Immune checkpoint inhibitors",
-  "suite": "2026-custom",
-  "question": "Immune checkpoint inhibitors plus chemotherapy for early triple-negative breast cancer",
-  "gold_relevant_pmids": [
-    39883436,
-    31095287,
-    35961599,
-    32966830,
-    36123366,
-    32053137,
-    32101663,
-    35139274,
-    39282906,
-    36585404,
-    35182721
-  ],
-  "source": "custom fixture; gold from PMIDs (CLI)",
-  "gold_source": "PMIDs (CLI)",
-  "protocol": {
-    "seeds": "none \u2014 proceed under the no-seed workflow",
-    "framework": "choose the appropriate framework yourself (PICO / PECO / PIRD / PCC / SPIDER) for this question",
-    "essential_concepts": "identify the essential concepts yourself; prefer fewer AND blocks per the skill's anti-pattern guidance",
-    "optional_blocks": "decline materially-optional secondary AND blocks (outcomes, comparators, reference standards) unless central to scope",
-    "methodological_filter": "none",
-    "limits": "none (no date, language, species, or age limits)",
-    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  "id": "gao-2026-Immune checkpoint inhibitors", "suite": "2026-custom", "question": "Immune checkpoint inhibitors plus chemotherapy for early triple-negative breast cancer",
+  "gold_relevant_pmids": [39883436, 31095287, 35961599, 32966830, 36123366, 32053137, 32101663, 35139274, 39282906, 36585404, 35182721],
+  "source": "custom fixture; gold from PMIDs (CLI)", "gold_source": "PMIDs (CLI)",
+  "review_protocol": {
+    "dsl_version": 1, "protocol_id": "eval-gao-2026-immune-checkpoint", "scope_version": 1,
+    "version_change": {"previous_scope_version": null, "reason": "Initial evaluation protocol.", "decision_source": "Fixture author."},
+    "review": {"question": "Immune checkpoint inhibitors plus chemotherapy for early triple-negative breast cancer", "framework": {"name": "PICO", "rationale": "Intervention and condition are recall-first anchors; regimen and stage details are screened if necessary.", "slots": [{"id": "population", "label": "Population", "description": "People with early triple-negative breast cancer."}, {"id": "intervention", "label": "Intervention", "description": "Immune checkpoint inhibitors with chemotherapy."}, {"id": "outcome", "label": "Outcome", "description": "Clinical outcomes assessed at screening."}]}},
+    "eligibility": {"inclusion": [{"id": "inc_breast_cancer", "label": "Triple-negative breast cancer", "description": "Early triple-negative breast cancer."}, {"id": "inc_checkpoint", "label": "Checkpoint inhibitor", "description": "Immune checkpoint inhibitor given with chemotherapy."}], "exclusion": [{"id": "exc_outside", "label": "Outside review scope", "description": "Does not address the eligible disease and intervention."}]},
+    "searchable_scope": {"concepts": [{"id": "triple_negative_breast_cancer", "label": "Triple-negative breast cancer", "role": "essential", "eligibility_refs": ["inc_breast_cancer"], "framework_slots": ["population"], "definition": "Triple-negative breast cancer and breast neoplasms.", "rationale": "Condition anchor.", "provisional_fragility": "stable", "term_families": ["triple negative breast cancer", "TNBC"]}, {"id": "immune_checkpoint_inhibitor", "label": "Immune checkpoint inhibitors", "role": "essential", "eligibility_refs": ["inc_checkpoint"], "framework_slots": ["intervention"], "definition": "PD-1, PD-L1, CTLA-4, and related immune checkpoint inhibitors.", "rationale": "Intervention anchor.", "provisional_fragility": "stable", "term_families": ["immune checkpoint inhibitor", "PD-1", "PD-L1", "pembrolizumab"]}]},
+    "screening_only": {"properties": [{"id": "early_stage", "label": "Early-stage disease", "eligibility_refs": ["inc_breast_cancer"], "instructions": "Confirm early-stage disease during screening.", "recall_rationale": "Stage terminology varies across reports."}, {"id": "chemotherapy_combination", "label": "Chemotherapy combination", "eligibility_refs": ["inc_checkpoint"], "instructions": "Confirm concurrent chemotherapy during screening.", "recall_rationale": "Regimen details are variably reported."}]},
+    "filters_and_limits": {"decisions": [{"id": "method_filter", "type": "filter", "label": "Methodological filter", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No study-design filter in recall-first search."}, {"id": "database_limits", "type": "limit", "label": "Database limits", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No database limits."}]},
+    "date_boundaries": {"eligibility": {"start": null, "end": null}, "search": {"start": null, "end": null}, "rationale": "No date boundary."}, "seeds": {"records": []},
+    "priorities": {"recall": {"policy": "Recall first.", "minimum_heldout_recall": 1.0}, "workload": {"policy": "Do not narrow solely for workload.", "selection_rule": "Compare workload only among recall-qualified variants."}}, "focused_variants": []
   },
-  "seed_pmids_given_to_skill": [],
-  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately."
+  "seed_pmids_given_to_skill": [], "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable separately."
 }

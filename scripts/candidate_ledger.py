@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -14,6 +15,7 @@ from typing import Any
 
 PROVENANCE = {"user-seed", "pilot-anchor", "similar", "citedin", "reference", "prior-review", "other"}
 DECISIONS = {"include", "exclude", "uncertain"}
+TEMPLATE_DECISIONS = DECISIONS | {"pending"}
 USES = {"discovery", "holdout", "both", "heuristic", "neither"}
 DISCOVERY_USES = {"discovery", "both"}
 VALIDATION_USES = {"holdout", "both"}
@@ -38,8 +40,103 @@ def normalize_pmid(value: Any) -> str:
     return text if text.isdigit() else ""
 
 
-def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def protocol_binding_issues(data: dict[str, Any]) -> list[str]:
+    """Validate protocol binding when the ledger participates in the DSL workflow.
+
+    Legacy ledgers without an artifact envelope remain valid. Once any protocol-envelope
+    field is present, the complete binding is required so downstream tools can reject stale
+    scope artifacts rather than silently mixing versions.
+    """
+    keys = {"artifact_type", "artifact_version", "protocol_id", "dsl_version", "generated_from"}
+    if not any(key in data for key in keys):
+        return []
     issues: list[str] = []
+    if data.get("artifact_type") not in {"candidate-ledger", "candidate-ledger-template"}:
+        issues.append("artifact_type must be candidate-ledger or candidate-ledger-template")
+    if data.get("artifact_version") != 1:
+        issues.append("artifact_version must be 1")
+    if not str(data.get("protocol_id") or "").strip():
+        issues.append("protocol_id is required for protocol-bound ledgers")
+    if data.get("dsl_version") != 1:
+        issues.append("dsl_version must be 1")
+    generated = data.get("generated_from")
+    if not isinstance(generated, dict) or not str(generated.get("sha256") or "").strip():
+        issues.append("generated_from.sha256 is required for protocol-bound ledgers")
+    return issues
+
+
+def validate_template(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    issues = protocol_binding_issues(data)
+    if data.get("artifact_type") != "candidate-ledger-template":
+        issues.append("candidate template artifact_type must be candidate-ledger-template")
+    if data.get("ledger_status") != "template":
+        issues.append("candidate template ledger_status must be template")
+    scope_version = data.get("scope_version")
+    if not isinstance(scope_version, int) or isinstance(scope_version, bool) or scope_version < 1:
+        issues.append("scope_version must be a positive integer")
+    records = data.get("records")
+    if not isinstance(records, list):
+        issues.append("records must be a list")
+        records = []
+    seen: set[str] = set()
+    for index, record in enumerate(records, start=1):
+        prefix = f"record {index}"
+        if not isinstance(record, dict):
+            issues.append(f"{prefix} must be a JSON object")
+            continue
+        pmid = normalize_pmid(record.get("pmid"))
+        if not pmid:
+            issues.append(f"{prefix} pmid must contain digits only")
+        elif pmid in seen:
+            issues.append(f"{prefix} duplicates PMID {pmid}")
+        seen.add(pmid)
+        decision = str(record.get("decision") or "pending")
+        if decision not in TEMPLATE_DECISIONS:
+            issues.append(f"{prefix} decision must be pending, include, exclude, or uncertain")
+        requested = str(record.get("requested_role") or record.get("requested_use") or "").strip()
+        if requested and requested not in {"discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"}:
+            issues.append(f"{prefix} requested_role is invalid")
+    summary = {
+        "scope_version": scope_version,
+        "protocol_id": data.get("protocol_id"),
+        "protocol_sha256": (data.get("generated_from") or {}).get("sha256") if isinstance(data.get("generated_from"), dict) else None,
+        "record_count": len(records),
+        "pending_count": sum(1 for item in records if isinstance(item, dict) and item.get("decision", "pending") == "pending"),
+    }
+    return issues, summary
+
+
+def instantiate_template(data: dict[str, Any], template_path: Path) -> dict[str, Any]:
+    issues, _ = validate_template(data)
+    if issues:
+        raise CandidateLedgerError("candidate template is invalid: " + "; ".join(issues))
+    ledger = copy.deepcopy(data)
+    ledger["artifact_type"] = "candidate-ledger"
+    ledger["ledger_status"] = "screening"
+    ledger["instantiated_from"] = {"path": str(template_path), "sha256": sha256_file(template_path)}
+    for record in ledger.get("records", []):
+        if not isinstance(record, dict):
+            continue
+        record.setdefault("decision", "pending")
+        record.setdefault("title_abstract_reviewed", False)
+        record.setdefault("eligibility_reason", "")
+        requested = str(record.get("requested_role") or record.get("requested_use") or "")
+        record.setdefault("use", "heuristic" if requested == "heuristic" else "neither")
+    return ledger
+
+
+def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    issues: list[str] = protocol_binding_issues(data)
+    if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
+        return issues + ["candidate-ledger templates must be instantiated before final validation"], {}
     scope_version = data.get("scope_version")
     if not isinstance(scope_version, int) or isinstance(scope_version, bool) or scope_version < 1:
         issues.append("scope_version must be a positive integer")
@@ -85,7 +182,9 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             issues.append(f"{prefix} provenance must be one of: {', '.join(sorted(PROVENANCE))}")
 
         decision = str(record.get("decision") or "").strip()
-        if decision not in DECISIONS:
+        if decision == "pending":
+            issues.append(f"{prefix} has a pending screening decision")
+        elif decision not in DECISIONS:
             issues.append(f"{prefix} decision must be one of: {', '.join(sorted(DECISIONS))}")
         else:
             decision_counts[decision] += 1
@@ -127,6 +226,8 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
 
     summary = {
         "scope_version": scope_version,
+        "protocol_id": data.get("protocol_id"),
+        "protocol_sha256": (data.get("generated_from") or {}).get("sha256") if isinstance(data.get("generated_from"), dict) else None,
         "record_count": len(records),
         "decision_counts": dict(sorted(decision_counts.items())),
         "use_counts": dict(sorted(use_counts.items())),
@@ -202,7 +303,9 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate a candidate evidence screening ledger.")
-    parser.add_argument("ledger", help="Path to candidate_ledger.json.")
+    parser.add_argument("ledger", nargs="?", help="Path to candidate_ledger.json.")
+    parser.add_argument("--validate-template", action="store_true", help="Validate an immutable candidate-ledger template instead of a screened ledger.")
+    parser.add_argument("--instantiate-template", help="Instantiate this generated template as an editable working ledger.")
     parser.add_argument("--output", help="Optional path for the validation receipt JSON.")
     parser.add_argument("--allocate-holdout", action="store_true", help="Deterministically assign discovery/holdout roles before validation.")
     parser.add_argument("--ledger-output", help="Required with --allocate-holdout; writes the allocated ledger without overwriting the input.")
@@ -216,6 +319,29 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     allocation = None
     try:
+        if args.instantiate_template:
+            if args.ledger:
+                raise CandidateLedgerError("do not provide a positional ledger with --instantiate-template")
+            if not args.ledger_output:
+                raise CandidateLedgerError("--ledger-output is required with --instantiate-template")
+            template_path = Path(args.instantiate_template)
+            data = instantiate_template(load_json(template_path), template_path)
+            write_json(Path(args.ledger_output), data)
+            receipt = {
+                "operation": "candidate-ledger-instantiate",
+                "ok": True,
+                "template": args.instantiate_template,
+                "output": args.ledger_output,
+                "template_sha256": sha256_file(template_path),
+                "protocol_id": data.get("protocol_id"),
+                "scope_version": data.get("scope_version"),
+            }
+            if args.output:
+                write_json(Path(args.output), receipt)
+            print(json.dumps(receipt, indent=2, ensure_ascii=False))
+            return 0
+        if not args.ledger:
+            raise CandidateLedgerError("ledger path is required")
         data = load_json(Path(args.ledger))
         if args.allocate_holdout:
             if not args.ledger_output:
@@ -227,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
                 fraction=max(0.0, min(1.0, args.holdout_fraction)),
             )
             write_json(Path(args.ledger_output), data)
-        issues, summary = validate_ledger(data)
+        issues, summary = validate_template(data) if args.validate_template else validate_ledger(data)
     except CandidateLedgerError as exc:
         issues, summary = [str(exc)], {}
     receipt = {

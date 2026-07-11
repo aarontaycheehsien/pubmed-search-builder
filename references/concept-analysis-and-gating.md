@@ -1,6 +1,6 @@
 # Concept Analysis And Gating
 
-Use this step after the plain-language question and seed-status decision are resolved, but before fetching or mining seed/candidate records, MeSH lookup, PubMed exploration, or concept-block drafting. Save retrieval scope version 1 from question/protocol evidence alone so objective evidence can challenge a visible baseline rather than silently shaping it.
+Use this step after the plain-language question and seed-status decision are resolved, but before fetching or mining seed/candidate records, MeSH lookup, PubMed exploration, or concept-block drafting. Save a lock-valid review protocol version 1 from question/protocol evidence alone so objective evidence can challenge a visible baseline rather than silently shaping it.
 
 The purpose is to decide what belongs in the main high-sensitivity strategy, what belongs only inside an existing `OR` block, what should be omitted from the main search, and what requires a separate methodological filter decision.
 
@@ -14,7 +14,7 @@ Use `workflow.md` as the canonical source for the full build sequence and high-s
 
 The seed PMID decision is resolved when the user supplies PMIDs, says there are none, or explicitly asks to proceed without them. Before scope version 1 is locked, normalize supplied identifiers only; do not fetch, mine, expand, or inspect record content.
 
-Produce the scope-lock summary and save `retrieval_scope_v1.json` before any record fetch, MeSH lookup, PubMed exploration, block construction, filter check, focused variant, or validation. Objective evidence enters only after this baseline exists.
+Produce the scope-lock summary, validate `review_protocol_v1.json` in lock mode, compile its derived artifacts, and lock it before any record fetch, MeSH lookup, PubMed exploration, block construction, filter check, focused variant, or validation. Objective evidence enters only after this baseline exists.
 
 ## Concept-analysis ledger
 
@@ -143,7 +143,7 @@ Before MeSH lookup or PubMed exploration:
 
 This phase may use only the plain-language question, protocol wording, framework reasoning, and a conceptual vocabulary brainstorm needed to distinguish concepts from eligibility properties. It must not inspect seed/candidate records, run MeSH lookup, PubMed exploration, block construction, variants, final QA, or filters.
 
-Save the resolved roles and decisions as `retrieval_scope_v1.json` and record it with `manifest_tool.py state lock-scope`.
+Save the resolved roles and decisions as `review_protocol_v1.json`, compile its derivative artifacts, and record it with `manifest_tool.py state lock-protocol`.
 
 ### Phase 2 - empirical challenge and re-entry
 
