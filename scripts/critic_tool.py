@@ -50,9 +50,29 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def protocol_packet_binding(path: Path) -> dict[str, Any]:
+    data = load_json(path)
+    if data.get("artifact_type") != "critic-packet":
+        raise CriticArtifactError("critic_packet evidence must have artifact_type 'critic-packet'")
+    if data.get("artifact_version") != 1 or data.get("dsl_version") != 1:
+        raise CriticArtifactError("critic_packet evidence must use artifact_version 1 and dsl_version 1")
+    protocol_id = str(data.get("protocol_id") or "").strip()
+    scope_version = data.get("scope_version")
+    generated = data.get("generated_from")
+    protocol_sha = str(generated.get("sha256") or "").strip() if isinstance(generated, dict) else ""
+    if not protocol_id or not isinstance(scope_version, int) or scope_version < 1 or not protocol_sha:
+        raise CriticArtifactError("critic_packet evidence lacks a complete protocol binding")
+    return {
+        "protocol_id": protocol_id,
+        "scope_version": scope_version,
+        "protocol_sha256": protocol_sha,
+    }
+
+
 def build_evidence_bundle(items: list[str], output: Path) -> dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
     roles: set[str] = set()
+    packet_binding: dict[str, Any] | None = None
     for item in items:
         if "=" not in item:
             raise CriticArtifactError("--evidence values must use role=path")
@@ -64,12 +84,18 @@ def build_evidence_bundle(items: list[str], output: Path) -> dict[str, Any]:
         if not path.is_file():
             raise CriticArtifactError(f"Evidence file does not exist: {path}")
         roles.add(role)
+        if role in {"critic_packet", "protocol-packet"}:
+            if packet_binding is not None:
+                raise CriticArtifactError("Evidence bundle may contain only one critic packet role")
+            packet_binding = protocol_packet_binding(path)
         output_parent = output.resolve().parent
         portable_path = os.path.relpath(path, output_parent)
         artifacts.append({"role": role, "path": portable_path, "sha256": sha256_file(path), "bytes": path.stat().st_size})
     if "strategy" not in roles:
         raise CriticArtifactError("Evidence bundle requires a strategy=<path> item")
     bundle = {"bundle_version": 1, "artifacts": artifacts}
+    if packet_binding:
+        bundle.update(packet_binding)
     write_json(output, bundle)
     return bundle
 
@@ -86,6 +112,7 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
     if not isinstance(artifacts, list) or not artifacts:
         return issues + ["evidence bundle artifacts must be a non-empty list"], bundle
     roles: set[str] = set()
+    packet_binding: dict[str, Any] | None = None
     for index, item in enumerate(artifacts, start=1):
         if not isinstance(item, dict):
             issues.append(f"evidence artifact {index} must be an object")
@@ -102,9 +129,21 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
             issues.append(f"evidence artifact {role!r} does not exist: {file_path}")
         elif not expected or sha256_file(file_path) != expected:
             issues.append(f"evidence artifact {role!r} hash does not match")
+        if role in {"critic_packet", "protocol-packet"} and file_path.is_file():
+            try:
+                binding = protocol_packet_binding(file_path)
+                if packet_binding is not None:
+                    issues.append("evidence bundle contains duplicate critic packet roles")
+                packet_binding = binding
+            except CriticArtifactError as exc:
+                issues.append(str(exc))
     if "strategy" not in roles:
         issues.append("evidence bundle lacks the strategy role")
     bundle["roles"] = sorted(roles)
+    if packet_binding:
+        for key, expected in packet_binding.items():
+            if bundle.get(key) != expected:
+                issues.append(f"evidence bundle {key} does not match critic packet")
     return issues, bundle
 
 
@@ -239,6 +278,13 @@ def validate_artifact(
             issues.append(f"domain_verdicts is missing: {', '.join(missing_verdicts)}")
         if open_actionable and not domain_verdict_counts.get("finding"):
             issues.append("open actionable findings require at least one domain verdict with status finding")
+        if isinstance(evidence_bundle, dict) and evidence_bundle.get("protocol_sha256"):
+            if data.get("protocol_id") != evidence_bundle.get("protocol_id"):
+                issues.append("critic protocol_id does not match the critic packet")
+            if data.get("protocol_sha256") != evidence_bundle.get("protocol_sha256"):
+                issues.append("critic protocol_sha256 does not match the critic packet")
+            if scope_version != evidence_bundle.get("scope_version"):
+                issues.append("critic scope_version does not match the critic packet")
     elif critic_version != 1:
         issues.append("critic_version must be 1 or 2")
 
@@ -257,6 +303,8 @@ def validate_artifact(
         "domain_verdict_counts": dict(sorted(domain_verdict_counts.items())),
         "finding_ids": sorted(finding_ids),
         "finding_statuses": finding_statuses,
+        "protocol_id": data.get("protocol_id"),
+        "protocol_sha256": data.get("protocol_sha256"),
     }
     return issues, summary
 

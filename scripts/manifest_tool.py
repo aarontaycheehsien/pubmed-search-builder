@@ -476,6 +476,14 @@ def new_build_state() -> dict[str, object]:
             "version": 0,
             "status": "pending",
             "artifact": "",
+            "lock_mode": "",
+            "protocol_file": "",
+            "protocol_sha256": "",
+            "protocol_id": "",
+            "dsl_version": "",
+            "compile_receipt": "",
+            "generated_paths": {},
+            "generated_sha256": {},
             "reopened_reason": "",
             "history": [],
         },
@@ -589,6 +597,308 @@ def validate_scope_artifact(path_value: str) -> dict[str, object]:
         "framework": data.get("framework"),
         "essential_block_count": len(data.get("essential_blocks", [])),
     }
+
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def canonical_json_sha256(data: object) -> str:
+    """Hash JSON semantically, using the protocol compiler's canonical representation."""
+    encoded = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _protocol_json(path: Path, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"Could not read {label} {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ManifestError(f"{label} must be a JSON object: {path}")
+    return value
+
+
+def _protocol_text(data: dict[str, object], key: str, label: str) -> str:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        raise ManifestError(f"protocol requires non-empty {label}")
+    return value
+
+
+def _protocol_derived_state(protocol: dict[str, object]) -> dict[str, object]:
+    """Extract the manifest-owned state from a protocol already validated by protocol_tool."""
+    scope_version = protocol.get("scope_version")
+    if not isinstance(scope_version, int) or isinstance(scope_version, bool) or scope_version < 1:
+        raise ManifestError("protocol scope_version must be a positive integer")
+    protocol_id = _protocol_text(protocol, "protocol_id", "protocol_id")
+    dsl_version = protocol.get("dsl_version")
+    if dsl_version != 1:
+        raise ManifestError("protocol dsl_version must be integer 1")
+
+    review = protocol.get("review")
+    if not isinstance(review, dict):
+        raise ManifestError("protocol review must be an object")
+    framework = review.get("framework")
+    if not isinstance(framework, dict):
+        raise ManifestError("protocol review.framework must be an object")
+    framework_name = str(framework.get("name") or "").strip()
+    if not framework_name:
+        raise ManifestError("protocol review.framework.name is required")
+
+    searchable_scope = protocol.get("searchable_scope")
+    if not isinstance(searchable_scope, dict):
+        raise ManifestError("protocol searchable_scope must be an object")
+    concepts = searchable_scope.get("concepts")
+    if not isinstance(concepts, list):
+        raise ManifestError("protocol searchable_scope.concepts must be a list")
+    essential_blocks: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, concept in enumerate(concepts, start=1):
+        if not isinstance(concept, dict) or concept.get("role") != "essential":
+            continue
+        concept_id = str(concept.get("id") or "").strip()
+        label = str(concept.get("label") or "").strip()
+        if not concept_id or not label:
+            raise ManifestError(f"essential protocol concept {index} requires non-empty id and label")
+        if concept_id in seen_ids:
+            raise ManifestError(f"duplicate essential protocol concept id: {concept_id}")
+        seen_ids.add(concept_id)
+        essential_blocks.append({"id": concept_id, "label": label})
+    if not essential_blocks:
+        raise ManifestError("protocol must define at least one essential searchable-scope concept")
+
+    seeds = protocol.get("seeds")
+    if not isinstance(seeds, dict) or not isinstance(seeds.get("records"), list):
+        raise ManifestError("protocol seeds.records must be a list")
+    seed_gate = "provided" if seeds["records"] else "none"
+
+    filters = protocol.get("filters_and_limits")
+    if not isinstance(filters, dict) or not isinstance(filters.get("decisions"), list):
+        raise ManifestError("protocol filters_and_limits.decisions must be a list")
+    selected_filters = [
+        item
+        for item in filters["decisions"]
+        if isinstance(item, dict) and item.get("status") == "selected"
+    ]
+    filter_gate = "selected" if selected_filters else "none"
+    return {
+        "scope_version": scope_version,
+        "protocol_id": protocol_id,
+        "dsl_version": dsl_version,
+        "framework": framework_name,
+        "seed_gate": seed_gate,
+        "filter_gate": filter_gate,
+        "essential_blocks": essential_blocks,
+    }
+
+
+def validate_protocol_compile(
+    protocol_file: str,
+    compile_receipt: str,
+    manifest_path: Path,
+) -> dict[str, object]:
+    """Verify a protocol compile receipt and every generated artifact without importing its tool."""
+    protocol_path = resolve_artifact_path(protocol_file, manifest_path)
+    receipt_path = resolve_artifact_path(compile_receipt, manifest_path)
+    protocol = _protocol_json(protocol_path, "protocol")
+    derived = _protocol_derived_state(protocol)
+    protocol_hash = canonical_json_sha256(protocol)
+
+    receipt = _protocol_json(receipt_path, "protocol compile receipt")
+    if receipt.get("operation") != "protocol-compile" or receipt.get("ok") is not True:
+        raise ManifestError("protocol compile receipt must have operation='protocol-compile' and ok=true")
+    if receipt.get("protocol_sha256") != protocol_hash:
+        raise ManifestError("protocol compile receipt protocol_sha256 does not match the canonical protocol JSON")
+    for field in ("protocol_id", "scope_version", "dsl_version"):
+        expected = derived[field]
+        if receipt.get(field) != expected:
+            raise ManifestError(f"protocol compile receipt {field} does not match the protocol")
+
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ManifestError("protocol compile receipt artifacts must be a non-empty list")
+    generated_paths: dict[str, str] = {}
+    generated_hashes: dict[str, str] = {}
+    registry_essential_blocks: list[dict[str, str]] | None = None
+    for index, artifact in enumerate(artifacts, start=1):
+        if not isinstance(artifact, dict):
+            raise ManifestError(f"protocol compile artifact {index} must be an object")
+        artifact_type = str(artifact.get("artifact_type") or "").strip()
+        artifact_value = str(artifact.get("path") or "").strip()
+        artifact_hash = str(artifact.get("sha256") or "").strip().lower()
+        if not artifact_type or not artifact_value or not SHA256_RE.fullmatch(artifact_hash):
+            raise ManifestError(
+                f"protocol compile artifact {index} requires artifact_type, path, and a lowercase SHA-256"
+            )
+        if artifact_type in generated_paths:
+            raise ManifestError(f"protocol compile receipt repeats artifact_type: {artifact_type}")
+        artifact_path = Path(artifact_value)
+        if not artifact_path.is_absolute():
+            artifact_path = (receipt_path.parent / artifact_path).resolve()
+        if not artifact_path.is_file():
+            raise ManifestError(f"generated protocol artifact does not exist: {artifact_value}")
+        if sha256_file(artifact_path) != artifact_hash:
+            raise ManifestError(f"generated protocol artifact hash mismatch: {artifact_value}")
+        envelope = _protocol_json(artifact_path, f"generated {artifact_type} artifact")
+        if envelope.get("artifact_type") != artifact_type or envelope.get("artifact_version") != 1:
+            raise ManifestError(f"generated protocol artifact envelope is invalid: {artifact_value}")
+        for field in ("protocol_id", "scope_version", "dsl_version"):
+            if envelope.get(field) != derived[field]:
+                raise ManifestError(f"generated protocol artifact {field} mismatch: {artifact_value}")
+        generated_from = envelope.get("generated_from")
+        if not isinstance(generated_from, dict) or generated_from.get("sha256") != protocol_hash:
+            raise ManifestError(f"generated protocol artifact is not bound to the current protocol: {artifact_value}")
+        if generated_from.get("path") != protocol_path.name:
+            raise ManifestError(f"generated protocol artifact has stale generated_from.path: {artifact_value}")
+        if artifact_type == "block-registry":
+            raw_blocks = envelope.get("blocks")
+            if not isinstance(raw_blocks, list):
+                raise ManifestError("generated block-registry blocks must be a list")
+            registry_essential_blocks = []
+            seen_block_ids: set[str] = set()
+            for block_index, block in enumerate(raw_blocks, start=1):
+                if not isinstance(block, dict) or block.get("role") != "essential":
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                concept_id = str(block.get("concept_id") or "").strip()
+                label = str(block.get("label") or "").strip()
+                if not block_id or block_id != concept_id or not label:
+                    raise ManifestError(
+                        f"generated block-registry essential block {block_index} has invalid IDs or label"
+                    )
+                if block_id in seen_block_ids:
+                    raise ManifestError(f"generated block-registry repeats essential block ID: {block_id}")
+                seen_block_ids.add(block_id)
+                registry_essential_blocks.append({"id": block_id, "label": label})
+        generated_paths[artifact_type] = artifact_value
+        generated_hashes[artifact_type] = artifact_hash
+
+    required_types = {
+        "concept-ledger",
+        "candidate-ledger-template",
+        "block-registry",
+        "critic-packet",
+        "audit-outline",
+    }
+    if set(generated_paths) != required_types:
+        raise ManifestError("protocol compile receipt artifact types are incomplete or unexpected")
+    protocol_blocks = {
+        str(item["id"]): str(item["label"])
+        for item in derived["essential_blocks"]
+        if isinstance(item, dict)
+    }
+    registry_blocks = {
+        str(item["id"]): str(item["label"])
+        for item in (registry_essential_blocks or [])
+        if isinstance(item, dict)
+    }
+    if registry_blocks != protocol_blocks:
+        raise ManifestError("generated block-registry essential IDs/labels do not match the protocol")
+
+    return {
+        **derived,
+        "essential_blocks": registry_essential_blocks or [],
+        "protocol_file": protocol_file,
+        "protocol_sha256": protocol_hash,
+        "compile_receipt": compile_receipt,
+        "generated_paths": generated_paths,
+        "generated_sha256": generated_hashes,
+    }
+
+
+def reset_scope_dependent_state(state: dict[str, object]) -> None:
+    """Invalidate state that cannot survive a protocol scope-version change."""
+    fresh = new_build_state()
+    state["candidate_screening"] = fresh["candidate_screening"]
+    state["blocks"] = {}
+    state["critic_rounds"] = []
+    state["revision_cycles"] = []
+    state["recall_offer"] = "pending"
+    state["open_decisions"] = []
+    completed = state.get("stages_completed")
+    if isinstance(completed, list):
+        state["stages_completed"] = [stage for stage in completed if stage == "intake"]
+
+
+def protocol_scope_readiness(
+    scope: dict[str, object],
+    state: dict[str, object],
+    manifest_path: Path,
+) -> list[str]:
+    """Revalidate a DSL-locked scope against its current protocol and compiled artifacts."""
+    if scope.get("lock_mode") != "protocol":
+        return []
+    protocol_file = str(scope.get("protocol_file") or scope.get("artifact") or "")
+    compile_receipt = str(scope.get("compile_receipt") or "")
+    if not protocol_file or not compile_receipt:
+        return ["DSL-locked scope lacks its protocol file or compile receipt"]
+    try:
+        current = validate_protocol_compile(protocol_file, compile_receipt, manifest_path)
+    except ManifestError as exc:
+        return [f"current protocol verification failed: {exc}"]
+
+    issues: list[str] = []
+    comparisons = (
+        ("version", "scope_version"),
+        ("protocol_id", "protocol_id"),
+        ("dsl_version", "dsl_version"),
+        ("protocol_sha256", "protocol_sha256"),
+        ("generated_paths", "generated_paths"),
+        ("generated_sha256", "generated_sha256"),
+    )
+    for state_key, current_key in comparisons:
+        if scope.get(state_key) != current.get(current_key):
+            issues.append(f"DSL-locked scope {state_key} is stale relative to the current protocol compile")
+    if str(scope.get("artifact") or "") != protocol_file:
+        issues.append("DSL-locked scope artifact is not the current protocol file")
+
+    expected = {
+        str(item["id"]): str(item["label"])
+        for item in current.get("essential_blocks", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    if set(blocks) != set(expected):
+        issues.append("registered essential blocks do not match the current protocol")
+    for block_id, label in expected.items():
+        spec = blocks.get(block_id)
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("scope_version") != current.get("scope_version"):
+            issues.append(f"protocol block {block_id!r} has a stale scope version")
+        if spec.get("protocol_sha256") != current.get("protocol_sha256"):
+            issues.append(f"protocol block {block_id!r} has a stale protocol hash")
+        if spec.get("display_label") != label:
+            issues.append(f"protocol block {block_id!r} has a stale display label")
+    return issues
+
+
+def protocol_binding_issues(
+    payload: object,
+    scope: dict[str, object],
+    label: str,
+) -> list[str]:
+    """Require a downstream JSON payload/summary to identify the current locked protocol."""
+    if scope.get("lock_mode") != "protocol":
+        return []
+    if not isinstance(payload, dict):
+        return [f"{label} lacks a protocol-bound JSON object"]
+    generated_from = payload.get("generated_from")
+    generated_hash = generated_from.get("sha256") if isinstance(generated_from, dict) else None
+    actual_hash = payload.get("protocol_sha256") or generated_hash
+    issues: list[str] = []
+    if payload.get("protocol_id") != scope.get("protocol_id"):
+        issues.append(f"{label} protocol_id does not match the current protocol")
+    if payload.get("scope_version") != scope.get("version"):
+        issues.append(f"{label} scope_version does not match the current protocol")
+    if actual_hash != scope.get("protocol_sha256"):
+        issues.append(f"{label} protocol_sha256 does not match the current protocol")
+    return issues
 
 
 def validated_receipt(path_value: str, expected_operation: str) -> dict[str, object]:
@@ -915,6 +1225,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         issues.append("retrieval-scope artifact is not recorded")
     elif not output_path_exists(scope_artifact, manifest_path=manifest_path, data=data):
         issues.append(f"retrieval-scope artifact does not exist: {scope_artifact}")
+    issues.extend(protocol_scope_readiness(scope, state, manifest_path))
 
     screening = state.get("candidate_screening") if isinstance(state.get("candidate_screening"), dict) else {}
     screening_status = screening.get("status")
@@ -927,6 +1238,18 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 issues.append(f"{label} artifact is not recorded")
             elif not output_path_exists(path_value, manifest_path=manifest_path, data=data):
                 issues.append(f"{label} artifact does not exist: {path_value}")
+        if scope.get("lock_mode") == "protocol":
+            summary = screening.get("summary") if isinstance(screening.get("summary"), dict) else {}
+            issues.extend(protocol_binding_issues(summary, scope, "candidate-screening summary"))
+            ledger_payload = read_manifest_output_json(manifest_path, screening.get("artifact"))
+            issues.extend(protocol_binding_issues(ledger_payload, scope, "candidate ledger"))
+            validation_payload = read_manifest_output_json(manifest_path, screening.get("validation_artifact"))
+            validation_summary = (
+                validation_payload.get("summary")
+                if isinstance(validation_payload, dict) and isinstance(validation_payload.get("summary"), dict)
+                else {}
+            )
+            issues.extend(protocol_binding_issues(validation_summary, scope, "candidate-ledger validation summary"))
     if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
         issues.append("candidate-screening not-applicable status lacks a reason")
 
@@ -950,6 +1273,19 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if isinstance(payload, dict) and payload.get("operation") == operation:
                 found.append(entry)
         return sorted(found, key=lambda item: int(item.get("seq") or 0))
+
+    if scope.get("lock_mode") == "protocol":
+        for operation, label in (
+            ("two-strand", "latest two-strand artifact"),
+            ("screening-burden", "latest screening-burden artifact"),
+        ):
+            bound_entries = operation_entries(operation)
+            if bound_entries:
+                payload = read_manifest_output_json(
+                    manifest_path,
+                    str(bound_entries[-1].get("output_path") or ""),
+                )
+                issues.extend(protocol_binding_issues(payload, scope, label))
 
     analysis_sequences: list[int] = []
     if len(blocks) >= 2:
@@ -1100,6 +1436,16 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 and str(item.get("fragility") or "").strip().casefold() in {"fragile", "very-fragile", "very fragile"}
                 for item in essential
             )
+        searchable_scope = scope_payload.get("searchable_scope")
+        protocol_concepts = searchable_scope.get("concepts") if isinstance(searchable_scope, dict) else None
+        if isinstance(protocol_concepts, list):
+            fragile = fragile or any(
+                isinstance(item, dict)
+                and item.get("role") == "essential"
+                and str(item.get("provisional_fragility") or "").strip().casefold()
+                in {"fragile", "very_fragile", "very-fragile", "very fragile"}
+                for item in protocol_concepts
+            )
     if fragile:
         strand_entries = operation_entries("two-strand")
         if not strand_entries:
@@ -1228,6 +1574,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         issues.append("no PRESS-informed critic round is recorded")
         latest_critic_seq = 0
     else:
+        for index, critic_summary in enumerate(critics, start=1):
+            issues.extend(protocol_binding_issues(critic_summary, scope, f"critic round {index} summary"))
         latest = critics[-1] if isinstance(critics[-1], dict) else {}
         latest_critic_seq = int(latest.get("entry_seq") or 0)
         if latest.get("overall_status") != "pass":
@@ -1384,6 +1732,21 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                     issues.append("final topic search and required validation are not bound to the same strategy input hash")
         issues.extend(low_count_review_readiness(data, manifest_path))
 
+    if scope.get("lock_mode") == "protocol":
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            output_value = str(entry.get("output_path") or "")
+            if not output_value.lower().endswith(".json"):
+                continue
+            payload = read_manifest_output_json(manifest_path, output_value)
+            command = str(entry.get("command") or "").casefold()
+            is_audit_json = "audit-scaffold" in command or (
+                isinstance(payload, dict) and isinstance(payload.get("audit_outline"), dict)
+            )
+            if is_audit_json:
+                issues.extend(protocol_binding_issues(payload, scope, f"audit JSON artifact {output_value}"))
+
     audit_entries = [
         entry for entry in entries
         if isinstance(entry, dict)
@@ -1501,6 +1864,108 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                     f"Unknown recall-offer value {args.value!r}. Choose from: {', '.join(RECALL_OFFER_VALUES)}."
                 )
             state["recall_offer"] = args.value
+        elif action == "lock-protocol":
+            summary = validate_protocol_compile(args.protocol_file, args.compile_receipt, path)
+            scope = state["scope"]
+            current_version = int(scope.get("version") or 0)
+            new_version = int(summary["scope_version"])
+            same_lock = (
+                current_version == new_version
+                and scope.get("status") == "locked"
+                and scope.get("lock_mode") == "protocol"
+                and scope.get("protocol_sha256") == summary.get("protocol_sha256")
+            )
+            if current_version == 0:
+                if new_version != 1:
+                    raise ManifestError("the first locked protocol must use scope_version 1")
+            elif not same_lock and new_version != current_version + 1:
+                raise ManifestError(
+                    f"protocol re-entry must increment scope_version by one: "
+                    f"current={current_version}, supplied={new_version}"
+                )
+
+            history = scope.get("history") if isinstance(scope.get("history"), list) else []
+            if not same_lock:
+                reset_scope_dependent_state(state)
+                entry_seq = append_internal_entry(
+                    data,
+                    now=now,
+                    kind="scope",
+                    label=f"protocol DSL scope v{new_version}",
+                    command=(
+                        f"manifest_tool.py state lock-protocol --protocol-file {args.protocol_file} "
+                        f"--compile-receipt {args.compile_receipt}"
+                    ),
+                    output_path=args.protocol_file,
+                    note="protocol DSL initial lock" if current_version == 0 else "protocol DSL scope re-entry",
+                )
+                entries = data.get("entries") if isinstance(data.get("entries"), list) else []
+                if entries and isinstance(entries[-1], dict):
+                    protocol_path = resolve_artifact_path(args.protocol_file, path)
+                    receipt_path = resolve_artifact_path(args.compile_receipt, path)
+                    entries[-1].update(
+                        {
+                            "output_sha256": sha256_file(protocol_path),
+                            "input_sha256": {args.compile_receipt: sha256_file(receipt_path)},
+                            "scope_version": new_version,
+                            "protocol_sha256": summary["protocol_sha256"],
+                            "returncode": 0,
+                        }
+                    )
+                history.append(
+                    {
+                        "version": new_version,
+                        "lock_mode": "protocol",
+                        "protocol_id": summary["protocol_id"],
+                        "dsl_version": summary["dsl_version"],
+                        "protocol_file": args.protocol_file,
+                        "protocol_sha256": summary["protocol_sha256"],
+                        "compile_receipt": args.compile_receipt,
+                        "generated_paths": summary["generated_paths"],
+                        "generated_sha256": summary["generated_sha256"],
+                        "essential_block_count": len(summary["essential_blocks"]),
+                        "locked_utc": now,
+                        "entry_seq": entry_seq,
+                    }
+                )
+
+            scope.update(
+                {
+                    "version": new_version,
+                    "status": "locked",
+                    "artifact": args.protocol_file,
+                    "lock_mode": "protocol",
+                    "protocol_file": args.protocol_file,
+                    "protocol_sha256": summary["protocol_sha256"],
+                    "protocol_id": summary["protocol_id"],
+                    "dsl_version": summary["dsl_version"],
+                    "compile_receipt": args.compile_receipt,
+                    "generated_paths": summary["generated_paths"],
+                    "generated_sha256": summary["generated_sha256"],
+                    "reopened_reason": "",
+                    "history": history,
+                }
+            )
+            if not same_lock:
+                state["blocks"] = {
+                    str(item["id"]): {
+                        "waivers": {},
+                        "scope_version": new_version,
+                        "display_label": str(item["label"]),
+                        "protocol_sha256": summary["protocol_sha256"],
+                    }
+                    for item in summary["essential_blocks"]
+                    if isinstance(item, dict)
+                }
+            state["gates"].update(
+                {
+                    "framework": summary["framework"],
+                    "seed": summary["seed_gate"],
+                    "concept": f"resolved-v{new_version}",
+                    "filter": summary["filter_gate"],
+                }
+            )
+            state["current_stage"] = "scope-lock"
         elif action == "lock-scope":
             summary = validate_scope_artifact(args.scope_file)
             scope = state["scope"]
@@ -1541,6 +2006,14 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                     "version": new_version,
                     "status": "locked",
                     "artifact": args.scope_file,
+                    "lock_mode": "legacy",
+                    "protocol_file": "",
+                    "protocol_sha256": "",
+                    "protocol_id": "",
+                    "dsl_version": "",
+                    "compile_receipt": "",
+                    "generated_paths": {},
+                    "generated_sha256": {},
                     "reopened_reason": "",
                     "history": history,
                 }
@@ -1567,6 +2040,12 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             summary = validated_receipt(args.validation_file, "candidate-ledger-validate")
             if summary.get("scope_version") != scope.get("version"):
                 raise ManifestError("candidate ledger scope_version does not match the locked retrieval scope")
+            binding_issues = protocol_binding_issues(summary, scope, "candidate-ledger validation summary")
+            ledger_path = resolve_artifact_path(args.ledger_file, path)
+            ledger_payload = _protocol_json(ledger_path, "candidate ledger")
+            binding_issues.extend(protocol_binding_issues(ledger_payload, scope, "candidate ledger"))
+            if binding_issues:
+                raise ManifestError("; ".join(binding_issues))
             entry_seq = append_internal_entry(
                 data,
                 now=now,
@@ -1610,6 +2089,9 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             summary = validated_receipt(args.validation_file, "critic-artifact-validate")
             if summary.get("scope_version") != scope.get("version"):
                 raise ManifestError("critic scope_version does not match the locked retrieval scope")
+            binding_issues = protocol_binding_issues(summary, scope, "critic validation summary")
+            if binding_issues:
+                raise ManifestError("; ".join(binding_issues))
             if summary.get("critic_version") != 2:
                 raise ManifestError("recorded critic rounds must use critic_version 2 with a hashed evidence bundle")
             rounds = state["critic_rounds"]
@@ -2061,8 +2543,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve_recall_offer.add_argument("value", help=f"Outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.")
 
+    lock_protocol = add_state_action(
+        "lock-protocol",
+        "Lock the canonical protocol DSL and its verified compile artifacts; derives gates and essential blocks.",
+    )
+    lock_protocol.add_argument("--protocol-file", required=True, help="Canonical protocol_vN.json DSL file.")
+    lock_protocol.add_argument(
+        "--compile-receipt",
+        required=True,
+        help="Passing protocol_tool.py compile receipt whose artifact hashes will be verified.",
+    )
+
     lock_scope = add_state_action(
-        "lock-scope", "Validate and lock the next retrieval-scope JSON version before objective evidence."
+        "lock-scope",
+        "Legacy compatibility path: validate and lock a retrieval-scope JSON version. Prefer lock-protocol.",
     )
     lock_scope.add_argument("--scope-file", required=True, help="Versioned retrieval_scope_vN.json artifact.")
 

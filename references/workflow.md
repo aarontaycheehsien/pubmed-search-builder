@@ -7,7 +7,7 @@ Use this workflow to build, resume, or internally review a high-sensitivity PubM
 Track the detailed stages in `run_manifest.json`, but show users only four concise markers: `Intake`, `Scope lock`, `Empirical build and critic loop`, and `Handoff`.
 
 1. `intake` - confirm the plain-language question, build/review mode, and optional seed status.
-2. `scope-lock` - save retrieval scope version 1 before record evidence is mined.
+2. `scope-lock` - validate, compile, and lock review protocol version 1 before record evidence is mined.
 3. `candidate-discovery` - fetch supplied seeds and discover pilot/related/prior-review candidates.
 4. `candidate-screening` - screen candidates and freeze discovery/holdout roles.
 5. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
@@ -35,6 +35,8 @@ Prefer fewer required `AND` blocks. MeSH does not replace free text, and free te
 
 Require an independently stated plain-language review question. Pasted Boolean syntax, line sets, field tags, or a prior strategy cannot supply scope evidence.
 
+When `review_protocol*.json` is supplied, read `references/protocol-dsl.md`, then run `protocol_tool.py validate ... --mode lock` and `protocol_tool.py compile ...` before any candidate-record, MeSH, or PubMed work. The protocol question satisfies the independent-question requirement. Its decisions satisfy user gates only when lock validation passes. Preserve the source protocol and compile receipt in the run; do not edit compiled ledgers to change scope.
+
 For a new build, ask once whether known-relevant seed PMIDs exist. Seeds are optional. Normalize and deduplicate supplied numeric PMIDs, but do not fetch, mine, or expand them until scope version 1 is locked.
 
 For an existing-strategy review, confirm the plain-language question first. Then accept the draft as a review object and preserve it as version 0; do not infer eligibility, essential concepts, or filters from its structure.
@@ -52,7 +54,7 @@ Before any PubMed record fetch, MeSH lookup, term mining, or block drafting:
 3. Apply the fragility rubric and `AND`-block admission test.
 4. Decide which eligibility elements are searchable anchors, within-block term families, screening-only elements, optional/focused concepts, or filter decisions.
 5. Resolve high-impact ambiguities with the user or protocol.
-6. Save `retrieval_scope_v1.json` and record it with `manifest_tool.py state lock-scope`.
+6. Save `review_protocol_v1.json`, run `protocol_tool.py compile`, then record it with `manifest_tool.py state lock-protocol --protocol-file ... --compile-receipt ...`. Legacy scope JSONs must be migrated before a new or resumed build continues.
 
 The scope artifact must contain:
 
@@ -67,6 +69,8 @@ The scope artifact must contain:
 
 Objective evidence may expand or correct vocabulary within a locked concept. It may not silently add, remove, or redefine an essential concept.
 
+For a DSL-backed build, any change to concept membership or role, eligibility, screening-only properties, filters/limits, or date boundaries requires a new protocol `scope_version`, an explicit `version_change`, lock validation, recompilation, and downstream re-entry. Never patch only the generated concept ledger or block registry.
+
 ## 3. Discover and screen candidate evidence
 
 Read `references/candidate-screening.md`. When supplied seeds exist, also read `references/seed-pmid-validation.md`.
@@ -79,6 +83,8 @@ After the scope is locked:
 4. Assign `discovery`, `holdout`, `both`, `heuristic`, or `neither` roles.
 5. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`; use deterministic `--allocate-holdout` when roles are not already frozen.
 6. Record the ledger with `manifest_tool.py state record-candidate-screen`.
+
+Seed entries compiled from `seeds.records` are candidate-role instructions, not relevance judgements. Fetch and screen them under the same rules as user-supplied seeds before discovery or holdout use.
 
 Only screened-in `discovery` or `both` records may feed term mining. Do not feed high-overlap related records directly into `term-rank`. Unscreened neighbors may remain a separately labelled heuristic benchmark.
 
@@ -178,6 +184,7 @@ Read `references/audit-template.md` and `references/prisma-s-reporting.md`. Rend
 The audit must include:
 
 - the current retrieval-scope artifact and prior superseded versions;
+- the locked review protocol, its scope-version history, compile receipt, and verification result when the DSL was used;
 - candidate-screening counts, decisions, evidence roles, and holdout independence;
 - concept/MeSH/text-word evidence and saved record-content files reviewed;
 - strategy variants, counts, samples, validation, and filter effects;

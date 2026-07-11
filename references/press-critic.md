@@ -11,7 +11,7 @@ This is an automated, PRESS-informed internal self-review. It does not constitut
 Run the critic in fresh context when possible. Give it the raw artifacts needed to review the draft, not the generator's intended answer or preferred fix:
 
 - plain-language review question and protocol decisions;
-- current versioned retrieval-scope artifact;
+- current locked review protocol and generated critic packet;
 - candidate-screening ledger and discovery/holdout summary;
 - active vocabulary-learning artifacts, including excluded-record diagnosis, scope challenges, term dispositions, held-out retests, and differential samples;
 - screening-burden sample and estimate artifacts, including frame completeness, labels, confidence intervals, held-out recall threshold, and whether burden was used only among recall-qualified variants;
@@ -23,7 +23,7 @@ Run the critic in fresh context when possible. Give it the raw artifacts needed 
 Freeze exactly those inputs before review:
 
 ```bash
-python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence scope=retrieval_scope_v1.json --evidence ledger=candidate_ledger.json --evidence probes=probe_summary.json --output critic_evidence_1.json
+python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence critic_packet=critic_packet_v1.json --evidence ledger=candidate_ledger.json --evidence probes=probe_summary.json --output critic_evidence_1.json
 ```
 
 The bundle hashes every file. A critic receipt fails if evidence changes after review.

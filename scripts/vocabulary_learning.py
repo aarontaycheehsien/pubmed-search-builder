@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections import Counter, defaultdict
@@ -44,15 +45,24 @@ def load_scope_labels(path: str, expected_version: int) -> tuple[dict[str, Any],
     if not isinstance(scope, dict) or scope.get("scope_version") != expected_version:
         raise VocabularyLearningError("Scope artifact is not an object or its scope_version does not match")
     labels: dict[str, str] = {}
-    essential = scope.get("essential_blocks")
+    if scope.get("dsl_version") == 1:
+        searchable = scope.get("searchable_scope") if isinstance(scope.get("searchable_scope"), dict) else {}
+        essential = [
+            item for item in searchable.get("concepts", [])
+            if isinstance(item, dict) and item.get("role") == "essential"
+        ]
+    else:
+        essential = scope.get("essential_blocks")
     if not isinstance(essential, list) or not essential:
-        raise VocabularyLearningError("Scope artifact requires non-empty essential_blocks")
+        raise VocabularyLearningError("Scope artifact requires at least one essential searchable concept")
     for index, item in enumerate(essential, start=1):
         label = str(item.get("label") or item.get("name") or "") if isinstance(item, dict) else str(item)
         label = " ".join(label.split())
         if not label:
             raise VocabularyLearningError(f"Essential block {index} has no label")
         labels[label.casefold()] = label
+        if isinstance(item, dict) and str(item.get("id") or "").strip():
+            labels[str(item["id"]).casefold()] = label
     return scope, labels
 
 
@@ -174,7 +184,7 @@ def extract_learning(
     scope_version: int,
     previous_learning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _scope, scope_labels = load_scope_labels(scope_file, scope_version)
+    scope, scope_labels = load_scope_labels(scope_file, scope_version)
     ledger, discovery_pmids, holdout_pmids = load_ledger(ledger_file, scope_version)
     records = records_from_file(records_file)
     records_by_pmid = {str(item.get("pmid")): item for item in records}
@@ -237,11 +247,11 @@ def extract_learning(
                     "required_action": "reopen retrieval scope and issue a new scope version before adopting related vocabulary",
                 }
             )
-    return {
+    result = {
         "operation": "vocabulary-learning-extract",
         "ok": True,
         "scope_version": scope_version,
-        "locked_concepts": sorted(scope_labels.values()),
+        "locked_concepts": sorted(set(scope_labels.values())),
         "newly_included_pmids": newly_included,
         "processed_included_pmids": sorted(previous_processed | set(newly_included), key=int),
         "holdout_pmids_frozen": holdout_pmids,
@@ -254,6 +264,19 @@ def extract_learning(
         "scope_reentry_required": bool(challenges),
         "note": "Only terms assigned to already locked concepts are proposed. Excluded-record terminology is diagnostic only.",
     }
+    if scope.get("dsl_version") == 1:
+        protocol_sha = hashlib.sha256(
+            json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        ledger_generated = ledger_file and read_json(ledger_file).get("generated_from")
+        if isinstance(ledger_generated, dict) and ledger_generated.get("sha256") not in {None, "", protocol_sha}:
+            raise VocabularyLearningError("Candidate ledger protocol binding does not match the review protocol")
+        result.update({
+            "dsl_version": 1,
+            "protocol_id": scope.get("protocol_id"),
+            "protocol_sha256": protocol_sha,
+        })
+    return result
 
 
 def load_blocks(path: str) -> dict[str, dict[str, Any]]:
@@ -353,7 +376,7 @@ def retest_learning(
         }
         retested.append(row)
     accepted = [item for item in retested if item.get("decision") == "accepted"]
-    return {
+    result = {
         "operation": "vocabulary-learning",
         "ok": True,
         "scope_version": scope_version,
@@ -372,6 +395,10 @@ def retest_learning(
         "note": "Accepted terms are additions within locked concepts only. New concepts or eligibility interpretations require scope re-entry.",
         "request_info": client.metadata(),
     }
+    for key in ("dsl_version", "protocol_id", "protocol_sha256"):
+        if extraction.get(key) is not None:
+            result[key] = extraction[key]
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:

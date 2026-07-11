@@ -13,14 +13,93 @@
   ],
   "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD011926.",
   "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
-  "protocol": {
-    "seeds": "none — proceed under the no-seed workflow",
-    "framework": "diagnostic (PIRD / diagnostic PICO). Index test = molecular / nucleic-acid amplification assays; target condition = neonatal sepsis / bloodstream infection.",
-    "essential_concepts": "neonatal sepsis / bloodstream infection; molecular / nucleic-acid amplification assay. Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
-    "optional_blocks": "DECLINE all optional secondary AND blocks — no diagnostic-accuracy/outcome block, no separate reference-standard block.",
-    "methodological_filter": "none",
-    "limits": "none (no date, language, species, or age limits)",
-    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-cd011926",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "CLEF topic description and fixture author decisions."
+    },
+    "review": {
+      "question": "Molecular assays for the diagnosis of sepsis in neonates",
+      "framework": {
+        "name": "PIRD",
+        "rationale": "Diagnostic-test-accuracy review with a neonatal population, molecular index tests, and neonatal sepsis as the target condition.",
+        "slots": [
+          {"id": "population", "label": "Population", "description": "Neonates evaluated for sepsis."},
+          {"id": "index_test", "label": "Index test", "description": "Molecular or nucleic-acid amplification assays."},
+          {"id": "target_condition", "label": "Target condition", "description": "Neonatal sepsis or bloodstream infection."},
+          {"id": "reference_standard", "label": "Reference standard", "description": "Clinical or microbiological reference standard assessed during screening."}
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {"id": "inc_population", "label": "Neonatal population", "description": "Participants are neonates or newborn infants."},
+        {"id": "inc_condition", "label": "Sepsis diagnosis", "description": "Study addresses neonatal sepsis or bloodstream infection."},
+        {"id": "inc_index_test", "label": "Molecular assay", "description": "Study evaluates a molecular or nucleic-acid amplification assay."},
+        {"id": "inc_diagnostic", "label": "Diagnostic evaluation", "description": "Study evaluates diagnostic performance against an eligible reference standard."}
+      ],
+      "exclusion": [
+        {"id": "exc_outside_scope", "label": "Outside diagnostic scope", "description": "Not a neonatal diagnostic evaluation of molecular assays for sepsis."}
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "neonatal_sepsis",
+          "label": "Neonatal sepsis",
+          "role": "essential",
+          "eligibility_refs": ["inc_population", "inc_condition"],
+          "framework_slots": ["population", "target_condition"],
+          "definition": "Sepsis, septicemia, or bloodstream infection in neonates and newborn infants.",
+          "rationale": "Named biomedical condition and population form a searchable topic anchor.",
+          "provisional_fragility": "stable",
+          "term_families": ["neonatal sepsis", "newborn sepsis", "neonatal bloodstream infection", "neonatal septicemia"]
+        },
+        {
+          "id": "molecular_assay",
+          "label": "Molecular assays",
+          "role": "essential",
+          "eligibility_refs": ["inc_index_test"],
+          "framework_slots": ["index_test"],
+          "definition": "Molecular, nucleic-acid amplification, polymerase-chain-reaction, or related pathogen-detection assays.",
+          "rationale": "The index-test family is central and sufficiently explicit to search.",
+          "provisional_fragility": "stable",
+          "term_families": ["molecular assay", "nucleic acid amplification", "polymerase chain reaction", "PCR"]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": [
+        {
+          "id": "diagnostic_accuracy",
+          "label": "Diagnostic accuracy and reference standard",
+          "eligibility_refs": ["inc_diagnostic"],
+          "instructions": "Confirm diagnostic-performance reporting and an eligible reference standard during screening.",
+          "recall_rationale": "Accuracy measures and reference standards are inconsistently reported in titles and abstracts."
+        }
+      ]
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {"id": "method_filter", "type": "filter", "label": "Diagnostic-method filter", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No diagnostic hedge is required for the recall-first search."},
+        {"id": "database_limits", "type": "limit", "label": "Database limits", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No date, language, species, age, publication-status, or full-text limits."}
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {"start": null, "end": null},
+      "search": {"start": null, "end": null},
+      "rationale": "No date boundary."
+    },
+    "seeds": {"records": []},
+    "priorities": {
+      "recall": {"policy": "Recall first; decline optional no-seed heuristic evaluation because hidden gold is scored independently.", "minimum_heldout_recall": 1.0},
+      "workload": {"policy": "Do not narrow solely because retrieval is large.", "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."}
+    },
+    "focused_variants": []
   },
   "seed_pmids_given_to_skill": [],
   "strategy_provenance": "Hand-built 3-block high-sensitivity PubMed strategy authored for this fixture as a scoring baseline. NOT the published Cochrane/Ovid search (that is in Ovid syntax and would need translation). Replace with skill-generated output in Phase 2.",

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Standalone GUI to create new eval fixtures (no command line).
 
-Richer than the "Create Fixture" tab in gui.py: it also exposes the full
-**protocol** (the gate-resolving instructions the skill follows in Phase 2) as
-editable fields, and previews the exact fixture JSON before writing.
+Richer than the "Create Fixture" tab in gui.py: it also exposes the structured
+**review protocol DSL** used in Phase 2 as editable JSON and previews the exact
+fixture before writing.
 
 It shells out to make_fixture.py (reusing its gold-set resolution: adjudicated
 PMIDs, DOIs via PubMed [AID], or a PMIDs file) and passes the edited
-protocol via --protocol-json, so nothing is reimplemented.
+protocol via --review-protocol-json, so nothing is reimplemented.
 
 Launch by double-clicking ``make_fixture_gui.bat`` or run:
     python evals/make_fixture_gui.py
@@ -29,19 +29,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
 sys.path.insert(0, str(HERE))
-from make_fixture import DEFAULT_PROTOCOL  # noqa: E402  (reuse the canonical defaults)
-
-PROTOCOL_FIELDS = [
-    ("seeds", "Seeds"),
-    ("framework", "Framework"),
-    ("essential_concepts", "Essential concepts"),
-    ("optional_blocks", "Optional blocks"),
-    ("methodological_filter", "Methodological filter"),
-    ("limits", "Limits"),
-    ("final_cleanup", "Final cleanup"),
-    ("no_seed_recall", "No-seed recall check"),
-]
-
+from make_fixture import default_review_protocol  # noqa: E402
 
 class FixtureGUI(tk.Tk):
     def __init__(self) -> None:
@@ -91,19 +79,13 @@ class FixtureGUI(tk.Tk):
         self.g_browse.grid(row=2, column=1, sticky="w", padx=6)
         gold.columnconfigure(1, weight=1)
 
-        # Protocol (editable, pre-filled with defaults)
-        proto = ttk.LabelFrame(self, text="Protocol (pre-resolves Phase 2 gates - edit per topic)", padding=8)
+        # Structured protocol DSL (editable JSON, pre-filled with a schema-shaped draft)
+        proto = ttk.LabelFrame(self, text="Review protocol DSL (edit and validate per topic)", padding=8)
         proto.pack(fill="x", padx=10, pady=6)
-        self.proto_widgets: dict[str, tk.Text] = {}
-        for i, (key, label) in enumerate(PROTOCOL_FIELDS):
-            ttk.Label(proto, text=label).grid(row=i, column=0, sticky="nw", pady=2)
-            t = tk.Text(proto, width=78, height=2, wrap="word", font=("Segoe UI", 9))
-            t.insert("1.0", DEFAULT_PROTOCOL.get(key, ""))
-            t.grid(row=i, column=1, sticky="we", padx=6, pady=2)
-            self.proto_widgets[key] = t
-        proto.columnconfigure(1, weight=1)
-        ttk.Button(proto, text="Reset protocol to defaults", command=self._reset_proto).grid(
-            row=len(PROTOCOL_FIELDS), column=1, sticky="e", pady=(4, 0))
+        self.proto_editor = scrolledtext.ScrolledText(proto, width=96, height=18, wrap="none", font=("Consolas", 9))
+        self.proto_editor.insert("1.0", json.dumps(default_review_protocol("<enter review question>", "eval-topic"), indent=2))
+        self.proto_editor.pack(fill="both", expand=True)
+        ttk.Button(proto, text="Reset DSL to defaults", command=self._reset_proto).pack(anchor="e", pady=(4, 0))
 
         # Actions
         actions = ttk.Frame(self, padding=(10, 4))
@@ -133,12 +115,21 @@ class FixtureGUI(tk.Tk):
             self.g_input.insert(0, path)
 
     def _reset_proto(self) -> None:
-        for key, t in self.proto_widgets.items():
-            t.delete("1.0", "end")
-            t.insert("1.0", DEFAULT_PROTOCOL.get(key, ""))
+        question = self.f_question.get("1.0", "end").strip() or "<enter review question>"
+        protocol_id = f"eval-{self.f_id.get().strip() or 'topic'}"
+        self.proto_editor.delete("1.0", "end")
+        self.proto_editor.insert("1.0", json.dumps(default_review_protocol(question, protocol_id), indent=2))
 
     def _protocol(self) -> dict:
-        return {k: t.get("1.0", "end").strip() for k, t in self.proto_widgets.items()}
+        value = json.loads(self.proto_editor.get("1.0", "end"))
+        if not isinstance(value, dict):
+            raise ValueError("review protocol must be a JSON object")
+        question = self.f_question.get("1.0", "end").strip()
+        if question:
+            value.setdefault("review", {})["question"] = question
+        if not str(value.get("protocol_id") or "").strip():
+            value["protocol_id"] = f"eval-{self.f_id.get().strip() or 'topic'}"
+        return value
 
     def _collect(self) -> dict | None:
         fid = self.f_id.get().strip()
@@ -162,13 +153,18 @@ class FixtureGUI(tk.Tk):
             "dois": f"DOIs file: {info['value']} (resolved to PMIDs on create)",
             "pmids_file": f"PMIDs file: {info['value']}",
         }[src]
+        try:
+            review_protocol = self._protocol()
+        except (json.JSONDecodeError, ValueError) as exc:
+            messagebox.showwarning("Protocol", f"Review protocol JSON is invalid: {exc}")
+            return
         preview = {
             "id": info["id"],
             "suite": self.f_suite.get().strip() or "custom",
             "question": info["question"],
             "gold_relevant_pmids": "<resolved from gold source on create>",
             "gold_source": src_desc,
-            "protocol": self._protocol(),
+            "review_protocol": review_protocol,
             "seed_pmids_given_to_skill": [],
         }
         self._log("\n--- fixture preview (gold resolves on create) ---\n")
@@ -180,13 +176,18 @@ class FixtureGUI(tk.Tk):
             if self._running:
                 messagebox.showinfo("Busy", "A job is already running.")
             return
-        # write the edited protocol to a temp JSON and pass it through
+        try:
+            review_protocol = self._protocol()
+        except (json.JSONDecodeError, ValueError) as exc:
+            messagebox.showwarning("Protocol", f"Review protocol JSON is invalid: {exc}")
+            return
+        # Write the edited structured protocol to a temp JSON and pass it through.
         pj = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
-        json.dump(self._protocol(), pj)
+        json.dump(review_protocol, pj)
         pj.close()
         cmd = [sys.executable, "-u", str(HERE / "make_fixture.py"),
                "--id", info["id"], "--suite", self.f_suite.get().strip() or "custom",
-               "--question", info["question"], "--protocol-json", pj.name]
+               "--question", info["question"], "--review-protocol-json", pj.name]
         src = self.src.get()
         if src == "pmids":
             cmd += ["--gold-pmids", *info["value"].split()]

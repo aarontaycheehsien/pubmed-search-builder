@@ -13,7 +13,7 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 
 ## Required sequence
 
-1. Lock and save `retrieval_scope_v1.json` before fetching or mining candidate records.
+1. Validate, compile, and lock `review_protocol_v1.json` before fetching or mining candidate records. Instantiate its `candidate_ledger_template_v1.json` before screening protocol-declared seeds.
 2. Collect candidate PMIDs from supplied seeds, PubMed similar articles, citation links, or independently identified prior-review included studies. With no seeds, use the six orthogonal pilots below rather than one defining pilot.
 3. Fetch candidate metadata to saved JSON. Inspect titles and abstracts where available; receipt-only stdout is not screening evidence.
 4. Classify every candidate as `include`, `exclude`, or `uncertain` against the locked scope. Give a short eligibility reason.

@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.local/pubmed-search-builder/review-protocol.schema.json",
+  "title": "PubMed search-builder review protocol",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": true
+  },
+  "required": [
+    "dsl_version",
+    "protocol_id",
+    "scope_version",
+    "version_change",
+    "review",
+    "eligibility",
+    "searchable_scope",
+    "screening_only",
+    "filters_and_limits",
+    "date_boundaries",
+    "seeds",
+    "priorities",
+    "focused_variants"
+  ],
+  "properties": {
+    "dsl_version": {"const": 1},
+    "protocol_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "scope_version": {"type": "integer", "minimum": 1},
+    "version_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["previous_scope_version", "reason", "decision_source"],
+      "properties": {
+        "previous_scope_version": {"type": ["integer", "null"], "minimum": 1},
+        "reason": {"type": "string"},
+        "decision_source": {"type": "string"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["question", "framework"],
+      "properties": {
+        "question": {"type": "string", "minLength": 1},
+        "framework": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["name", "rationale", "slots"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "rationale": {"type": "string", "minLength": 1},
+            "slots": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/framework_slot"}
+            }
+          }
+        }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["inclusion", "exclusion"],
+      "properties": {
+        "inclusion": {"type": "array", "items": {"$ref": "#/$defs/criterion"}},
+        "exclusion": {"type": "array", "items": {"$ref": "#/$defs/criterion"}}
+      }
+    },
+    "searchable_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["concepts"],
+      "properties": {
+        "concepts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/concept"}
+        }
+      }
+    },
+    "screening_only": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["properties"],
+      "properties": {
+        "properties": {"type": "array", "items": {"$ref": "#/$defs/screening_property"}}
+      }
+    },
+    "filters_and_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["decisions"],
+      "properties": {
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/filter_limit"}}
+      }
+    },
+    "date_boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["eligibility", "search", "rationale"],
+      "properties": {
+        "eligibility": {"$ref": "#/$defs/date_range"},
+        "search": {"$ref": "#/$defs/date_range"},
+        "rationale": {"type": "string"}
+      }
+    },
+    "seeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["records"],
+      "properties": {
+        "records": {"type": "array", "items": {"$ref": "#/$defs/seed"}}
+      }
+    },
+    "priorities": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["recall", "workload"],
+      "properties": {
+        "recall": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["policy", "minimum_heldout_recall"],
+          "properties": {
+            "policy": {"type": "string", "minLength": 1},
+            "minimum_heldout_recall": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "workload": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["policy", "selection_rule"],
+          "properties": {
+            "policy": {"type": "string", "minLength": 1},
+            "selection_rule": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "focused_variants": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/focused_variant"}
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "framework_slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "label", "description"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "label", "description"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "label", "role", "eligibility_refs", "framework_slots", "definition", "rationale", "provisional_fragility"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "role": {"enum": ["essential", "optional"]},
+        "eligibility_refs": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "framework_slots": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}},
+        "definition": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1},
+        "provisional_fragility": {"enum": ["stable", "fragile", "very_fragile"]},
+        "term_families": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "screening_property": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "label", "eligibility_refs", "instructions", "recall_rationale"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "eligibility_refs": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "instructions": {"type": "string", "minLength": 1},
+        "recall_rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "filter_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "type", "label", "status", "value", "validated_source", "rationale"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"enum": ["filter", "limit"]},
+        "label": {"type": "string", "minLength": 1},
+        "status": {"enum": ["selected", "rejected"]},
+        "value": {},
+        "validated_source": {"type": ["string", "null"]},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "date_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": ["string", "null"], "format": "date"},
+        "end": {"type": ["string", "null"], "format": "date"}
+      }
+    },
+    "seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["pmid", "role", "rationale"],
+      "properties": {
+        "pmid": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+        "role": {"enum": ["discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"]},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "focused_variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "label", "optional_concept_ids", "filter_limit_ids", "excluded_concept_ids", "rationale"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "label": {"type": "string", "minLength": 1},
+        "optional_concept_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "filter_limit_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "excluded_concept_ids": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

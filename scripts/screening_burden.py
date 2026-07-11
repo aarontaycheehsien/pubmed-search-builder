@@ -36,6 +36,38 @@ def write_json(path: str, value: Any) -> None:
     target.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def protocol_policy(path: str | None, scope_version: int) -> dict[str, Any] | None:
+    if not path:
+        return None
+    protocol_path = Path(path)
+    data = read_json(path)
+    if not isinstance(data, dict) or data.get("dsl_version") != 1:
+        raise ScreeningBurdenError("Protocol file must use dsl_version 1")
+    if data.get("scope_version") != scope_version:
+        raise ScreeningBurdenError("Protocol scope_version does not match --scope-version")
+    protocol_id = str(data.get("protocol_id") or "").strip()
+    if not protocol_id:
+        raise ScreeningBurdenError("Protocol file requires protocol_id")
+    variants = data.get("focused_variants", [])
+    permitted = {
+        str(item.get("id") or "").strip()
+        for item in variants
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    } if isinstance(variants, list) else set()
+    priorities = data.get("priorities") if isinstance(data.get("priorities"), dict) else {}
+    recall = priorities.get("recall") if isinstance(priorities.get("recall"), dict) else {}
+    minimum = recall.get("minimum_heldout_recall", priorities.get("minimum_heldout_recall"))
+    return {
+        "protocol_id": protocol_id,
+        "protocol_sha256": hashlib.sha256(
+            json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "dsl_version": 1,
+        "permitted_focused_variant_ids": sorted(permitted),
+        "minimum_heldout_recall": float(minimum) if isinstance(minimum, (int, float)) else 1.0,
+    }
+
+
 def load_variants(path: str) -> tuple[list[dict[str, Any]], str]:
     queries, baseline = pubmed_tool.parse_variant_queries(pubmed_tool.read_text_source(path))
     if len(queries) < 2:
@@ -69,7 +101,7 @@ def complete_retrieval_sets(
                 raise ScreeningBurdenError(
                     f"Retrieval set {label!r} must declare complete=true and total_count equal to the complete PMID list length"
                 )
-            results[label] = {"label": label, "query": query, "total_count": total, "ranked_pmids": pmids, "source": "provided-complete-export"}
+            results[label] = {"label": label, "variant_id": item.get("variant_id"), "query": query, "total_count": total, "ranked_pmids": pmids, "source": "provided-complete-export"}
             continue
         count_result = pubmed_tool.esearch(client, query, retmax=0, retstart=0, sort="relevance")
         total = int(count_result.get("count", 0) or 0)
@@ -82,7 +114,7 @@ def complete_retrieval_sets(
         pmids = pubmed_tool.dedup_preserving_order([str(value) for value in full.get("pmids", [])])
         if len(pmids) != total:
             raise ScreeningBurdenError(f"PubMed returned an incomplete PMID frame for variant {label!r}: {len(pmids)}/{total}")
-        results[label] = {"label": label, "query": query, "total_count": total, "ranked_pmids": pmids, "source": "pubmed-complete-frame"}
+        results[label] = {"label": label, "variant_id": item.get("variant_id"), "query": query, "total_count": total, "ranked_pmids": pmids, "source": "pubmed-complete-frame"}
     return results
 
 
@@ -140,6 +172,7 @@ def sample_variants(
     seed: str,
     retrieval_sets_file: str | None,
     auto_retrieval_limit: int,
+    policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sets = complete_retrieval_sets(
         client, variants, retrieval_sets_file=retrieval_sets_file, auto_retrieval_limit=auto_retrieval_limit
@@ -165,12 +198,20 @@ def sample_variants(
         variant_rows.append(
             {
                 "label": label,
+                "variant_id": item.get("variant_id"),
                 "query": item["query"],
                 "total_count": item["total_count"],
                 "retrieval_frame_complete": True,
                 "retrieval_frame_source": item["source"],
                 "actual_sample_size": sum(allocation.values()),
                 "strata": sampled_strata,
+                "protocol_status": (
+                    "main-authoritative"
+                    if label == baseline_label
+                    else "permitted"
+                    if policy and str(item.get("variant_id") or "") in set(policy.get("permitted_focused_variant_ids", []))
+                    else "diagnostic-only"
+                ),
             }
         )
     fetched = pubmed_tool.efetch(client, sorted(sampled_pmids, key=int)) if sampled_pmids else {"records": []}
@@ -190,7 +231,7 @@ def sample_variants(
                 "label_reason": "",
             }
         )
-    return {
+    result = {
         "operation": "screening-burden-sample",
         "ok": True,
         "scope_version": scope_version,
@@ -206,6 +247,9 @@ def sample_variants(
         "note": "Label each unique PMID once. Complete retrieval frames are required; capped top-result samples are rejected as biased.",
         "request_info": client.metadata(),
     }
+    if policy:
+        result.update({key: value for key, value in policy.items() if key != "minimum_heldout_recall"})
+    return result
 
 
 def wilson_interval(proportion: float, effective_n: float, z: float = 1.959963984540054) -> tuple[float, float]:
@@ -336,6 +380,8 @@ def estimate_burden(
         if not isinstance(row, dict):
             continue
         estimate = estimate_variant(row, label_map)
+        estimate["variant_id"] = row.get("variant_id")
+        estimate["protocol_status"] = row.get("protocol_status", "legacy-unspecified")
         query = str(row.get("query") or "")
         retrieved = pubmed_tool.retrieve_against_pmids(client, query, heldout_pmids)
         retrieved_pmids = [pmid for pmid in heldout_pmids if pmid in retrieved]
@@ -357,7 +403,12 @@ def estimate_burden(
             "additional_heldout_records_retrieved": len(row["heldout_retrieved_pmids"]) - baseline_retrieved,
             "heldout_recall_change": round(row["heldout_recall"] - (baseline_retrieved / len(heldout_pmids)), 6),
         }
-    eligible = [row for row in variants if row["recall_requirement_met"] and row["precision_estimate"] is not None]
+    eligible = [
+        row for row in variants
+        if row["recall_requirement_met"]
+        and row["precision_estimate"] is not None
+        and row.get("protocol_status") != "diagnostic-only"
+    ]
     recommended = None
     if len(eligible) >= 2:
         recommended = min(
@@ -368,7 +419,7 @@ def estimate_burden(
                 str(row["label"]),
             ),
         )["label"]
-    return {
+    result = {
         "operation": "screening-burden",
         "ok": True,
         "scope_version": scope_version,
@@ -383,10 +434,15 @@ def estimate_burden(
             "eligible_variant_labels": [row["label"] for row in eligible],
             "recommended_variant_label": recommended,
             "rule": "Compare burden only among variants meeting the held-out recall requirement; choose the lowest estimated records screened per relevant report.",
+            "diagnostic_only_variant_labels": [row["label"] for row in variants if row.get("protocol_status") == "diagnostic-only"],
         },
         "caveat": "Precision and burden are sample estimates. Counts remain exact workload totals; uncertain labels are reported as sensitivity bounds.",
         "request_info": client.metadata(),
     }
+    for key in ("protocol_id", "protocol_sha256", "dsl_version"):
+        if sample.get(key) is not None:
+            result[key] = sample[key]
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -397,6 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--baseline-label")
     sample.add_argument("--retrieval-sets-file")
     sample.add_argument("--scope-version", type=int, required=True)
+    sample.add_argument("--protocol-file")
     sample.add_argument("--sample-size", type=int, default=60)
     sample.add_argument("--rank-bands", type=int, default=3)
     sample.add_argument("--seed", default="pubmed-screening-burden-v1")
@@ -408,7 +465,8 @@ def build_parser() -> argparse.ArgumentParser:
     holdout.add_argument("--candidate-ledger")
     holdout.add_argument("--heldout-pmids", nargs="+")
     estimate.add_argument("--scope-version", type=int, required=True)
-    estimate.add_argument("--minimum-heldout-recall", type=float, default=1.0)
+    estimate.add_argument("--protocol-file")
+    estimate.add_argument("--minimum-heldout-recall", type=float)
     estimate.add_argument("--output", required=True)
     return parser
 
@@ -417,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     client = pubmed_tool.NcbiClient()
     try:
+        policy = protocol_policy(args.protocol_file, args.scope_version)
         if args.command == "sample":
             variants, file_baseline = load_variants(args.variants_file)
             result = sample_variants(
@@ -429,13 +488,22 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 retrieval_sets_file=args.retrieval_sets_file,
                 auto_retrieval_limit=max(1, args.auto_retrieval_limit),
+                policy=policy,
             )
         else:
-            if not 0 <= args.minimum_heldout_recall <= 1:
+            minimum_recall = args.minimum_heldout_recall
+            if minimum_recall is None:
+                minimum_recall = float(policy.get("minimum_heldout_recall", 1.0)) if policy else 1.0
+            if not 0 <= minimum_recall <= 1:
                 raise ScreeningBurdenError("--minimum-heldout-recall must be between 0 and 1")
             sample = read_json(args.sample_file)
             if not isinstance(sample, dict):
                 raise ScreeningBurdenError("Sample file must contain an object")
+            if policy and (
+                sample.get("protocol_id") != policy.get("protocol_id")
+                or sample.get("protocol_sha256") != policy.get("protocol_sha256")
+            ):
+                raise ScreeningBurdenError("Sample artifact does not match the supplied protocol")
             heldout_pmids, heldout_source = resolve_holdout(args.candidate_ledger, args.heldout_pmids or [])
             result = estimate_burden(
                 client,
@@ -443,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
                 scope_version=args.scope_version,
                 heldout_pmids=heldout_pmids,
                 heldout_source=heldout_source,
-                minimum_recall=args.minimum_heldout_recall,
+                minimum_recall=minimum_recall,
             )
         write_json(args.output, result)
         receipt = {

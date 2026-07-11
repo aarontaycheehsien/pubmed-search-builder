@@ -11,7 +11,7 @@ After the plain-language question is confirmed, ask once whether the user has kn
 1. Normalize and deduplicate numeric PMIDs while preserving order.
 2. Record malformed entries and do not pass them to PubMed.
 3. Do not fetch, mine, inspect, expand, or use the PMIDs as concept evidence.
-4. Complete and save `retrieval_scope_v1.json` from question/protocol evidence.
+4. Validate, compile, and lock `review_protocol_v1.json` from question/protocol evidence.
 
 This separation prevents the seed set from anchoring which eligibility elements become required search blocks.
 

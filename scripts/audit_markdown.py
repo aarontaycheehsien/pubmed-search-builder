@@ -209,6 +209,28 @@ def concept_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in as_list(concepts) if isinstance(item, dict)]
 
 
+def render_protocol_outline(data: dict[str, Any]) -> list[str]:
+    outline = as_dict(data.get("audit_outline"))
+    if not outline:
+        return []
+    sections = [item for item in as_list(outline.get("sections")) if isinstance(item, dict)]
+    lines = [
+        "## Protocol-defined audit outline",
+        "",
+        f"- **Protocol ID:** {compact_text(data.get('protocol_id') or outline.get('protocol_id'))}",
+        f"- **Scope version:** {compact_text(data.get('scope_version') or outline.get('scope_version'))}",
+        f"- **Protocol SHA-256:** {compact_text(data.get('protocol_sha256'))}",
+        "- **Source-of-truth rule:** These headings were generated from the locked review protocol; evidence is reported in the corresponding audit sections below.",
+        "",
+    ]
+    for section in sections:
+        title = str(section.get("title") or section.get("id") or "Protocol section").strip()
+        section_id = str(section.get("id") or "").strip()
+        required = "required" if section.get("required", True) is not False else "conditional"
+        lines.extend([f"### {title}", "", f"Protocol section `{section_id}` ({required}).", ""])
+    return lines
+
+
 def render_search_structure(data: dict[str, Any]) -> list[str]:
     search_structure = as_dict(data.get("search_structure"))
     concepts = concept_rows(data)
@@ -1116,6 +1138,7 @@ def render_appendix_document(data: dict[str, Any]) -> str:
 def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None) -> str:
     title = compact_text(first_value(data, ["title", "topic", "review_question"], "PubMed search audit"))
     lines = [f"# {title}", ""]
+    lines.extend(render_protocol_outline(data))
     lines.extend(render_search_structure(data))
     lines.extend(render_retrieval_scope(data))
     lines.extend(render_stage_trace(data))

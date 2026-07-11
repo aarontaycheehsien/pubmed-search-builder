@@ -41,6 +41,28 @@ def write_json(path: str, value: Any) -> None:
     target.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def protocol_binding(path: str | None, scope_version: int) -> dict[str, Any] | None:
+    if not path:
+        return None
+    protocol_path = Path(path)
+    data = read_json(path)
+    if not isinstance(data, dict) or data.get("dsl_version") != 1:
+        raise NoSeedDiscoveryError("Protocol file must use dsl_version 1")
+    if data.get("scope_version") != scope_version:
+        raise NoSeedDiscoveryError("Protocol scope_version does not match --scope-version")
+    protocol_id = str(data.get("protocol_id") or "").strip()
+    if not protocol_id:
+        raise NoSeedDiscoveryError("Protocol file requires protocol_id")
+    return {
+        "protocol_id": protocol_id,
+        "protocol_sha256": hashlib.sha256(
+            json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+        "dsl_version": 1,
+        "protocol_path": str(protocol_path),
+    }
+
+
 def load_pilots(path: str) -> list[dict[str, Any]]:
     raw = read_json(path)
     if not isinstance(raw, list) or not raw:
@@ -80,6 +102,7 @@ def discover(
     round_number: int,
     previous_state: dict[str, Any] | None,
     safety_cap_per_pilot: int,
+    binding: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     seen_pmids = {str(value) for value in (previous_state or {}).get("seen_pmids", [])}
     provenance: dict[str, dict[str, Any]] = {}
@@ -180,6 +203,10 @@ def discover(
         "safety_cap_reached": cap_reached,
         "note": "The cap is an operational safety ceiling, never the discovery stopping rule.",
     }
+    if binding:
+        public_binding = {key: value for key, value in binding.items() if key != "protocol_path"}
+        screening.update(public_binding)
+        provenance_output.update(public_binding)
     return screening, provenance_output
 
 
@@ -202,11 +229,16 @@ def adjudicate(
     scope_version: int,
     required_saturated_rounds: int,
     allocation_seed: str,
+    binding: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if screening.get("operation") != "orthogonal-pilot-screening" or screening.get("provenance_blinded") is not True:
         raise NoSeedDiscoveryError("Screening artifact is not a provenance-blinded orthogonal-pilot file")
     if screening.get("scope_version") != scope_version or provenance.get("scope_version") != scope_version:
         raise NoSeedDiscoveryError("Screening/provenance scope_version mismatch")
+    if binding:
+        for key in ("protocol_id", "protocol_sha256"):
+            if screening.get(key) != binding.get(key) or provenance.get(key) != binding.get(key):
+                raise NoSeedDiscoveryError(f"Screening/provenance {key} does not match the supplied protocol")
     provenance_by_id = {
         str(item.get("candidate_id")): item
         for item in provenance.get("records", [])
@@ -271,6 +303,8 @@ def adjudicate(
         "stopping_rule": "Stop only after consecutive rounds add neither screened-in studies nor vocabulary; a reached safety cap blocks saturation.",
         "ledger_frozen": False,
     }
+    if binding:
+        state.update({key: value for key, value in binding.items() if key != "protocol_path"})
     ledger = None
     if saturation_reached and included:
         ledger_records = []
@@ -288,6 +322,15 @@ def adjudicate(
                 }
             )
         ledger = {"scope_version": scope_version, "records": ledger_records}
+        if binding:
+            ledger.update({
+                "artifact_type": "candidate-ledger",
+                "artifact_version": 1,
+                "protocol_id": binding["protocol_id"],
+                "dsl_version": 1,
+                "generated_from": {"path": binding["protocol_path"], "sha256": binding["protocol_sha256"]},
+                "ledger_status": "screened",
+            })
         ledger, allocation = candidate_ledger.allocate_holdout(ledger, seed=allocation_seed)
         issues, summary = candidate_ledger.validate_ledger(ledger)
         if issues:
@@ -306,6 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser = sub.add_parser("discover")
     discover_parser.add_argument("--pilots-file", required=True)
     discover_parser.add_argument("--scope-version", type=int, required=True)
+    discover_parser.add_argument("--protocol-file")
     discover_parser.add_argument("--round", type=int, required=True)
     discover_parser.add_argument("--previous-state")
     discover_parser.add_argument("--safety-cap-per-pilot", type=int, default=500)
@@ -316,6 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     adjudicate_parser.add_argument("--provenance-file", required=True)
     adjudicate_parser.add_argument("--previous-state")
     adjudicate_parser.add_argument("--scope-version", type=int, required=True)
+    adjudicate_parser.add_argument("--protocol-file")
     adjudicate_parser.add_argument("--required-saturated-rounds", type=int, default=2)
     adjudicate_parser.add_argument("--allocation-seed", default="no-seed-orthogonal-pilots")
     adjudicate_parser.add_argument("--state-output", required=True)
@@ -326,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        binding = protocol_binding(args.protocol_file, args.scope_version)
         previous = read_json(args.previous_state) if args.previous_state else None
         if previous is not None and not isinstance(previous, dict):
             raise NoSeedDiscoveryError("Previous state must be a JSON object")
@@ -338,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
                 round_number=max(1, args.round),
                 previous_state=previous,
                 safety_cap_per_pilot=max(1, args.safety_cap_per_pilot),
+                binding=binding,
             )
             write_json(args.screening_output, screening)
             write_json(args.provenance_output, provenance)
@@ -361,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 scope_version=args.scope_version,
                 required_saturated_rounds=max(1, args.required_saturated_rounds),
                 allocation_seed=args.allocation_seed,
+                binding=binding,
             )
             if ledger is not None:
                 write_json(args.ledger_output, ledger)

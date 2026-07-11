@@ -11,6 +11,7 @@ Used for systematic reviews, scoping reviews, rapid reviews, evidence maps, and 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Review Protocol DSL](#review-protocol-dsl)
 - [Core Concepts](#core-concepts)
 - [Bundled Tools](#bundled-tools)
 - [Workflow](#workflow)
@@ -43,6 +44,20 @@ python scripts/pubmed_tool.py doctor
 ```
 
 This confirms your NCBI email/API key and runs a test query without exposing credentials.
+
+---
+
+## Review Protocol DSL
+
+For unattended, resumable, or audited builds, encode scope decisions in a versioned `review_protocol*.json` rather than a free-form prompt. Validate and compile it before PubMed work:
+
+```bash
+python scripts/protocol_tool.py validate review_protocol_v1.json --mode lock
+python scripts/protocol_tool.py compile review_protocol_v1.json --output-dir protocol_v1 --receipt protocol_v1/protocol_compile_v1.json
+python scripts/protocol_tool.py verify review_protocol_v1.json --receipt protocol_v1/protocol_compile_v1.json
+```
+
+The source protocol remains authoritative. Compilation creates deterministic concept, candidate, block, critic, and audit inputs; revise and increment the protocol scope version instead of editing those generated files. See [`references/protocol-dsl.md`](references/protocol-dsl.md) and [`schemas/review-protocol.schema.json`](schemas/review-protocol.schema.json).
 
 ---
 
@@ -290,6 +305,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 ## Documentation
 
 - **[SKILL.md](SKILL.md)**: Activation contract, routing rules, guardrails, and final report template
+- **[references/protocol-dsl.md](references/protocol-dsl.md)**: Versioned review-protocol schema, validation, compilation, verification, and migration
 - **[references/workflow.md](references/workflow.md)**: Detailed step-by-step workflow
 - **[references/framework-selection.md](references/framework-selection.md)**: Question-type-to-framework selection (PICO, PECO, PIRD, PCC, SPIDER, etc.)
 - **[references/concept-analysis-and-gating.md](references/concept-analysis-and-gating.md)**: Concept-analysis ledger, AND-block admission test, and the concept gate

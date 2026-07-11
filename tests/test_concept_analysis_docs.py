@@ -87,7 +87,8 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         positions = [workflow.index(item) for item in sequence]
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("save `retrieval_scope_v1.json`", workflow)
+        self.assertIn("save `review_protocol_v1.json`", workflow)
+        self.assertIn("state lock-protocol", workflow)
         self.assertIn("before any pubmed record fetch", workflow)
 
     def test_workflow_defines_a_repeating_empirical_critic_loop(self):

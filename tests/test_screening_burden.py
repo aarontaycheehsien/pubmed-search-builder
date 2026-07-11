@@ -89,6 +89,18 @@ class ScreeningBurdenTests(unittest.TestCase):
         self.assertTrue(result["selection"]["burden_used_for_selection"])
         self.assertEqual(result["selection"]["recommended_variant_label"], "focused")
 
+    def test_diagnostic_only_variant_cannot_be_selected_by_burden(self):
+        sample = self.labelled_sample()
+        sample["variants"][0]["protocol_status"] = "main-authoritative"
+        sample["variants"][1]["protocol_status"] = "diagnostic-only"
+        with mock.patch.object(burden.pubmed_tool, "retrieve_against_pmids", return_value={"10", "11"}):
+            result = burden.estimate_burden(
+                FakeClient(), sample, scope_version=1, heldout_pmids=["10", "11"], heldout_source="test", minimum_recall=1.0
+            )
+        self.assertFalse(result["selection"]["burden_used_for_selection"])
+        self.assertIsNone(result["selection"]["recommended_variant_label"])
+        self.assertEqual(result["selection"]["diagnostic_only_variant_labels"], ["focused"])
+
     def test_auto_sampling_rejects_incomplete_top_result_frame(self):
         with mock.patch.object(burden.pubmed_tool, "esearch", return_value={"count": 100, "pmids": []}):
             with self.assertRaises(burden.ScreeningBurdenError):

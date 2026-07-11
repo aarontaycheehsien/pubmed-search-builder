@@ -15,11 +15,15 @@ Build a recall-first PubMed strategy and a reproducible audit trail. Keep three 
 
 Never let a seed set, candidate set, existing Boolean strategy, or retrieval count silently redefine eligibility.
 
+When a structured review protocol is supplied, read `references/protocol-dsl.md`. Validate it in lock mode and compile it before any record or PubMed evidence is inspected. Treat the versioned protocol as the scope authority; generated ledgers and packets are derived artifacts, not alternate places to edit scope.
+
 ## Intake Modes
 
 ### New build
 
 Require an independently stated plain-language research/review question. If it is missing, ask only for it and stop. Once confirmed, ask once for optional known-relevant seed PMIDs. Seeds are useful but not required.
+
+If the user supplies `review_protocol*.json`, use its plain-language question and resolved decisions after `protocol_tool.py validate --mode lock` passes. Do not ask again about decisions already encoded in a valid locked protocol.
 
 ### Existing-strategy review or resumed build
 
@@ -29,7 +33,7 @@ Do not search PubMed or the web to answer the substantive evidence question. The
 
 ## Canonical Loop
 
-1. **Lock conceptual scope.** Read `references/framework-selection.md`, `references/concept-analysis-and-gating.md`, and `references/anti-patterns.md`. Save a versioned retrieval-scope artifact before mining records. It must identify essential `AND` blocks, within-block term families, screening-only elements, optional/focused concepts, filters, ambiguities, and the user/protocol decisions that fixed them.
+1. **Lock conceptual scope.** Read `references/framework-selection.md`, `references/concept-analysis-and-gating.md`, and `references/anti-patterns.md`. Author, validate, and compile a versioned review-protocol DSL file before mining records. It is the locked source for essential `AND` blocks, within-block term families, screening-only elements, optional/focused concepts, filters, date boundaries, seed roles, priorities, and resolved decisions. Import a legacy retrieval-scope JSON only through `protocol_tool.py migrate-scope`.
 2. **Build a candidate evidence set.** Read `references/candidate-screening.md` and, when seeds exist, `references/seed-pmid-validation.md`. Discover candidates only after scope version 1 is locked. Prescreen candidates as include/exclude/uncertain before they can drive term mining. Keep user-confirmed seeds, screened-in discovery records, held-out validation records, and unscreened heuristic neighbors distinct.
 3. **Build and probe.** Read `references/workflow.md` and load the tool, MeSH, title/abstract, wildcard, gap-analysis, filter, and no-seed references only when their stage is reached. After screening, run active vocabulary learning only within locked concepts; diagnose excluded records separately and route new concepts or eligibility interpretations through scope re-entry. Retest every accepted term against the frozen holdout when available and differential samples. Mine accepted discovery records, sweep MeSH, inspect PubMed translation, construct blocks, and run reversible diagnostic comparisons. When screened relevant records exist, calculate empirical fragility metrics for every block; preserve any human override only with a reason. Run automatic leave-one-block-out concept ablation for every strategy with two or more proposed `AND` blocks. Objective terms are candidates, not automatic additions.
 4. **Critique, revise, and retest.** Read `references/press-critic.md`. Freeze the critic inputs with `critic_tool.py --build-bundle`, then run a fresh-context PRESS-informed critic against that evidence bundle. Use critic contract version 2: explicit evidence-referenced verdicts for every PRESS domain and stable finding IDs carried across rounds until resolved. Route lexical findings to the affected `OR` block; structural findings back through `AND`-block admission; scope findings to the user/protocol; filter findings to topic-only versus filtered comparison; and syntax findings to repair. Re-probe every affected branch. Repeat until no actionable finding remains open.
@@ -57,6 +61,7 @@ Stop only when a decision would change review scope, eligibility interpretation,
 
 For a completed build, save:
 
+- the locked review protocol and compile receipt when the DSL was used;
 - versioned retrieval-scope, candidate-screening, strategy/block, probe, critic, and revision artifacts;
 - the final Markdown audit, preferably `audit_<topic-slug>_YYYY-MM-DD.md`;
 - the canonical append-only `run_manifest.json`.
@@ -67,6 +72,7 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 
 ## Reference Routing
 
+- `references/protocol-dsl.md` - versioned review-protocol authoring, validation, compilation, verification, and legacy migration.
 - `references/workflow.md` - canonical loop, re-entry paths, stop criteria, and artifact sequence.
 - `references/framework-selection.md` - question type and framework selection.
 - `references/concept-analysis-and-gating.md` - scope artifact, concept roles, fragility, and `AND`-block admission.

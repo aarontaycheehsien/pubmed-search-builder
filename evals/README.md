@@ -24,11 +24,10 @@ console window) or run `python evals/gui.py`. The window exposes every option:
   Run Eval dropdown automatically.
 
 For a richer, dedicated fixture builder, double-click **`make_fixture_gui.bat`**
-(or run `python evals/make_fixture_gui.py`). It adds editable **protocol** fields
-(the gate-resolving instructions the skill follows in Phase 2, pre-filled with
-sensible defaults) and a *Preview JSON* button to see the exact fixture before
-writing. Tuning the protocol per topic is what gives good Phase 2 results, so
-this is the recommended way to add a new topic.
+(or run `python evals/make_fixture_gui.py`). It adds an editable structured
+**review protocol DSL** and a *Preview JSON* button. The default is only a
+schema-shaped draft: refine its framework, eligibility links, searchable
+concepts, and screening-only properties before a Phase 2 run.
 
 Both GUIs just shell out to the same scripts below, so anything they do is
 reproducible from the command line and vice versa.
@@ -122,7 +121,7 @@ Fixture schema:
 ### Bring your own topic (any source, not just CLEF)
 
 The harness is **source-agnostic** — a fixture is only a question + a gold set of
-relevant PMIDs + a protocol. The gold set can come from a published review's
+relevant PMIDs + a structured `review_protocol`. The gold set can come from a published review's
 included studies, your own curated set, or a list of DOIs. A retrieval query
 cannot define its own gold set.
 `make_fixture.py` builds the fixture and resolves the gold set for you:
@@ -142,8 +141,10 @@ python evals/make_fixture.py --id SR2024 --question "..." \
 ```
 
 It writes `datasets/<suite>/<id>.json` with a **default protocol** — review and
-tighten the `protocol` block for your topic, then run `python evals/generate.py
-<id>`. It reports DOIs that don't resolve and gold PMIDs not in PubMed (the
+tighten the structured `review_protocol` block, validate it against
+`schemas/review-protocol.schema.json`, then run `python evals/generate.py <id>`.
+The deprecated free-form `protocol` field is still loaded with a warning so old
+fixtures remain runnable. It reports DOIs that don't resolve and gold PMIDs not in PubMed (the
 latter are excluded from the recall denominator at score time). Custom fixtures
 work with the same topic-id selection as the CLEF ones; only the `datasets/`
 subfolder differs.
@@ -168,8 +169,9 @@ is a separate concern.
 ## Phase 2 (in progress)
 
 Drive the **skill itself** to generate the strategy under test, then score it
-with the Phase 1 engine. Approach: front-load a `protocol` in the prompt that
-pre-resolves every gate (the skill's own "protocol already decides it" bypass),
+with the Phase 1 engine. Approach: place the fixture's structured
+`review_protocol` in the isolated runtime, require lock validation and
+compilation, and use it to pre-resolve every gate,
 so the agent runs unattended ("approach A" — scores search *construction*, not
 interactive elicitation). Evaluation gold is absent from the packaged runtime
 workspace, prompt, output path, and transcript. Scoring reports never-reviewed

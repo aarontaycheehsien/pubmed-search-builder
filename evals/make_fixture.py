@@ -25,9 +25,11 @@ Then build a strategy for it and score:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -49,6 +51,89 @@ DEFAULT_PROTOCOL = {
     "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking.",
     "no_seed_recall": "decline — do NOT run the optional heuristic recall estimation and do NOT ask; record it with `manifest_tool.py state resolve-recall-offer declined`",
 }
+
+
+def default_review_protocol(question: str, protocol_id: str) -> dict:
+    """Return a schema-shaped recall-first draft that fixture authors must tighten."""
+    return {
+        "dsl_version": 1,
+        "protocol_id": protocol_id,
+        "scope_version": 1,
+        "version_change": {
+            "previous_scope_version": None,
+            "reason": "Initial evaluation protocol.",
+            "decision_source": "Evaluation fixture author.",
+        },
+        "review": {
+            "question": question,
+            "framework": {
+                "name": "PCC",
+                "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+                "slots": [{"id": "topic", "label": "Review topic", "description": question}],
+            },
+        },
+        "eligibility": {
+            "inclusion": [{"id": "include-topic", "label": "Addresses review topic", "description": question}],
+            "exclusion": [{
+                "id": "exclude-outside-topic",
+                "label": "Outside review topic",
+                "description": "Does not address the stated review question.",
+            }],
+        },
+        "searchable_scope": {
+            "concepts": [{
+                "id": "review-topic",
+                "label": "Review topic",
+                "role": "essential",
+                "eligibility_refs": ["include-topic"],
+                "framework_slots": ["topic"],
+                "definition": question,
+                "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+                "provisional_fragility": "fragile",
+                "term_families": [question],
+            }]
+        },
+        "screening_only": {"properties": []},
+        "filters_and_limits": {
+            "decisions": [
+                {
+                    "id": "methodological-filter",
+                    "type": "filter",
+                    "label": "Methodological filter",
+                    "status": "rejected",
+                    "value": "none",
+                    "validated_source": "not applicable",
+                    "rationale": "No methodological filter is authorized for the recall-first evaluation build.",
+                },
+                {
+                    "id": "database-limits",
+                    "type": "limit",
+                    "label": "Database limits",
+                    "status": "rejected",
+                    "value": "none",
+                    "validated_source": "not applicable",
+                    "rationale": "No language, age, species, publication-status, or full-text limits.",
+                },
+            ]
+        },
+        "date_boundaries": {
+            "eligibility": {"start": None, "end": None},
+            "search": {"start": None, "end": None},
+            "rationale": "No date boundaries.",
+        },
+        "seeds": {"records": []},
+        "priorities": {
+            "recall": {
+                "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+                "minimum_heldout_recall": 1.0,
+            },
+            "workload": {
+                "policy": "Do not narrow solely because retrieval is large.",
+                "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement.",
+            },
+        },
+        "focused_variants": [],
+    }
 
 
 def _read_tokens(path: Path) -> list[str]:
@@ -97,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--review-search-date", help="Original review search cutoff (YYYY-MM-DD), for update/time-split fixtures.")
     parser.add_argument("--adjudication", default="user-confirmed relevant set", help="How relevance was screened/adjudicated.")
-    parser.add_argument("--protocol-json", help="JSON file with a protocol object (else a default template is written).")
+    parser.add_argument("--review-protocol-json", help="JSON file with a structured review_protocol DSL object.")
+    parser.add_argument("--protocol-json", help="Deprecated legacy free-form protocol JSON (accepted with a warning).")
     parser.add_argument("--source", help="Free-text provenance note for the fixture.")
     parser.add_argument("--pubmed-tool", default=str(DEFAULT_TOOL))
     parser.add_argument("--force", action="store_true", help="Overwrite an existing fixture.")
@@ -133,7 +219,40 @@ def main(argv: list[str] | None = None) -> int:
     in_pubmed = run_eval.resolve_in_pubmed(tool, pmids)
     not_in_pubmed = [p for p in pmids if p not in in_pubmed]
 
-    protocol = json.loads(Path(args.protocol_json).read_text(encoding="utf-8")) if args.protocol_json else dict(DEFAULT_PROTOCOL)
+    if args.review_protocol_json and args.protocol_json:
+        raise SystemExit("use only one of --review-protocol-json or deprecated --protocol-json")
+    legacy_protocol = None
+    if args.review_protocol_json:
+        review_protocol = json.loads(Path(args.review_protocol_json).read_text(encoding="utf-8"))
+    elif args.protocol_json:
+        supplied = json.loads(Path(args.protocol_json).read_text(encoding="utf-8"))
+        if isinstance(supplied, dict) and "dsl_version" in supplied:
+            review_protocol = supplied
+        else:
+            warnings.warn(
+                "--protocol-json with a free-form protocol is deprecated; use "
+                "--review-protocol-json with the structured DSL",
+                FutureWarning,
+                stacklevel=2,
+            )
+            review_protocol = None
+            legacy_protocol = supplied
+    else:
+        review_protocol = default_review_protocol(question, f"eval-{args.id}")
+
+    if review_protocol is not None:
+        review_protocol = copy.deepcopy(review_protocol)
+        review_protocol.setdefault("review", {})["question"] = question
+        seed_records = review_protocol.setdefault("seeds", {}).setdefault("records", [])
+        if args.development_pmids and not seed_records:
+            seed_records.extend(
+                {
+                    "pmid": str(pmid),
+                    "role": "discovery-candidate",
+                    "rationale": "Development PMID supplied when the fixture was created.",
+                }
+                for pmid in args.development_pmids
+            )
 
     fixture = {
         "id": args.id,
@@ -145,13 +264,16 @@ def main(argv: list[str] | None = None) -> int:
         "gold_source": gold_source,
         "gold_adjudication": args.adjudication,
         "review_search_date": args.review_search_date,
-        "protocol": protocol,
         "seed_pmids_given_to_skill": [int(p) for p in args.development_pmids],
         "development_pmids_given_to_skill": [int(p) for p in args.development_pmids],
         "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). "
                  "Harness reports reachable vs. unreachable gold separately.",
     }
-    if not args.protocol_json:
+    if review_protocol is not None:
+        fixture["review_protocol"] = review_protocol
+    else:
+        fixture["protocol"] = legacy_protocol
+    if not args.review_protocol_json and not args.protocol_json:
         fixture["protocol_note"] = "Auto-generated default protocol — review and tighten for this topic before running generate.py."
     if unresolved_dois:
         fixture["unresolved_dois"] = unresolved_dois
@@ -169,8 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[make_fixture]   not in PubMed (excluded from recall denominator at score time): {', '.join(not_in_pubmed)}")
     if unresolved_dois:
         print(f"[make_fixture]   unresolved DOIs ({len(unresolved_dois)}): {', '.join(unresolved_dois[:10])}{' ...' if len(unresolved_dois) > 10 else ''}")
-    if not args.protocol_json:
-        print("[make_fixture] default protocol written - review/tighten it, then: "
+    if not args.review_protocol_json and not args.protocol_json:
+        print("[make_fixture] default review_protocol written - review/tighten it, then: "
               f"python evals/generate.py {args.id}")
     return 0
 

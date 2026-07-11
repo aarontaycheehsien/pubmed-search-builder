@@ -10,14 +10,89 @@
   ],
   "source": "CLEF TAR 2018 Task 2 (Testing), content-level qrels — finally-included studies of Cochrane review CD011431.",
   "source_url": "https://github.com/CLEF-TAR/tar/tree/master/2018-TAR/Task2/Testing",
-  "protocol": {
-    "seeds": "none — proceed under the no-seed workflow",
-    "framework": "diagnostic (PIRD / diagnostic PICO). Index test = rapid diagnostic tests (RDTs); target condition = non-falciparum / Plasmodium vivax malaria.",
-    "essential_concepts": "malaria; rapid diagnostic test (RDT). Decide essential block structure yourself per the skill's anti-pattern guidance (prefer fewer AND blocks).",
-    "optional_blocks": "DECLINE all optional secondary AND blocks — do NOT add a reference-standard / diagnostic-accuracy block, do NOT add a separate 'endemic countries' geographic block, and do NOT require a non-falciparum/species AND block (handle species scope at screening to protect recall).",
-    "methodological_filter": "none",
-    "limits": "none (no date, language, species, or age limits)",
-    "final_cleanup": "remove exact duplicate terms and genuinely zero-hit phrases (after ruling out typos); keep all recall-bearing terms; apply automatically without asking."
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-cd011431",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "CLEF topic description and fixture author decisions."
+    },
+    "review": {
+      "question": "Rapid diagnostic tests for diagnosing uncomplicated non-falciparum or Plasmodium vivax malaria in endemic countries (a diagnostic-test-accuracy review: in people with suspected non-falciparum / P. vivax malaria, what is the accuracy of rapid diagnostic tests?)",
+      "framework": {
+        "name": "PIRD",
+        "rationale": "Diagnostic-test-accuracy review of malaria rapid diagnostic tests; species, endemic setting, and reference standard are screened to protect recall.",
+        "slots": [
+          {"id": "population", "label": "Population", "description": "People with suspected uncomplicated non-falciparum malaria."},
+          {"id": "index_test", "label": "Index test", "description": "Malaria rapid diagnostic tests."},
+          {"id": "target_condition", "label": "Target condition", "description": "Non-falciparum or Plasmodium vivax malaria."},
+          {"id": "reference_standard", "label": "Reference standard", "description": "Eligible reference standard confirmed during screening."}
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {"id": "inc_malaria", "label": "Eligible malaria", "description": "Suspected or confirmed uncomplicated non-falciparum or P. vivax malaria."},
+        {"id": "inc_rdt", "label": "Rapid diagnostic test", "description": "Evaluates a malaria rapid diagnostic test."},
+        {"id": "inc_diagnostic", "label": "Diagnostic evaluation", "description": "Reports diagnostic performance against an eligible reference standard."},
+        {"id": "inc_setting", "label": "Endemic setting", "description": "Conducted in a malaria-endemic setting."}
+      ],
+      "exclusion": [
+        {"id": "exc_falciparum_only", "label": "Falciparum-only scope", "description": "Evaluates only P. falciparum without eligible non-falciparum results."}
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "malaria",
+          "label": "Malaria",
+          "role": "essential",
+          "eligibility_refs": ["inc_malaria"],
+          "framework_slots": ["population", "target_condition"],
+          "definition": "Human malaria, searched broadly without requiring a species term.",
+          "rationale": "Malaria is the stable condition anchor; requiring species language could miss eligible reports.",
+          "provisional_fragility": "stable",
+          "term_families": ["malaria", "Plasmodium"]
+        },
+        {
+          "id": "rapid_diagnostic_test",
+          "label": "Rapid diagnostic tests",
+          "role": "essential",
+          "eligibility_refs": ["inc_rdt"],
+          "framework_slots": ["index_test"],
+          "definition": "Point-of-care rapid diagnostic tests for malaria antigen or parasite detection.",
+          "rationale": "The index-test family is central and normally explicit in searchable fields.",
+          "provisional_fragility": "fragile",
+          "term_families": ["rapid diagnostic test", "rapid test", "RDT", "immunochromatographic test"]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": [
+        {"id": "species_scope", "label": "Non-falciparum species", "eligibility_refs": ["inc_malaria"], "instructions": "Confirm non-falciparum or P. vivax results during screening.", "recall_rationale": "Species may be absent from titles and abstracts or reported only in subgroup data."},
+        {"id": "diagnostic_accuracy", "label": "Accuracy and reference standard", "eligibility_refs": ["inc_diagnostic"], "instructions": "Confirm eligible diagnostic-performance data and reference standard.", "recall_rationale": "Accuracy language and reference standards are inconsistently abstracted."},
+        {"id": "endemic_setting", "label": "Endemic-country setting", "eligibility_refs": ["inc_setting"], "instructions": "Confirm malaria-endemic setting during screening.", "recall_rationale": "A geographic/endemic-setting block would exclude eligible records with sparse location reporting."}
+      ]
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {"id": "method_filter", "type": "filter", "label": "Diagnostic-method filter", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No diagnostic hedge is required for the recall-first search."},
+        {"id": "database_limits", "type": "limit", "label": "Database limits", "status": "rejected", "value": "none", "validated_source": null, "rationale": "No date, language, species, age, geographic, publication-status, or full-text limits."}
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {"start": null, "end": null},
+      "search": {"start": null, "end": null},
+      "rationale": "No date boundary."
+    },
+    "seeds": {"records": []},
+    "priorities": {
+      "recall": {"policy": "Recall first; decline optional no-seed heuristic evaluation because hidden gold is scored independently.", "minimum_heldout_recall": 1.0},
+      "workload": {"policy": "Do not narrow solely because retrieval is large.", "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."}
+    },
+    "focused_variants": []
   },
   "seed_pmids_given_to_skill": [],
   "notes": "Diagnostic-test-accuracy review. Gold set = 26 included studies. No hand-built baseline strategy: use evals/generate.py (Phase 2) to have the skill build one. Some gold studies may predate or fall outside PubMed; the harness reports reachable vs. unreachable separately."

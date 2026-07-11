@@ -20,6 +20,8 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue((output / "SKILL.md").is_file())
             self.assertTrue((output / "agents" / "openai.yaml").is_file())
             self.assertTrue((output / "references" / "workflow.md").is_file())
+            self.assertTrue((output / "references" / "protocol-dsl.md").is_file())
+            self.assertTrue((output / "schemas" / "review-protocol.schema.json").is_file())
             self.assertTrue((output / "scripts" / "manifest_tool.py").is_file())
             self.assertFalse((output / "README.md").exists())
             self.assertFalse((output / "tests").exists())
