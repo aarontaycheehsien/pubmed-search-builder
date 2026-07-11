@@ -77,7 +77,7 @@ After the scope is locked:
 2. Discover additional candidates with a high-precision pilot query, similar articles, citation links, or independently identified prior-review studies when useful.
 3. Screen every record that may influence term mining as `include`, `exclude`, or `uncertain` against the locked scope.
 4. Assign `discovery`, `holdout`, `both`, `heuristic`, or `neither` roles.
-5. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`.
+5. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`; use deterministic `--allocate-holdout` when roles are not already frozen.
 6. Record the ledger with `manifest_tool.py state record-candidate-screen`.
 
 Only screened-in `discovery` or `both` records may feed term mining. Do not feed high-overlap related records directly into `term-rank`. Unscreened neighbors may remain a separately labelled heuristic benchmark.
@@ -92,7 +92,7 @@ For each essential concept:
 
 1. Build a variant list from the scope artifact, accepted brainstorm families, accepted discovery records, MeSH entry terms, acronyms, spelling/hyphenation/morphology variants, older/newer terms, and PubMed ATM clues.
 2. Run `mesh_tool.py sweep --details` and complete the MeSH/SCR candidate ledger before drafting the block. Inspect scope, entry terms, tree/explosion context, and plausible rejected descriptors.
-3. Run `pubmed_tool.py term-rank` only on screened-in discovery records. Treat coverage/lift output as candidate evidence, never automatic inclusion.
+3. Run `pubmed_tool.py term-rank --candidate-ledger candidate_ledger.json` only on screened-in discovery records. Review its diverse MeSH/keyword/acronym/phrase selection and marginal-record coverage; treat coverage/lift output as candidate evidence, never automatic inclusion.
 4. Classify the concept as stable, fragile, or very fragile. Use the exact-label plus descriptive/action safety layer for fragile concepts; offer the sensitive leave-out design for very fragile concepts.
 5. Draft MeSH/SCR, title/abstract, proximity, and wildcard layers. Read `references/tiab-expansion.md` and `references/wildcard-and-truncation.md` when those features are reached.
 6. Test accepted descriptors, plausible rejected descriptors when recall may be affected, major text-word clusters, MeSH-only, text-word-only, and combined blocks.
@@ -132,7 +132,7 @@ Never hand off a final strategy with an unexplained missed in-scope holdout, see
 
 ## 7. Run the critic and revise
 
-Read `references/press-critic.md`. Save `critic_round_<N>.json`, validate it with `scripts/critic_tool.py`, and record it with `manifest_tool.py state record-critic`.
+Read `references/press-critic.md`. Build a hashed evidence bundle, save a version-2 `critic_round_<N>.json`, validate it with `scripts/critic_tool.py`, and record it with `manifest_tool.py state record-critic`. A later round must carry every previously open finding ID forward as resolved, accepted-risk, not-applicable, or still open.
 
 Route findings:
 

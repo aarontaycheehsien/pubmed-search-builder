@@ -18,6 +18,14 @@ Run the critic in fresh context when possible. Give it the raw artifacts needed 
 - PubMed translations, counts, samples, seed/holdout results, gap analyses, and filter comparisons;
 - prior critic findings and revision dispositions only when checking whether they were resolved.
 
+Freeze exactly those inputs before review:
+
+```bash
+python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence scope=retrieval_scope_v1.json --evidence ledger=candidate_ledger.json --evidence probes=probe_summary.json --output critic_evidence_1.json
+```
+
+The bundle hashes every file. A critic receipt fails if evidence changes after review.
+
 ## Required review domains
 
 Review the six PRESS 2015 elements:
@@ -45,9 +53,11 @@ Save each round as `critic_round_<N>.json`:
 
 ```json
 {
+  "critic_version": 2,
   "round": 1,
   "scope_version": 1,
   "strategy_file": "strategy_v1.txt",
+  "evidence_bundle": "critic_evidence_1.json",
   "reviewed_domains": [
     "research-question",
     "operators",
@@ -57,14 +67,19 @@ Save each round as `critic_round_<N>.json`:
     "limits-filters",
     "hybrid-integrity"
   ],
+  "domain_verdicts": [
+    {"domain": "research-question", "status": "pass", "evidence_refs": ["scope", "strategy"]}
+  ],
   "overall_status": "revise",
   "findings": [
     {
+      "finding_id": "F001",
       "press_element": "3. Subject headings",
       "severity": "must-fix",
       "classification": "lexical",
       "affected_component": "condition block",
       "evidence": "mesh_condition.json and block_counts.json",
+      "evidence_refs": ["strategy", "probes"],
       "recommendation": "Inspect the broader descriptor and its tree context.",
       "required_reprobe": "MeSH-only, tiab-only, combined block, holdout retrieval",
       "status": "open"
@@ -75,7 +90,7 @@ Save each round as `critic_round_<N>.json`:
 
 Allowed severities are `must-fix`, `should-fix`, and `document`. Allowed classifications are `lexical`, `structural`, `scope`, `filter`, `syntax`, and `reporting`. Allowed finding statuses are `open`, `resolved`, `accepted-risk`, and `not-applicable`.
 
-Validate the artifact with `scripts/critic_tool.py`. `overall_status: pass` is invalid while an open must-fix finding exists.
+Version 2 requires one evidence-referenced verdict for each required domain (the abbreviated example above shows one). `not-applicable` requires a rationale. Finding IDs are stable across rounds. Validate the artifact with `scripts/critic_tool.py`. `overall_status: pass` is invalid while an open actionable finding exists, and the manifest rejects a round that silently drops a previously open ID.
 
 ## Routing
 

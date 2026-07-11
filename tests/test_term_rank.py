@@ -96,6 +96,24 @@ class TermRankTests(unittest.TestCase):
         self.assertEqual(result["candidates_scored"], 2)
         self.assertEqual(result["candidates_unscored"], 1)
 
+    def test_selection_budget_is_diverse_across_extraction_layers(self):
+        rows = [
+            {"term": "A", "field": "mesh", "relevant_df": 5, "sources": ["mesh"], "supporting_pmids": ["1"]},
+            {"term": "B", "field": "mesh", "relevant_df": 4, "sources": ["mesh"], "supporting_pmids": ["2"]},
+            {"term": "C", "field": "tiab", "relevant_df": 2, "sources": ["keyword"], "supporting_pmids": ["3"]},
+            {"term": "D", "field": "tiab", "relevant_df": 1, "sources": ["acronym"], "supporting_pmids": ["4"]},
+        ]
+        selected = pubmed_tool.select_diverse_term_candidates(rows, 3)
+        self.assertEqual({row["selection_bucket"] for row in selected}, {"mesh", "keyword", "acronym"})
+
+    def test_selection_records_marginal_relevant_set_coverage(self):
+        rows = [
+            {"term": "common", "field": "mesh", "relevant_df": 2, "sources": ["mesh"], "supporting_pmids": ["1", "2"]},
+            {"term": "rescue", "field": "mesh", "relevant_df": 1, "sources": ["mesh"], "supporting_pmids": ["3"]},
+        ]
+        selected = pubmed_tool.select_diverse_term_candidates(rows, 2)
+        self.assertEqual([row["marginal_record_count_at_selection"] for row in selected], [2, 1])
+
     def test_tiab_document_frequency_is_per_record_and_flags_in_strategy(self):
         records = [
             {"pmid": "1", "title": "", "abstract": "machine learning improves machine learning outcomes", "keywords": [], "mesh_headings": []},

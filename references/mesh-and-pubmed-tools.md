@@ -227,7 +227,7 @@ Interpretation and guardrails: relative recall is **relative to the benchmark, n
 
 ### Objective term ranking
 
-Use `term-rank` to turn a **screened-in discovery set** into a discrimination-scored candidate list. `--fields` accepts `tiab` and/or `mesh`; scores include `coverage`, PubMed `background_count`, and `lift`. Inputs are mutually exclusive: `--pmids`, `--mine-json`, or `--relevant-query-file`. Prefer `--pmids` from the validated candidate ledger. When reusing `--mine-json`, pass `--only-pmids` for the accepted discovery whitelist. A raw pilot query may discover records, but its hits must be screened before their terms influence the strategy. Treat every ranked term as a candidate and classify it within the locked scope. To bound NCBI calls, only the top `--max-terms` candidates by document frequency are scored (default 40); raise it deliberately or restrict `--fields` to one layer when justified.
+Use `term-rank` to turn a **screened-in discovery set** into a discrimination-scored candidate list. Prefer `--candidate-ledger candidate_ledger.json`; this enforces discovery-only roles. `--fields` accepts `tiab` and/or `mesh`; scores include coverage, PubMed background count, lift, supporting PMIDs, selection layer, and marginal record coverage. The bounded `--max-terms` budget is selected across MeSH, author-keyword, acronym, and phrase layers so one layer cannot crowd out the others. Treat every ranked term as a candidate and classify it within the locked scope.
 
 `pubmed_tool.py` runs pre-command and query-translation hooks automatically:
 
@@ -294,6 +294,7 @@ Use `scripts/manifest_tool.py` to maintain a canonical `run_manifest.json` prove
 
 ```bash
 python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug pressure-ulcer
+python scripts/workflow_tool.py --manifest run_manifest.json --kind search --label "main strategy" --output final_search.json --input full_strategy.txt --scope-version 1 -- python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0 --output final_search.json
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0" --count 192246 --label "main strategy" --note "final topic-only count"
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind sample --command "python scripts/pubmed_tool.py sample --query-file draft_strategy.txt --retmax 5 --output sample.json" --output sample.json --label "draft sample"
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind artifact --command "python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --output audit_pressure-ulcer_2026-05-31.md" --output audit_pressure-ulcer_2026-05-31.md --note "audit markdown"
@@ -302,7 +303,7 @@ python scripts/manifest_tool.py show --manifest run_manifest.json --validate --c
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
 
-`add` auto-creates the manifest, stamps UTC time and sequence, and records supersession. Kinds include `scope`, `candidate-screen`, `search`, `fetch`, `related`, `mine`, `sample`, `term-rank`, `recall`, `batch`, `variants`, `validate`, `qa`, `critic`, `revision`, `mesh`, `artifact`, and `other`. Tag sweeps/counts with `--block <label>`. `show --validate --check-files` checks structure and paths; `--require-complete-loop` adds the binding workflow gate. `report` surfaces scope, candidate screening, critic rounds, revision cycles, block evidence, audit path, and completion gaps.
+Use `workflow_tool.py` for executable stages. It runs the command without a shell, refuses to register failures, and records return code, scope version, and input/output SHA-256 hashes. Direct `manifest_tool.py add` remains for already-created/manual artifacts. `show --validate --check-files` detects later file mutation; `--require-complete-loop` also parses validation and final-QA contents rather than accepting file existence alone.
 
 ### Build-state tracking
 
@@ -316,6 +317,7 @@ python scripts/manifest_tool.py state resolve-gate filter none
 python scripts/manifest_tool.py state lock-scope --scope-file retrieval_scope_v1.json
 python scripts/candidate_ledger.py candidate_ledger.json --output candidate_ledger_validation.json
 python scripts/manifest_tool.py state record-candidate-screen --ledger-file candidate_ledger.json --validation-file candidate_ledger_validation.json
+python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence scope=retrieval_scope_v1.json --output critic_evidence_1.json
 python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
 python scripts/manifest_tool.py state record-critic --critic-file critic_round_1.json --validation-file critic_round_1_validation.json
 python scripts/manifest_tool.py state check-complete

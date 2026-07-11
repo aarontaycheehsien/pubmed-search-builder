@@ -5,8 +5,8 @@ Richer than the "Create Fixture" tab in gui.py: it also exposes the full
 **protocol** (the gate-resolving instructions the skill follows in Phase 2) as
 editable fields, and previews the exact fixture JSON before writing.
 
-It shells out to make_fixture.py (reusing its gold-set resolution: PMIDs, DOIs
-via PubMed [AID], a PMIDs file, or a defining query) and passes the edited
+It shells out to make_fixture.py (reusing its gold-set resolution: adjudicated
+PMIDs, DOIs via PubMed [AID], or a PMIDs file) and passes the edited
 protocol via --protocol-json, so nothing is reimplemented.
 
 Launch by double-clicking ``make_fixture_gui.bat`` or run:
@@ -82,7 +82,6 @@ class FixtureGUI(tk.Tk):
             ("pmids", "PMIDs (space-separated)"),
             ("dois", "DOIs file"),
             ("pmids_file", "PMIDs file"),
-            ("query", "Defining query file"),
         ]):
             ttk.Radiobutton(gold, text=label, variable=self.src, value=val,
                             command=self._toggle_src).grid(row=i, column=0, sticky="w")
@@ -90,10 +89,6 @@ class FixtureGUI(tk.Tk):
         self.g_input.grid(row=0, column=1, rowspan=2, sticky="we", padx=6)
         self.g_browse = ttk.Button(gold, text="Browse...", command=self._browse)
         self.g_browse.grid(row=2, column=1, sticky="w", padx=6)
-        ttk.Label(gold, text="Query retmax").grid(row=3, column=0, sticky="w")
-        self.g_retmax = ttk.Entry(gold, width=8)
-        self.g_retmax.insert(0, "1000")
-        self.g_retmax.grid(row=3, column=1, sticky="w", padx=6)
         gold.columnconfigure(1, weight=1)
 
         # Protocol (editable, pre-filled with defaults)
@@ -127,9 +122,8 @@ class FixtureGUI(tk.Tk):
 
     # ----- helpers ------------------------------------------------------
     def _toggle_src(self) -> None:
-        is_file = self.src.get() in ("dois", "pmids_file", "query")
+        is_file = self.src.get() in ("dois", "pmids_file")
         self.g_browse.configure(state="normal" if is_file else "disabled")
-        self.g_retmax.configure(state="normal" if self.src.get() == "query" else "disabled")
 
     def _browse(self) -> None:
         path = filedialog.askopenfilename(title="Select gold-source file",
@@ -167,7 +161,6 @@ class FixtureGUI(tk.Tk):
             "pmids": f"PMIDs (CLI): {info['value']}",
             "dois": f"DOIs file: {info['value']} (resolved to PMIDs on create)",
             "pmids_file": f"PMIDs file: {info['value']}",
-            "query": f"defining query: {info['value']} (retmax {self.g_retmax.get().strip()})",
         }[src]
         preview = {
             "id": info["id"],
@@ -201,8 +194,9 @@ class FixtureGUI(tk.Tk):
             cmd += ["--gold-dois-file", info["value"]]
         elif src == "pmids_file":
             cmd += ["--gold-pmids-file", info["value"]]
-        else:
-            cmd += ["--gold-query-file", info["value"], "--gold-retmax", self.g_retmax.get().strip() or "1000"]
+        else:  # pragma: no cover - UI exposes only adjudicated PMID/DOI sources
+            messagebox.showerror("Create", "Unsupported gold source.")
+            return
         if self.f_force.get():
             cmd += ["--force"]
         self._launch(cmd)

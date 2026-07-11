@@ -18,8 +18,8 @@ console window) or run `python evals/gui.py`. The window exposes every option:
   persist it to the fixture (writes `<id>.strategy.txt` and sets `strategy_file`),
   so a topic without a baseline becomes scorable going forward. Leave the box
   empty to score the fixture's existing baseline.
-- **Create Fixture** tab — enter a topic id + question, pick a gold source
-  (PMIDs, DOIs file, PMIDs file, or a defining query), and create a fixture from
+- **Create Fixture** tab — enter a topic id + question, pick an adjudicated gold source
+  (PMIDs, DOIs file, or PMIDs file), and create a fixture from
   any source (see "Bring your own topic" below). The new topic appears in the
   Run Eval dropdown automatically.
 
@@ -111,7 +111,8 @@ Fixture schema:
   "question": "plain-language review question",
   "strategy_file": "CD011926.strategy.txt",
   "blocks_file": "CD011926.blocks.json",
-  "gold_relevant_pmids": [9350892, 10878046, "..."],
+  "evaluation_gold_pmids": [9350892, 10878046, "..."],
+  "development_pmids_given_to_skill": [],
   "source": "where the gold set came from"
 }
 ```
@@ -122,7 +123,8 @@ Fixture schema:
 
 The harness is **source-agnostic** — a fixture is only a question + a gold set of
 relevant PMIDs + a protocol. The gold set can come from a published review's
-included studies, your own curated set, a list of DOIs, or a defining query.
+included studies, your own curated set, or a list of DOIs. A retrieval query
+cannot define its own gold set.
 `make_fixture.py` builds the fixture and resolves the gold set for you:
 
 ```bash
@@ -134,9 +136,9 @@ python evals/make_fixture.py --id MYREVIEW --question "..." \
 python evals/make_fixture.py --id SR2024 --question-file q.txt \
     --gold-dois-file included_dois.txt --suite my-reviews
 
-# from a defining query (its PubMed results become the gold set)
-python evals/make_fixture.py --id PRIORSEARCH --question "..." \
-    --gold-query-file prior_search.txt --gold-retmax 500
+# optionally expose a separate development subset to the skill
+python evals/make_fixture.py --id SR2024 --question "..." \
+    --gold-pmids-file included_pmids.txt --development-pmids 12345678 23456789
 ```
 
 It writes `datasets/<suite>/<id>.json` with a **default protocol** — review and
@@ -169,8 +171,9 @@ Drive the **skill itself** to generate the strategy under test, then score it
 with the Phase 1 engine. Approach: front-load a `protocol` in the prompt that
 pre-resolves every gate (the skill's own "protocol already decides it" bypass),
 so the agent runs unattended ("approach A" — scores search *construction*, not
-interactive elicitation). The gold PMIDs are held back from the prompt to
-prevent leakage.
+interactive elicitation). Evaluation gold is absent from the packaged runtime
+workspace, prompt, output path, and transcript. Scoring reports never-reviewed
+evaluation recall separately from records the run reviewed or mined.
 
 ### Headless driver (`drivers/codex.py`) — spike confirmed
 
@@ -210,7 +213,10 @@ python evals/generate.py CD011431 --effort medium --timeout 1800
 A full build is an agentic run (minutes, real tokens). Per run it writes
 `results/<id>/run-<UTC>/` containing the prompt, JSONL transcript, the skill's
 artifacts (strategy, blocks, audit, manifest), and `scorecard.json`. The gold
-PMIDs are **not** in the prompt (no leakage). If your shell caps command time,
+PMIDs are **not** in the agent-readable workspace (not merely omitted from the
+prompt). A run is scored only after the content-aware complete-loop gate passes.
+The scorecard also reports a critic before/after ablation when round 1 reviewed
+a saved strategy snapshot distinct from the final strategy. If your shell caps command time,
 launch it in the background.
 
 ### Still to build

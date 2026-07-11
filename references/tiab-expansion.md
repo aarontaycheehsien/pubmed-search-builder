@@ -79,6 +79,9 @@ Run `pubmed_tool.py term-rank` (see `mesh-and-pubmed-tools.md`) to score candida
 - `coverage`: the share of relevant records that contain the term (recall potential within known-relevant records).
 - `background_count`: the term's count across PubMed (a noise proxy).
 - `lift`: coverage divided by the term's PubMed prevalence (distinctiveness). High-coverage, high-lift terms are strong candidates; high-coverage but low-lift terms (e.g. `"Animals"[Mesh]`) are usually noise.
+- `supporting_pmids` and `marginal_record_count_at_selection`: which discovery records support a term and how many records it newly represents when the bounded scoring budget selects it.
+
+The background-count budget is selected round-robin across MeSH, author-keyword, acronym, and phrase layers, with deterministic marginal-record coverage inside each layer. This prevents frequent MeSH or generic phrases from consuming every API call while rare terms that rescue one discovery record go untested.
 
 `term-rank` drops obvious non-topical noise before scoring so it does not crowd the ranked list: structured-abstract section labels (OBJECTIVE, METHODS, RESULTS, CONCLUSIONS, …), statistical fragments (e.g. `p 0`, `95 ci`), and non-topical MeSH — check tags (Humans, Animals, Male, Female, age groups) and common geographic descriptors (e.g. Queensland). The geographic list is curated rather than exhaustive, so a rare place name can still appear; treat any that does as noise.
 

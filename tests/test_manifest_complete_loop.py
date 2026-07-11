@@ -59,6 +59,30 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         return path
 
     def critic_receipt(self, name, payload):
+        strategy = self.dir / str(payload["strategy_file"])
+        strategy.parent.mkdir(parents=True, exist_ok=True)
+        if not strategy.exists():
+            strategy.write_text("randomized[tiab]", encoding="utf-8")
+        bundle = self.dir / name.replace(".json", "_evidence.json")
+        critic_tool.build_evidence_bundle([f"strategy={strategy}"], bundle)
+        payload = dict(payload)
+        payload["critic_version"] = 2
+        payload["evidence_bundle"] = bundle.name
+        payload["domain_verdicts"] = [
+            {
+                "domain": domain,
+                "status": "finding" if payload.get("overall_status") == "revise" and domain == "text-words" else "pass",
+                "evidence_refs": ["strategy"],
+            }
+            for domain in sorted(critic_tool.REQUIRED_DOMAINS)
+        ]
+        upgraded = []
+        for index, item in enumerate(payload.get("findings", []), start=1):
+            item = dict(item)
+            item.setdefault("finding_id", f"F{index:03d}")
+            item.setdefault("evidence_refs", ["strategy"])
+            upgraded.append(item)
+        payload["findings"] = upgraded
         artifact = self.write_json(name, payload)
         receipt = self.dir / name.replace(".json", "_validation.json")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -147,7 +171,20 @@ class ManifestCompleteLoopTests(unittest.TestCase):
                 "strategy_file": "strategy_v2.txt",
                 "reviewed_domains": domains,
                 "overall_status": "pass",
-                "findings": [],
+                "findings": [
+                    {
+                        "finding_id": "F001",
+                        "press_element": "4. Text-word search",
+                        "severity": "must-fix",
+                        "classification": "lexical",
+                        "affected_component": "condition",
+                        "evidence": "sample.json",
+                        "evidence_refs": ["strategy"],
+                        "recommendation": "Add historical synonym",
+                        "required_reprobe": "block count",
+                        "status": "resolved",
+                    }
+                ],
             },
         )
         self.state("record-critic", "--critic-file", passed, "--validation-file", passed_receipt)
@@ -188,6 +225,114 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(state["gates"]["concept"], "pending")
         self.assertEqual(state["blocks"], {})
         self.assertEqual(state["candidate_screening"]["status"], "pending")
+
+    def test_complete_gate_rejects_failed_final_qa_artifact(self):
+        self.resolve_base_gates_and_scope()
+        domains = sorted(critic_tool.REQUIRED_DOMAINS)
+        critic, critic_receipt = self.critic_receipt(
+            "critic_round_1.json",
+            {
+                "round": 1,
+                "scope_version": 1,
+                "strategy_file": "strategy.txt",
+                "reviewed_domains": domains,
+                "overall_status": "pass",
+                "findings": [],
+            },
+        )
+        self.state("record-critic", "--critic-file", critic, "--validation-file", critic_receipt)
+
+        final_search = self.write_json("final_search.json", {"count": 1000})
+        self.add(
+            "search",
+            "python scripts/pubmed_tool.py search --query-file strategy.txt --retmax 0 --output final_search.json",
+            output=final_search,
+            count=1000,
+            label="final topic-only strategy",
+        )
+        failed_qa = self.write_json(
+            "final_qa.json",
+            {
+                "hook": "pre_final_strategy_qa",
+                "ok": False,
+                "issues": [
+                    {
+                        "severity": "error",
+                        "code": "unbalanced_parentheses",
+                        "message": "Unbalanced parentheses.",
+                    }
+                ],
+            },
+        )
+        self.add(
+            "qa",
+            "python scripts/hooks_tool.py final-qa --strategy-file strategy.txt",
+            output=failed_qa,
+        )
+        audit = self.dir / "audit_demo.md"
+        audit.write_text("# Audit", encoding="utf-8")
+        self.add(
+            "artifact",
+            "python scripts/audit_markdown.py audit.json --output audit_demo.md",
+            output=audit,
+        )
+
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertTrue(
+            any(
+                "latest final-qa output did not pass" in issue
+                and "unbalanced_parentheses" in issue
+                for issue in receipt["issues"]
+            ),
+            receipt["issues"],
+        )
+
+    def test_complete_gate_rejects_unresolved_required_validation_miss(self):
+        self.resolve_base_gates_and_scope()
+        self.state("resolve-gate", "seed", "provided")
+        domains = sorted(critic_tool.REQUIRED_DOMAINS)
+        critic, critic_receipt = self.critic_receipt(
+            "critic_round_1.json",
+            {
+                "round": 1,
+                "scope_version": 1,
+                "strategy_file": "strategy.txt",
+                "reviewed_domains": domains,
+                "overall_status": "pass",
+                "findings": [],
+            },
+        )
+        self.state("record-critic", "--critic-file", critic, "--validation-file", critic_receipt)
+        final_search = self.write_json("final_search.json", {"operation": "search", "count": 1000, "ok": True})
+        self.add(
+            "search",
+            "python scripts/pubmed_tool.py search --query-file strategy.txt --retmax 0 --output final_search.json",
+            output=final_search,
+            count=1000,
+            label="final topic-only strategy",
+        )
+        validation = self.write_json(
+            "validation.json",
+            {"operation": "validate", "ok": True, "retrieved_pmids": [], "missed_pmids": ["9"]},
+        )
+        self.add(
+            "validate",
+            "python scripts/pubmed_tool.py validate --query-file strategy.txt --pmids 9 --output validation.json",
+            output=validation,
+        )
+        final_qa = self.write_json("final_qa.json", {"hook": "pre_final_strategy_qa", "ok": True})
+        self.add("qa", "python scripts/hooks_tool.py final-qa --strategy-file strategy.txt", output=final_qa)
+        audit = self.dir / "audit_demo.md"
+        audit.write_text("# Audit", encoding="utf-8")
+        self.add("artifact", "python scripts/audit_markdown.py audit.json --output audit_demo.md", output=audit)
+
+        rc, receipt = self.state("check-complete")
+        self.assertEqual(rc, 1)
+        self.assertTrue(
+            any("unresolved missed PMIDs: 9" in issue for issue in receipt["issues"]),
+            receipt["issues"],
+        )
 
 
 if __name__ == "__main__":

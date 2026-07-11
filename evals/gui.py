@@ -4,8 +4,7 @@
 Exposes the three CLI tools behind a window:
   * Run Eval     -> run_eval.py (score baseline, Phase 1) or generate.py (skill
                     builds the strategy, Phase 2)
-  * Create Fixture -> make_fixture.py (from PMIDs, DOIs, a PMIDs file, or a
-                    defining query)
+  * Create Fixture -> make_fixture.py (from adjudicated PMIDs, DOIs, or a PMIDs file)
 
 It shells out to the same scripts (reusing all logic) and streams their output
 live into a log pane. Long Phase 2 builds run on a worker thread so the window
@@ -156,7 +155,6 @@ class EvalGUI(tk.Tk):
             ("pmids", "PMIDs (space-separated)"),
             ("dois", "DOIs file"),
             ("pmids_file", "PMIDs file"),
-            ("query", "Defining query file"),
         ]
         for i, (val, label) in enumerate(rows):
             ttk.Radiobutton(gold, text=label, variable=self.f_src, value=val,
@@ -165,10 +163,6 @@ class EvalGUI(tk.Tk):
         self.f_input.grid(row=0, column=1, rowspan=2, sticky="we", padx=6)
         self.f_browse = ttk.Button(gold, text="Browse...", command=self._browse_gold)
         self.f_browse.grid(row=2, column=1, sticky="w", padx=6)
-        ttk.Label(gold, text="Query retmax").grid(row=3, column=0, sticky="w")
-        self.f_retmax = ttk.Entry(gold, width=8)
-        self.f_retmax.insert(0, "1000")
-        self.f_retmax.grid(row=3, column=1, sticky="w", padx=6)
         gold.columnconfigure(1, weight=1)
 
         self.f_force = tk.BooleanVar(value=False)
@@ -249,9 +243,8 @@ class EvalGUI(tk.Tk):
         return fp.parent / sfile
 
     def _toggle_src(self) -> None:
-        is_file = self.f_src.get() in ("dois", "pmids_file", "query")
+        is_file = self.f_src.get() in ("dois", "pmids_file")
         self.f_browse.configure(state="normal" if is_file else "disabled")
-        self.f_retmax.configure(state="normal" if self.f_src.get() == "query" else "disabled")
 
     def _browse_gold(self) -> None:
         path = filedialog.askopenfilename(title="Select gold-source file",
@@ -322,8 +315,9 @@ class EvalGUI(tk.Tk):
             cmd += ["--gold-dois-file", value]
         elif src == "pmids_file":
             cmd += ["--gold-pmids-file", value]
-        else:
-            cmd += ["--gold-query-file", value, "--gold-retmax", self.f_retmax.get().strip() or "1000"]
+        else:  # pragma: no cover - UI exposes only adjudicated PMID/DOI sources
+            messagebox.showerror("Create fixture", "Unsupported gold source.")
+            return
         if self.f_force.get():
             cmd += ["--force"]
         self._launch(cmd, f"make_fixture {fid}", on_done=self._refresh_topics)
