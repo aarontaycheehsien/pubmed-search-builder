@@ -919,6 +919,7 @@ def validated_receipt(path_value: str, expected_operation: str) -> dict[str, obj
 
 
 def validate_revision_artifact(path_value: str) -> dict[str, object]:
+    revision_path = Path(path_value)
     data = load_json_object(path_value, "revision-cycle artifact")
     required = (
         "revision_round",
@@ -931,6 +932,7 @@ def validate_revision_artifact(path_value: str) -> dict[str, object]:
         "required_reprobe",
         "strategy_file",
         "disposition",
+        "no_harm_file",
     )
     for field in required:
         if data.get(field) in (None, "", [], {}):
@@ -941,6 +943,47 @@ def validate_revision_artifact(path_value: str) -> dict[str, object]:
             raise ManifestError(f"revision-cycle artifact {field} must be a positive integer")
     if data.get("classification") not in {"lexical", "structural", "scope", "filter", "syntax", "reporting"}:
         raise ManifestError("revision-cycle artifact classification is invalid")
+    guard_path = Path(str(data.get("no_harm_file") or ""))
+    if not guard_path.is_absolute():
+        guard_path = revision_path.resolve().parent / guard_path
+    guard = load_json_object(str(guard_path), "revision no-harm artifact")
+    if guard.get("operation") != "revision-no-harm" or guard.get("ok") is not True:
+        raise ManifestError("revision no-harm artifact must have operation='revision-no-harm' and ok=true")
+    if guard.get("revision_kind") != "critic":
+        raise ManifestError("critic revision cycles require revision_kind='critic' in the no-harm artifact")
+    trigger = data.get("trigger_finding")
+    trigger_id = str(trigger.get("finding_id") or trigger.get("id") or "") if isinstance(trigger, dict) else str(trigger)
+    if str(guard.get("named_defect_id") or "") != trigger_id:
+        raise ManifestError("revision no-harm named_defect_id does not match trigger_finding")
+    disposition = str(data.get("disposition") or "").strip().casefold().replace("_", "-")
+    expected_guard = {
+        "accepted": "adopt",
+        "adopted": "adopt",
+        "reverted": "revert-to-baseline",
+        "revert-to-baseline": "revert-to-baseline",
+        "experimental": "experimental-only",
+        "experimental-only": "experimental-only",
+    }.get(disposition)
+    if expected_guard is None or guard.get("disposition") != expected_guard:
+        raise ManifestError("revision disposition does not match the no-harm guard disposition")
+    if expected_guard == "adopt" and guard.get("no_harm_passed") is not True:
+        raise ManifestError("an adopted revision must pass every no-harm check")
+    checks = guard.get("checks") if isinstance(guard.get("checks"), list) else []
+    check_names = {item.get("name") for item in checks if isinstance(item, dict)}
+    required_checks = {
+        "named-defect-fixed", "heldout-preserved", "required-blocks-justified",
+        "syntax-translation-stable", "scope-unchanged-or-explicit", "workload-recorded",
+    }
+    if check_names != required_checks:
+        raise ManifestError("revision no-harm artifact does not contain the six required checks")
+    authoritative = Path(str(guard.get("authoritative_strategy_file") or ""))
+    if not authoritative.is_absolute():
+        authoritative = guard_path.parent / authoritative
+    recorded_strategy = Path(str(data.get("strategy_file") or ""))
+    if not recorded_strategy.is_absolute():
+        recorded_strategy = revision_path.resolve().parent / recorded_strategy
+    if authoritative.resolve() != recorded_strategy.resolve():
+        raise ManifestError("revision strategy_file is not the no-harm guard's authoritative strategy")
     return {
         "revision_round": data["revision_round"],
         "critic_round": data["critic_round"],
@@ -950,6 +993,14 @@ def validate_revision_artifact(path_value: str) -> dict[str, object]:
         "change": data["change"],
         "strategy_file": data["strategy_file"],
         "disposition": data["disposition"],
+        "no_harm_file": str(guard_path),
+        "no_harm_sha256": sha256_file(guard_path),
+        "no_harm_passed": guard.get("no_harm_passed"),
+        "no_harm_disposition": guard.get("disposition"),
+        "failed_no_harm_checks": guard.get("failed_checks", []),
+        "workload_effect": guard.get("workload_effect"),
+        "protocol_id": guard.get("protocol_id"),
+        "protocol_sha256": guard.get("protocol_sha256"),
     }
 
 
@@ -1404,7 +1455,16 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 issues.append("vocabulary learning does not preserve registered locked concepts: " + ", ".join(missing_locked))
             proposals = payload.get("proposals") if isinstance(payload.get("proposals"), list) else []
             accepted = [item for item in proposals if isinstance(item, dict) and item.get("decision") == "accepted"]
-            if payload.get("accepted_term_count") != len(accepted) or payload.get("all_accepted_terms_retested") is not True:
+            adopted = [item for item in accepted if item.get("effective_decision") == "adopted"]
+            experimental = [item for item in accepted if item.get("effective_decision") == "experimental-only"]
+            reverted = [item for item in accepted if item.get("effective_decision") == "revert-to-baseline"]
+            if (
+                payload.get("accepted_term_count") != len(adopted)
+                or payload.get("experimental_term_count") != len(experimental)
+                or payload.get("reverted_term_count") != len(reverted)
+                or payload.get("all_accepted_terms_retested") is not True
+                or payload.get("no_harm_checks_complete") is not True
+            ):
                 issues.append("vocabulary learning does not confirm every accepted term was retested")
             for item in proposals:
                 if not isinstance(item, dict):
@@ -1423,6 +1483,28 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                     issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a held-out retest status")
                 if not isinstance(differential_sample.get("count"), int) or not isinstance(differential_sample.get("records"), list):
                     issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a differential sample")
+                guard = item.get("no_harm") if isinstance(item.get("no_harm"), dict) else {}
+                checks = guard.get("checks") if isinstance(guard.get("checks"), list) else []
+                expected_checks = {
+                    "named-defect-fixed", "heldout-preserved", "required-blocks-justified",
+                    "syntax-translation-stable", "scope-unchanged-or-explicit", "workload-recorded",
+                }
+                if {check.get("name") for check in checks if isinstance(check, dict)} != expected_checks:
+                    issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks all no-harm checks")
+                disposition = guard.get("disposition")
+                effective = item.get("effective_decision")
+                if disposition == "adopt":
+                    if guard.get("no_harm_passed") is not True or effective != "adopted":
+                        issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} was adopted without passing no-harm checks")
+                elif disposition == "experimental-only":
+                    experimental_variant = guard.get("experimental_variant") if isinstance(guard.get("experimental_variant"), dict) else {}
+                    if effective != "experimental-only" or not experimental_variant.get("variant_id") or not experimental_variant.get("label"):
+                        issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} has an unlabelled experimental disposition")
+                elif disposition == "revert-to-baseline":
+                    if effective != "revert-to-baseline":
+                        issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} did not revert after no-harm failure")
+                else:
+                    issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a valid no-harm disposition")
 
     scope_payload = read_manifest_output_json(manifest_path, scope_artifact) if scope_artifact else None
     fragile = bool(isinstance(scope_payload, dict) and scope_payload.get("fragile_topic") is True)
@@ -1633,6 +1715,30 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         if isinstance(critic, dict) and critic.get("overall_status") == "revise":
             if critic.get("round") not in revision_critic_rounds:
                 issues.append(f"critic round {critic.get('round')} required revision but no revision cycle is recorded")
+    for revision in revisions:
+        if not isinstance(revision, dict):
+            issues.append("revision-cycle state contains a non-object entry")
+            continue
+        guard_value = str(revision.get("no_harm_file") or "")
+        guard_path = Path(guard_value)
+        if not guard_path.is_absolute():
+            guard_path = manifest_path.parent / guard_path
+        if not guard_path.is_file():
+            issues.append(f"revision cycle {revision.get('revision_round')} lacks its no-harm artifact")
+            continue
+        if str(revision.get("no_harm_sha256") or "") != sha256_file(guard_path):
+            issues.append(f"revision cycle {revision.get('revision_round')} no-harm artifact changed after recording")
+            continue
+        try:
+            guard = json.loads(guard_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            issues.append(f"revision cycle {revision.get('revision_round')} no-harm artifact is invalid JSON")
+            continue
+        if guard.get("operation") != "revision-no-harm" or guard.get("disposition") != revision.get("no_harm_disposition"):
+            issues.append(f"revision cycle {revision.get('revision_round')} no-harm disposition is stale")
+        if guard.get("disposition") == "adopt" and guard.get("no_harm_passed") is not True:
+            issues.append(f"revision cycle {revision.get('revision_round')} adopted a change that failed no-harm checks")
+        issues.extend(protocol_binding_issues(guard, scope, f"revision cycle {revision.get('revision_round')} no-harm artifact"))
 
     screening_summary = screening.get("summary") if isinstance(screening.get("summary"), dict) else {}
     needs_validation = str(gates.get("seed") or "").strip().lower() in {"provided", "partial"}
@@ -2139,6 +2245,9 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             scope = state["scope"]
             if summary.get("scope_version") != scope.get("version"):
                 raise ManifestError("revision-cycle scope_version does not match the current retrieval scope")
+            binding_issues = protocol_binding_issues(summary, scope, "revision no-harm summary")
+            if binding_issues:
+                raise ManifestError("; ".join(binding_issues))
             expected_round = len(state["revision_cycles"]) + 1
             if summary.get("revision_round") != expected_round:
                 raise ManifestError(f"revision round must be sequential: expected {expected_round}")

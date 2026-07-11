@@ -161,6 +161,8 @@ Route findings:
 
 Save every material strategy revision under a new filename. Record the trigger, finding, evidence, change, expected effect, required re-probe, before/after counts, validation effect, and disposition. Use manifest supersession rather than silent overwrite.
 
+Read `references/no-harm-revisions.md` and run `revision_guard.py` before recording any critic-driven revision. Adopt it only if all six no-harm checks pass. If any check fails, keep the baseline strategy authoritative automatically; retain the revised file only as a protocol-labelled experimental variant. Apply the same gate to every accepted vocabulary proposal.
+
 Repeat objective evidence, testing, validation, and critic review until the latest critic artifact has `overall_status: pass` and no open must-fix or should-fix finding.
 
 ## 8. Final QA

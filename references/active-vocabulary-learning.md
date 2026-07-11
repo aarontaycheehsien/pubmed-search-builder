@@ -36,6 +36,8 @@ The tool extracts phrases, acronyms, keywords, and MeSH from newly included disc
 
 For later rounds, pass the prior final vocabulary-learning artifact with `--previous-learning` so only newly included records contribute new proposals.
 
+Every authored `accepted` proposal then passes the six checks in `no-harm-revisions.md`. The tool adopts only changes that fix the vocabulary gap, preserve prior held-out retrieval, stay inside the locked concept, avoid syntax/translation drift, preserve protocol scope, and report before/after workload. Failed proposals automatically revert or remain a labelled experimental-only variant.
+
 ## Adjudicate and retest
 
 Edit each proposal in the extraction artifact:

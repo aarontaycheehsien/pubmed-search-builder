@@ -1,4 +1,4 @@
 interface:
   display_name: "PubMed Search Builder"
   short_description: "Build and empirically review PubMed searches"
-  default_prompt: "Use $pubmed-search-builder to validate and compile any review-protocol DSL before retrieval, define versioned scope, run scope-safe discovery and vocabulary learning, empirically test fragility and ablation, preserve recall-first and focused strands, estimate labelled-sample burden only after recall qualification, run the PRESS-informed critic loop, and save the audit trail."
+  default_prompt: "Use $pubmed-search-builder to validate and compile any review-protocol DSL before retrieval, define versioned scope, run scope-safe discovery and vocabulary learning, empirically test fragility and ablation, preserve recall-first and focused strands, estimate labelled-sample burden only after recall qualification, enforce revision no-harm checks with automatic baseline fallback, run the PRESS-informed critic loop, and save the audit trail."

@@ -113,6 +113,45 @@ class VocabularyLearningTests(unittest.TestCase):
         self.assertEqual(retest["differential_sample"]["count"], 5)
         self.assertEqual(retest["differential_sample"]["records"][0]["pmid"], "9")
         self.assertTrue(result["all_accepted_terms_retested"])
+        self.assertTrue(result["no_harm_checks_complete"])
+        self.assertEqual(result["proposals"][0]["effective_decision"], "adopted")
+        self.assertEqual(len(result["proposals"][0]["no_harm"]["checks"]), 6)
+
+    def test_no_effect_revision_is_automatically_reverted(self):
+        extraction = self.extract()
+        proposal = extraction["proposals"][0]
+        proposal.update({"decision": "accepted", "decision_reason": "candidate", "within_locked_concept_attested": True})
+        extraction["proposals"] = [proposal]
+        blocks = self.write("blocks_no_effect.json", [{"label": "condition", "query": "asthma[tiab]"}])
+        with (
+            mock.patch.object(vocabulary.pubmed_tool, "retrieve_against_pmids", return_value=set()),
+            mock.patch.object(vocabulary.pubmed_tool, "esearch", return_value={"count": 0, "pmids": [], "query_translation_hook": {"issues": []}}),
+        ):
+            result = vocabulary.retest_learning(FakeClient(), extraction, blocks, scope_version=1, sample_size=5)
+        row = result["proposals"][0]
+        self.assertEqual(row["effective_decision"], "revert-to-baseline")
+        self.assertIn("named-defect-fixed", row["no_harm"]["failed_checks"])
+        self.assertEqual(result["accepted_term_count"], 0)
+        self.assertEqual(result["reverted_term_count"], 1)
+
+    def test_failed_revision_requires_label_to_remain_experimental(self):
+        extraction = self.extract()
+        proposal = extraction["proposals"][0]
+        proposal.update({
+            "decision": "accepted", "decision_reason": "candidate", "within_locked_concept_attested": True,
+            "retain_experimental_if_failed": True, "experimental_variant_id": "exp-term", "experimental_variant_label": "Experimental term",
+        })
+        extraction["proposals"] = [proposal]
+        blocks = self.write("blocks_experimental.json", [{"label": "condition", "query": "asthma[tiab]"}])
+        with (
+            mock.patch.object(vocabulary.pubmed_tool, "retrieve_against_pmids", return_value=set()),
+            mock.patch.object(vocabulary.pubmed_tool, "esearch", return_value={"count": 0, "pmids": [], "query_translation_hook": {"issues": []}}),
+        ):
+            result = vocabulary.retest_learning(FakeClient(), extraction, blocks, scope_version=1, sample_size=5)
+        row = result["proposals"][0]
+        self.assertEqual(row["effective_decision"], "experimental-only")
+        self.assertEqual(row["no_harm"]["experimental_variant"]["variant_id"], "exp-term")
+        self.assertEqual(result["experimental_term_count"], 1)
 
     def test_accepted_term_without_within_concept_attestation_is_rejected(self):
         extraction = self.extract()

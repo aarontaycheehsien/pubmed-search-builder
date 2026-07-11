@@ -3219,7 +3219,7 @@ def build_audit_scaffold(
                 if not isinstance(item, dict):
                     continue
                 row = dict(item)
-                row["before_after_evidence"] = audit_placeholder(
+                row["before_after_evidence"] = row.get("workload_effect") or audit_placeholder(
                     f"revision {row.get('revision_round')} before/after counts and evidence files"
                 )
                 row["validation_effect"] = audit_placeholder(
