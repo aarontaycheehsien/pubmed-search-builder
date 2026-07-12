@@ -51,6 +51,8 @@ Also stop early when no-seed discovery yields an empty or thin screened-in set (
 
 When no-seed discovery *does* screen in relevant records but no external benchmark exists, the adjudicator also computes a capture-recapture completeness estimate over the orthogonal pilot families (`completeness_estimate`; standalone `no_seed_discovery.py recapture`). Interpret it asymmetrically — a high estimate is weak positive evidence, an `undersaturated` verdict is a real recall-risk signal. It is a soft signal: it never blocks saturation or narrows scope, but an `undersaturated` verdict raises a `recall_risk` the critic/peer review must clear (add an adjacent-review benchmark, broaden a pilot family, or supply seeds). See `references/no-seed-recall-estimation.md`.
 
+When the user names adjacent or prior systematic reviews (the `name-adjacent-reviews` option in the decision, or in response to a `recall_risk`), build a semi-independent benchmark from them: `no_seed_discovery.py benchmark-harvest` (cited references and/or an included-study PMID list) → screen the candidates against the locked scope → `benchmark-freeze` → `pubmed_tool.py recall --benchmark-json`. It is non-independent and external (imports the prior review's scope bias), never a gold standard; benchmark records must not feed term mining, and low recall is a real leak signal while high recall is weak positive evidence.
+
 ## Evidence Integrity
 
 - No reviewed JSON, no decision: inspect saved `fetch`, `mine`, `sample`, candidate-ledger, and critic artifacts before using them as evidence.

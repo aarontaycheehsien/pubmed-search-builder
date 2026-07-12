@@ -121,6 +121,35 @@ Interpret it **asymmetrically**, exactly like relative recall — a high estimat
 
 To avoid false precision the estimator stays `indeterminate` below `--min-screened-in-for-estimate` (default 5 records) and reports only an *indicative* verdict below `--min-screened-in-for-firm-verdict` (default 15). With no doubleton (no record found by exactly two families) overlap is undefined: it returns the bias-corrected point estimate with no CI and an `indeterminate` / `no-recaptures` verdict. This is the same "below ~15–20 reachable candidates, indicative only" guardrail applied to the capture-recapture denominator.
 
+## Semi-independent benchmark from adjacent prior reviews
+
+"No seeds" is not the same as "no ground truth." Standard SR practice harvests the **included/cited studies of adjacent systematic reviews** as a weak external recall check. It is imperfect — it imports the prior review's scope bias — but a noisy external check beats MeSH/structural checks alone when discovery comes up empty or thin, and it is the concrete action behind the "name adjacent reviews to benchmark against" option in the empty-set `user_decision` and the capture-recapture `recall_risk`.
+
+It is **semi-independent: non-independent and external**, never an independent gold standard. Two rules keep it honest: the harvested records must be **screened against the locked scope before they count** (unscreened citations would deflate recall spuriously), and benchmark records **must never feed term mining** (only internal screened-in discovery records do).
+
+```bash
+# 1. Harvest cited references of named reviews (and/or an included-study PMID list) into a screenable set.
+python scripts/no_seed_discovery.py benchmark-harvest \
+  --review-pmids 34567890 33112233 --scope-version 1 \
+  --screening-output benchmark_screening.json --provenance-output benchmark_provenance.json
+#    (or --included-pmids-file review_included.json when you have the review's appendix list)
+
+# 2. Screen benchmark_screening.json against the locked scope (decision/title_abstract_reviewed/eligibility_reason),
+#    then freeze the screened-in set as a labelled benchmark.
+python scripts/no_seed_discovery.py benchmark-freeze \
+  --screening-file benchmark_screening.json --scope-version 1 \
+  --output prior_review_benchmark.json
+
+# 3. Run relative recall against it. The source label flows into the audit.
+python scripts/pubmed_tool.py recall --query-file strategy.txt \
+  --benchmark-json prior_review_benchmark.json --blocks-file blocks.json \
+  --output recall_prior_review.json
+```
+
+`benchmark-harvest` merges two sources — the cited references of the review PMIDs (via the `refs` elink) and any user-supplied included-study PMID list — excludes the review PMIDs themselves, and writes a provenance-blinded screening artifact on a track separate from discovery. `benchmark-freeze` keeps only screened-in `include` records and labels the artifact `prior-review-semi-independent` with `confidence: semi-independent`. Passing `--unscreened` freezes every harvested candidate as `confidence: indicative` (it then also imports citation noise) — use it only as a quick smoke test.
+
+Interpret the result **asymmetrically**, exactly like every other no-seed recall signal: low recall against the benchmark is a real leak signal (inspect and screen the missed records, then route lexical gaps to block revision and structural gaps to scope re-entry); high recall is weak positive evidence only. A prior-review benchmark is *less* strategy-adjacent than a seed-expansion benchmark, so it flatters recall less, but it still cannot prove absolute sensitivity. Record the outcome with `manifest_tool.py state resolve-recall-offer done`.
+
 ## Convenience one-liner
 
 `recall --pilot-query-file --auto-expand` can chain pilot retrieval and related expansion, but it cannot insert candidate screening between them. Use it only as a heuristic smoke test. It does not satisfy candidate-screening integrity, and its raw anchors or neighbors must not feed term mining.

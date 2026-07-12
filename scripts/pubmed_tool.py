@@ -1625,7 +1625,9 @@ def extract_benchmark_pmids(data: object, *, min_seed_overlap: int) -> list[str]
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
-        if isinstance(data.get("candidate_pmids"), list):
+        if isinstance(data.get("pmids"), list):
+            items = data["pmids"]
+        elif isinstance(data.get("candidate_pmids"), list):
             items = data["candidate_pmids"]
         elif isinstance(data.get("found_pmids"), list):
             items = data["found_pmids"]
@@ -4533,7 +4535,15 @@ def main(argv: list[str] | None = None) -> int:
                 payload = load_benchmark_or_blocks_json(args.benchmark_json)
                 benchmark_seed_pmids = extract_benchmark_pmids(payload, min_seed_overlap=max(0, args.min_seed_overlap))
                 assert_numeric_pmids(benchmark_seed_pmids, source=f"--benchmark-json {args.benchmark_json}")
-                benchmark_source = f"benchmark-json:{args.benchmark_json}"
+                if isinstance(payload, dict) and payload.get("benchmark_source_label"):
+                    # A labelled prior-review (semi-independent) benchmark carries its own integrity label.
+                    benchmark_source = (
+                        f"{payload['benchmark_source_label']} "
+                        f"({payload.get('benchmark_status', 'unknown')}; confidence={payload.get('confidence', 'unknown')}; "
+                        "non-independent, external)"
+                    )
+                else:
+                    benchmark_source = f"benchmark-json:{args.benchmark_json}"
             elif args.benchmark_query_file:
                 benchmark_query = normalize_query(read_text_source(args.benchmark_query_file))
                 if not benchmark_query:

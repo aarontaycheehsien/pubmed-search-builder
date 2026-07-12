@@ -704,9 +704,17 @@ def render_relative_recall(data: dict[str, Any]) -> list[str]:
         else:
             miss_rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS])
 
-    caveat = recall.get("caveat") or recall.get("note") or (
-        "relative recall is recorded separately from known-item seed validation; a seed-expansion benchmark is a heuristic that can flatter recall"
-    )
+    if "prior-review-semi-independent" in str(recall.get("benchmark_source") or ""):
+        default_caveat = (
+            "semi-independent prior-review benchmark: non-independent and external, it imports the prior review's "
+            "scope bias and is never an independent gold standard; interpret asymmetrically (low recall is a real "
+            "leak signal, high recall is weak positive evidence) and never mine terms from benchmark records"
+        )
+    else:
+        default_caveat = (
+            "relative recall is recorded separately from known-item seed validation; a seed-expansion benchmark is a heuristic that can flatter recall"
+        )
+    caveat = recall.get("caveat") or recall.get("note") or default_caveat
     lines = ["### Relative-recall estimation", ""]
     fields = [
         ("Relative-recall check run", "check_run"),

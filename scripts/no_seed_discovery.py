@@ -919,6 +919,192 @@ def adjudicate(
     return state, ledger
 
 
+BENCHMARK_SOURCE_LABEL = "prior-review-semi-independent"
+BENCHMARK_INTEGRITY_NOTE = (
+    "Semi-independent: non-independent and external. It imports the prior review's scope bias (and, "
+    "unscreened, citation noise), so it is never an independent gold standard. Use it only as a benchmark "
+    "for relative recall; benchmark records must not feed term mining. Interpret asymmetrically - low recall "
+    "is a real leak signal, high recall is weak positive evidence."
+)
+
+
+def _pmid_sort_key(pmid: str) -> tuple[int, str]:
+    text = str(pmid)
+    return (0, f"{int(text):020d}") if text.isdigit() else (1, text)
+
+
+def harvest_benchmark(
+    client: pubmed_tool.NcbiClient,
+    *,
+    review_pmids: list[str],
+    included_pmids: list[str],
+    scope_version: int,
+    safety_cap: int,
+    max_per_review: int,
+    binding: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Harvest a screenable benchmark-candidate set from named adjacent reviews.
+
+    Two sources are merged: a user-supplied included-study PMID list (from the
+    review's appendix) and the cited references of review PMIDs (via the ``refs``
+    elink). The review PMIDs themselves are excluded. The result is a
+    screening/provenance pair on a track separate from discovery, so the benchmark
+    can never leak into term mining.
+    """
+    review_set = {str(value) for value in review_pmids}
+    sources: dict[str, list[str]] = {}
+    order: list[str] = []
+
+    def add(pmid: Any, source: str) -> None:
+        text = str(pmid).strip()
+        if not text or text in review_set:
+            return
+        if text not in sources:
+            sources[text] = []
+            order.append(text)
+        if source not in sources[text]:
+            sources[text].append(source)
+
+    for pmid in included_pmids:
+        add(pmid, "included-study-list")
+    cap_reached = False
+    if review_set:
+        related = pubmed_tool.related_pmids(
+            client,
+            sorted(review_set, key=_pmid_sort_key),
+            links=["refs"],
+            max_per_seed=max(1, max_per_review),
+            max_total=safety_cap,
+        )
+        cap_reached = int(related.get("candidate_count_before_cap", 0) or 0) > safety_cap
+        for item in related.get("candidate_pmids", []):
+            if isinstance(item, dict) and item.get("pmid"):
+                add(item["pmid"], "prior-review-refs")
+
+    candidates = pubmed_tool.dedup_preserving_order(order)
+    fetched = pubmed_tool.efetch(client, candidates) if candidates else {"records": []}
+    by_pmid = {
+        str(record.get("pmid")): record
+        for record in fetched.get("records", [])
+        if isinstance(record, dict) and record.get("pmid")
+    }
+    screening_records = []
+    provenance_records = []
+    for pmid in candidates:
+        record = by_pmid.get(pmid, {"pmid": pmid})
+        candidate_id = blind_id(scope_version, pmid)
+        screening_records.append(
+            {
+                "candidate_id": candidate_id,
+                "pmid": pmid,
+                "title": record.get("title", ""),
+                "abstract": record.get("abstract", ""),
+                "year": record.get("year", ""),
+                "mesh_headings": record.get("mesh_headings", []),
+                "keywords": record.get("keywords", []),
+                "decision": "",
+                "title_abstract_reviewed": False,
+                "eligibility_reason": "",
+            }
+        )
+        provenance_records.append(
+            {"candidate_id": candidate_id, "pmid": pmid, "benchmark_sources": sources[pmid]}
+        )
+    source_reviews = sorted(review_set, key=_pmid_sort_key)
+    screening = {
+        "operation": "prior-review-benchmark-screening",
+        "scope_version": scope_version,
+        "benchmark_candidate": True,
+        "source_reviews": source_reviews,
+        "candidate_count": len(candidates),
+        "retrieval_safety_cap": safety_cap,
+        "safety_cap_reached": cap_reached,
+        "records": screening_records,
+        "note": (
+            "Screen these prior-review-sourced candidates against the locked scope before freezing a "
+            "benchmark. Screened-in records become a semi-independent recall benchmark; they must never "
+            "feed term mining."
+        ),
+    }
+    provenance = {
+        "operation": "prior-review-benchmark-provenance",
+        "scope_version": scope_version,
+        "source_reviews": source_reviews,
+        "records": provenance_records,
+    }
+    if binding:
+        public_binding = {key: value for key, value in binding.items() if key != "protocol_path"}
+        screening.update(public_binding)
+        provenance.update(public_binding)
+    return screening, provenance
+
+
+def freeze_benchmark(
+    screening: dict[str, Any],
+    *,
+    scope_version: int,
+    screened: bool,
+    binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Freeze a screened (or, tiered, unscreened) prior-review benchmark artifact.
+
+    A screened freeze keeps only screened-in ``include`` records and is labelled
+    ``semi-independent``. An unscreened freeze keeps every harvested candidate and
+    is labelled ``indicative`` (it imports citation noise on top of scope bias).
+    """
+    if screening.get("operation") != "prior-review-benchmark-screening":
+        raise NoSeedDiscoveryError("Not a prior-review benchmark screening artifact")
+    if screening.get("scope_version") != scope_version:
+        raise NoSeedDiscoveryError("Benchmark screening scope_version does not match --scope-version")
+    if binding:
+        for key in ("protocol_id", "protocol_sha256"):
+            if screening.get(key) != binding.get(key):
+                raise NoSeedDiscoveryError(f"Benchmark screening {key} does not match the supplied protocol")
+    records = [item for item in screening.get("records", []) if isinstance(item, dict)]
+    if screened:
+        pmids = []
+        for index, record in enumerate(records, start=1):
+            decision = str(record.get("decision") or "").strip().casefold()
+            if decision not in candidate_ledger.DECISIONS:
+                raise NoSeedDiscoveryError(f"Benchmark record {index} decision must be include, exclude, or uncertain")
+            if record.get("title_abstract_reviewed") is not True:
+                raise NoSeedDiscoveryError(f"Benchmark record {index} must record title_abstract_reviewed=true")
+            if not str(record.get("eligibility_reason") or "").strip():
+                raise NoSeedDiscoveryError(f"Benchmark record {index} requires eligibility_reason")
+            if decision == "include":
+                pmids.append(str(record.get("pmid")))
+        status, confidence = "screened", "semi-independent"
+    else:
+        pmids = [str(record.get("pmid")) for record in records if record.get("pmid")]
+        status, confidence = "unscreened", "indicative"
+    pmids = pubmed_tool.dedup_preserving_order(pmids)
+    artifact = {
+        "operation": "prior-review-benchmark",
+        "ok": True,
+        "scope_version": scope_version,
+        "benchmark_source_label": BENCHMARK_SOURCE_LABEL,
+        "benchmark_status": status,
+        "screened": bool(screened),
+        "confidence": confidence,
+        "source_reviews": screening.get("source_reviews", []),
+        "benchmark_size": len(pmids),
+        "pmids": pmids,
+        "integrity_note": BENCHMARK_INTEGRITY_NOTE,
+    }
+    if binding:
+        artifact.update({key: value for key, value in binding.items() if key != "protocol_path"})
+    return artifact
+
+
+def load_pmid_list(path: str) -> list[str]:
+    data = read_json(path)
+    if isinstance(data, dict):
+        data = data.get("pmids") or data.get("included_pmids") or []
+    if not isinstance(data, list):
+        raise NoSeedDiscoveryError("Included-PMIDs file must be a JSON list or an object with a 'pmids' list")
+    return [str(value).strip() for value in data if str(value).strip()]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Orthogonal pilot discovery for no-seed PubMed builds.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -977,6 +1163,31 @@ def build_parser() -> argparse.ArgumentParser:
     recapture_parser.add_argument("--converged-completeness", type=float, default=RECAPTURE_CONVERGED_COMPLETENESS)
     recapture_parser.add_argument("--undersaturated-completeness", type=float, default=RECAPTURE_UNDERSATURATED_COMPLETENESS)
     recapture_parser.add_argument("--output", required=True)
+    harvest_parser = sub.add_parser(
+        "benchmark-harvest",
+        help="Harvest a screenable benchmark-candidate set from named adjacent reviews (cited references and/or an included-study PMID list).",
+    )
+    harvest_parser.add_argument("--review-pmids", nargs="+", default=[], help="Adjacent/prior systematic review PMIDs; their cited references are harvested via the refs elink.")
+    harvest_parser.add_argument("--included-pmids-file", help="JSON list (or {'pmids': [...]}) of the review's included-study PMIDs.")
+    harvest_parser.add_argument("--scope-version", type=int, required=True)
+    harvest_parser.add_argument("--protocol-file")
+    harvest_parser.add_argument("--safety-cap", type=int, default=500)
+    harvest_parser.add_argument("--max-per-review", type=int, default=200)
+    harvest_parser.add_argument("--screening-output", required=True)
+    harvest_parser.add_argument("--provenance-output", required=True)
+    freeze_parser = sub.add_parser(
+        "benchmark-freeze",
+        help="Freeze a screened prior-review benchmark (screened-in only) into a labelled semi-independent benchmark JSON.",
+    )
+    freeze_parser.add_argument("--screening-file", required=True)
+    freeze_parser.add_argument("--scope-version", type=int, required=True)
+    freeze_parser.add_argument("--protocol-file")
+    freeze_parser.add_argument(
+        "--unscreened",
+        action="store_true",
+        help="Freeze every harvested candidate without screening as an INDICATIVE-only benchmark (imports citation noise). Default requires screening.",
+    )
+    freeze_parser.add_argument("--output", required=True)
     return parser
 
 
@@ -1027,6 +1238,59 @@ def main(argv: list[str] | None = None) -> int:
                 "discriminating_volume": artifact["discriminating_volume"],
                 "discriminating_basis": artifact["discriminating_basis"],
                 "provisional_verdict": artifact["provisional_verdict"],
+            }
+        elif args.command == "benchmark-harvest":
+            included = load_pmid_list(args.included_pmids_file) if args.included_pmids_file else []
+            review_pmids = [str(value) for value in (args.review_pmids or [])]
+            if not review_pmids and not included:
+                raise NoSeedDiscoveryError("benchmark-harvest requires --review-pmids and/or --included-pmids-file")
+            screening, provenance = harvest_benchmark(
+                pubmed_tool.NcbiClient(),
+                review_pmids=review_pmids,
+                included_pmids=included,
+                scope_version=args.scope_version,
+                safety_cap=max(1, args.safety_cap),
+                max_per_review=max(1, args.max_per_review),
+                binding=binding,
+            )
+            write_json(args.screening_output, screening)
+            write_json(args.provenance_output, provenance)
+            receipt = {
+                "operation": "prior-review-benchmark-harvest",
+                "ok": True,
+                "screening_output": args.screening_output,
+                "provenance_output": args.provenance_output,
+                "candidate_count": screening["candidate_count"],
+                "source_reviews": screening["source_reviews"],
+                "safety_cap_reached": screening["safety_cap_reached"],
+                "next_step": (
+                    "Screen the candidates against the locked scope, then run benchmark-freeze. The screened-in "
+                    "set is a semi-independent (non-independent, external) recall benchmark, never a gold standard."
+                ),
+            }
+        elif args.command == "benchmark-freeze":
+            screening = read_json(args.screening_file)
+            if not isinstance(screening, dict):
+                raise NoSeedDiscoveryError("Benchmark screening file must contain a JSON object")
+            artifact = freeze_benchmark(
+                screening,
+                scope_version=args.scope_version,
+                screened=not args.unscreened,
+                binding=binding,
+            )
+            write_json(args.output, artifact)
+            receipt = {
+                "operation": "prior-review-benchmark",
+                "ok": True,
+                "output": args.output,
+                "benchmark_status": artifact["benchmark_status"],
+                "confidence": artifact["confidence"],
+                "benchmark_size": artifact["benchmark_size"],
+                "benchmark_source_label": artifact["benchmark_source_label"],
+                "next_step": (
+                    f"Run: pubmed_tool.py recall --benchmark-json {args.output} "
+                    "--blocks-file blocks.json --query-file strategy.txt. Interpret asymmetrically."
+                ),
             }
         elif args.command == "recapture":
             provenance = read_json(args.provenance_file)
