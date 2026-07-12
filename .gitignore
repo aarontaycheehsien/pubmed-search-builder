@@ -34,6 +34,53 @@ evals/results/
 evals/.cache/
 *.xlsx
 
+# Skill-run working artifacts (scripts/*.py write intermediate/compiled outputs into
+# the current working directory; when a build is run from the repo root these clutter
+# `git status`). Real content lives under evals/, scripts/, references/, schemas/, etc.
+blocks.json
+focused_blocks.json
+two_strand.json
+concept_ablation.json
+candidate_ledger.json
+candidate_ledger_*.json
+screening_round_*.json
+screening_decisions_round_*.json
+screening_rules_round_*.json
+screening_burden.json
+provenance_round_*.json
+saturation_state_*.json
+orthogonal_pilots*.json
+run_manifest_*.json
+term_rank_*.json
+critic_round_*.json
+critic_evidence_*.json
+final_qa.json
+fragility_*.json
+holdout_validation_*.json
+heuristic_*.json
+mesh_*_sweep.json
+mesh_*_pending.txt
+review_protocol_v*.json
+protocol_v*/
+prisma_s_appendix_*.md
+*_sample.json
+*_burden.json
+*_clean.json
+*.txt.json
+*_test.json
+*_test.txt
+*_test_*.json
+*_test_*.txt
+test_*.txt
+*_pending.txt
+*_mesh_variants.txt
+*_mesh_only.txt
+*_tiab_only.txt
+*_main_block.txt
+*_exact_phrase.json
+*_exact_phrase.txt
+label_burden_sample.py
+
 # Python cache and local tooling
 __pycache__/
 *.py[cod]

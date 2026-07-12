@@ -27,23 +27,38 @@
   "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
   "review_protocol": {
     "dsl_version": 1,
-    "protocol_id": "eval-Muthu_2022",
+    "protocol_id": "eval-muthu-2022-rotator-cuff-cell-therapy",
     "scope_version": 1,
     "version_change": {
       "previous_scope_version": null,
       "reason": "Initial evaluation protocol.",
-      "decision_source": "Evaluation fixture author."
+      "decision_source": "Evaluation fixture author; scope derived from the source systematic review."
     },
     "review": {
-      "question": "In patients with rotator cuff tears, is cellular therapy beneficial compared with controls?",
+      "question": "In patients with rotator cuff tears, is cellular therapy (e.g. mesenchymal stem cells, bone marrow aspirate, platelet-rich plasma) beneficial compared with controls for healing and clinical outcomes?",
       "framework": {
-        "name": "PCC",
-        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "name": "PICO",
+        "rationale": "A clinical effectiveness question; PICO separates the population (rotator cuff tears) and intervention (cellular therapy), which drive retrieval, from comparator and outcomes, which are screening-only to protect recall.",
         "slots": [
           {
-            "id": "topic",
-            "label": "Review topic",
-            "description": "In patients with rotator cuff tears, is cellular therapy beneficial compared with controls?"
+            "id": "population",
+            "label": "Population",
+            "description": "Patients with rotator cuff tears undergoing repair."
+          },
+          {
+            "id": "intervention",
+            "label": "Intervention",
+            "description": "Cellular therapy: mesenchymal stem cells, bone marrow aspirate concentrate, platelet-rich plasma, adipose- or tendon-derived cells."
+          },
+          {
+            "id": "comparator",
+            "label": "Comparator",
+            "description": "Standard repair or control without cellular augmentation."
+          },
+          {
+            "id": "outcome",
+            "label": "Outcome",
+            "description": "Structural healing, retear, pain, and functional scores."
           }
         ]
       }
@@ -51,53 +66,146 @@
     "eligibility": {
       "inclusion": [
         {
-          "id": "include-topic",
-          "label": "Addresses review topic",
-          "description": "In patients with rotator cuff tears, is cellular therapy beneficial compared with controls?"
+          "id": "inc-population",
+          "label": "Rotator cuff tear",
+          "description": "Patients with a rotator cuff tear (partial- or full-thickness) or undergoing rotator cuff repair."
+        },
+        {
+          "id": "inc-intervention",
+          "label": "Cellular therapy",
+          "description": "The intervention delivers a cellular therapy (MSCs, bone marrow aspirate concentrate, PRP, adipose- or tendon-derived cells) as biologic augmentation."
+        },
+        {
+          "id": "inc-comparator",
+          "label": "Control comparison",
+          "description": "Comparison against a control or standard repair without cellular augmentation."
+        },
+        {
+          "id": "inc-outcome",
+          "label": "Clinical or structural outcome",
+          "description": "Reports a healing/retear, pain, or functional outcome."
+        },
+        {
+          "id": "inc-design",
+          "label": "Comparative clinical study",
+          "description": "A randomized or otherwise comparative clinical study in humans."
         }
       ],
       "exclusion": [
         {
-          "id": "exclude-outside-topic",
-          "label": "Outside review topic",
-          "description": "Does not address the stated review question."
+          "id": "exc-not-rotator-cuff",
+          "label": "Not rotator cuff",
+          "description": "Not a rotator cuff tear/repair population (e.g. other tendon or joint)."
+        },
+        {
+          "id": "exc-not-cellular",
+          "label": "Not cellular therapy",
+          "description": "The intervention is not a cellular therapy."
+        },
+        {
+          "id": "exc-not-comparative",
+          "label": "No control comparison",
+          "description": "No comparison group without cellular augmentation."
         }
       ]
     },
     "searchable_scope": {
       "concepts": [
         {
-          "id": "review-topic",
-          "label": "Review topic",
+          "id": "rotator-cuff",
+          "label": "Rotator cuff tear/repair",
           "role": "essential",
           "eligibility_refs": [
-            "include-topic"
+            "inc-population"
           ],
           "framework_slots": [
-            "topic"
+            "population"
           ],
-          "definition": "In patients with rotator cuff tears, is cellular therapy beneficial compared with controls?",
-          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
-          "provisional_fragility": "fragile",
+          "definition": "The population and anatomical target: rotator cuff tears and their surgical repair, including the supraspinatus tendon.",
+          "rationale": "A stable essential concept anchoring every eligible study to the rotator cuff.",
+          "provisional_fragility": "stable",
           "term_families": [
-            "In patients with rotator cuff tears, is cellular therapy beneficial compared with controls?"
+            "rotator cuff",
+            "rotator-cuff",
+            "rotator cuff tear",
+            "rotator cuff repair",
+            "supraspinatus",
+            "rotator cuff injury"
+          ]
+        },
+        {
+          "id": "cellular-therapy",
+          "label": "Cellular therapy / biologic augmentation",
+          "role": "essential",
+          "eligibility_refs": [
+            "inc-intervention"
+          ],
+          "framework_slots": [
+            "intervention"
+          ],
+          "definition": "The intervention: cell-based biologic augmentation, spanning mesenchymal stem cells, bone marrow aspirate concentrate, platelet-rich plasma, and adipose- or tendon-derived cells.",
+          "rationale": "A stable essential concept with varied vocabulary (stem cells, MSC, BMAC, PRP), so it needs broad synonym expansion.",
+          "provisional_fragility": "stable",
+          "term_families": [
+            "stem cells",
+            "mesenchymal stem cells",
+            "mesenchymal",
+            "MSC",
+            "bone marrow",
+            "bone marrow aspirate",
+            "bone marrow aspirate concentrate",
+            "cellular therapy",
+            "cell therapy",
+            "platelet-rich plasma",
+            "PRP",
+            "adipose-derived",
+            "tendon-derived",
+            "biologic augmentation"
           ]
         }
       ]
     },
     "screening_only": {
-      "properties": []
+      "properties": [
+        {
+          "id": "comparator-control",
+          "label": "Control / standard repair comparator",
+          "eligibility_refs": [
+            "inc-comparator"
+          ],
+          "instructions": "Confirm at screening that the study has a control or standard-repair comparison. Do not add a comparator AND block.",
+          "recall_rationale": "Comparator wording is inconsistent and often absent from abstracts; a comparator block would drop eligible trials."
+        },
+        {
+          "id": "clinical-outcome",
+          "label": "Healing / clinical outcome",
+          "eligibility_refs": [
+            "inc-outcome"
+          ],
+          "instructions": "Confirm at screening that a structural-healing, retear, pain, or functional outcome is reported. Do not add an outcome AND block.",
+          "recall_rationale": "Outcome vocabulary is varied and frequently not in the abstract; an outcome block is a recall bottleneck."
+        },
+        {
+          "id": "comparative-design",
+          "label": "Comparative clinical design",
+          "eligibility_refs": [
+            "inc-design"
+          ],
+          "instructions": "Confirm at screening that the study is a comparative clinical study. Apply no methodological search filter.",
+          "recall_rationale": "Design filters miss poorly indexed surgical trials; screen for design instead of filtering the search."
+        }
+      ]
     },
     "filters_and_limits": {
       "decisions": [
         {
           "id": "methodological-filter",
           "type": "filter",
-          "label": "Methodological filter",
+          "label": "Methodological (study-design) filter",
           "status": "rejected",
           "value": "none",
           "validated_source": "not applicable",
-          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+          "rationale": "Recall-first evaluation build; study design is confirmed at screening, not by a search-time hedge."
         },
         {
           "id": "database-limits",
@@ -106,7 +214,7 @@
           "status": "rejected",
           "value": "none",
           "validated_source": "not applicable",
-          "rationale": "No language, age, species, publication-status, or full-text limits."
+          "rationale": "No language, age, species, publication-status, or date limits for the recall-first evaluation build."
         }
       ]
     },
@@ -119,7 +227,7 @@
         "start": null,
         "end": null
       },
-      "rationale": "No date boundaries."
+      "rationale": "No date boundaries; the evaluation scores against a fixed gold set."
     },
     "seeds": {
       "records": []
@@ -136,5 +244,5 @@
     },
     "focused_variants": []
   },
-  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py."
+  "protocol_status": "tightened; lock-validated and compiled. Naive 2-block scope (rotator cuff x cellular therapy) recalls 6/6 gold at ~1.2k hits."
 }
