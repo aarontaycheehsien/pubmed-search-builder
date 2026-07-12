@@ -47,6 +47,8 @@ Show only four concise user-facing markers: `Intake`, `Scope lock`, `Empirical b
 
 Stop only when a decision would change review scope, eligibility interpretation, or final adoption of a recall-reducing block, filter, or limit. Read-only PubMed probes and labelled variant comparisons may run without prior authorization; present their evidence before asking the user to adopt a narrowing design.
 
+Also stop early when no-seed discovery yields an empty or thin screened-in set (the adjudicator emits `saturation_gate.user_decision`). Surface it verbatim — what happened, the measured topic volume, and the choices (supply seeds, name adjacent reviews to benchmark against, repair the pilots, or accept an empirically-unvalidated search) — and let the user choose before continuing. Proceeding with an unvalidated search is the user's adoption-confidence decision, not a silent fallback deferred to the final peer-review label.
+
 ## Evidence Integrity
 
 - No reviewed JSON, no decision: inspect saved `fetch`, `mine`, `sample`, candidate-ledger, and critic artifacts before using them as evidence.
