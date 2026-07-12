@@ -973,9 +973,10 @@ def validate_revision_artifact(path_value: str) -> dict[str, object]:
     required_checks = {
         "named-defect-fixed", "heldout-preserved", "required-blocks-justified",
         "syntax-translation-stable", "scope-unchanged-or-explicit", "workload-recorded",
+        "no-narrowing-under-low-signal",
     }
     if check_names != required_checks:
-        raise ManifestError("revision no-harm artifact does not contain the six required checks")
+        raise ManifestError("revision no-harm artifact does not contain the required no-harm checks")
     authoritative = Path(str(guard.get("authoritative_strategy_file") or ""))
     if not authoritative.is_absolute():
         authoritative = guard_path.parent / authoritative
@@ -1488,6 +1489,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 expected_checks = {
                     "named-defect-fixed", "heldout-preserved", "required-blocks-justified",
                     "syntax-translation-stable", "scope-unchanged-or-explicit", "workload-recorded",
+                    "no-narrowing-under-low-signal",
                 }
                 if {check.get("name") for check in checks if isinstance(check, dict)} != expected_checks:
                     issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks all no-harm checks")

@@ -334,7 +334,7 @@ These rounds are automated internal QA, not PRESS peer review.
 |---:|---:|---:|---|---|---|---|---|---|---|
 | [1] | [1] | [1] | [lexical/structural/scope/filter/syntax/reporting] | [finding] | [exact change] | [counts, samples, evidence files, and required re-probes] | [holdout/seed effect] | [accepted/reverted/superseded] | [revision_cycle_1.json] |
 
-For every critic or vocabulary revision, report the six no-harm verdicts, failed checks, authoritative baseline/revised file, any labelled experimental variant, and exact before/after workload effect.
+For every critic or vocabulary revision, report the seven no-harm verdicts, failed checks, authoritative baseline/revised file, any labelled experimental variant, and exact before/after workload effect.
 
 ## PRESS 2015 element coverage
 

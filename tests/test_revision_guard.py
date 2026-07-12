@@ -76,6 +76,79 @@ class RevisionGuardTests(unittest.TestCase):
         self.assertIn("required-blocks-justified", result["failed_checks"])
         self.assertIn("scope-unchanged-or-explicit", result["failed_checks"])
 
+    def test_no_low_signal_makes_narrowing_check_not_applicable(self):
+        result = guard.evaluate_payload(self.payload(), base=self.root)
+        self.assertFalse(result["low_signal_active"])
+        narrowing = next(c for c in result["checks"] if c["name"] == "no-narrowing-under-low-signal")
+        self.assertTrue(narrowing["passed"])
+        self.assertFalse(narrowing["evidence"]["applicable"])
+
+    def test_narrowing_under_low_signal_fails(self):
+        payload = self.payload()
+        payload["low_signal"] = {"no_included_candidates": True, "discovery_verdict": "discovery-bottleneck"}
+        payload["baseline"]["search_term_count"] = 12
+        payload["revised"]["search_term_count"] = 7  # breadth reduced under an active signal
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertTrue(result["low_signal_active"])
+        self.assertIn("no-narrowing-under-low-signal", result["failed_checks"])
+        self.assertEqual(result["disposition"], "revert-to-baseline")
+
+    def test_breadth_preserved_under_low_signal_passes(self):
+        payload = self.payload()
+        payload["low_signal"] = {"low_count": True, "topic_only_count": 120}
+        payload["baseline"]["search_term_count"] = 12
+        payload["revised"]["search_term_count"] = 14  # widened, not narrowed
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertTrue(result["no_harm_passed"])
+        self.assertEqual(result["disposition"], "adopt")
+
+    def test_missing_breadth_counts_under_active_signal_fails(self):
+        payload = self.payload()
+        payload["low_signal"] = {"active": True}
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertIn("no-narrowing-under-low-signal", result["failed_checks"])
+        narrowing = next(c for c in result["checks"] if c["name"] == "no-narrowing-under-low-signal")
+        self.assertIn("search_term_count", narrowing["failure"])
+
+    def test_per_block_narrowing_detected_even_if_total_holds(self):
+        payload = self.payload()
+        payload["low_signal"] = {"no_included_candidates": True}
+        payload["baseline"]["search_term_count"] = 10
+        payload["revised"]["search_term_count"] = 10  # total unchanged (rebalanced)
+        payload["baseline"]["block_term_counts"] = {"condition": 6, "population": 4}
+        payload["revised"]["block_term_counts"] = {"condition": 3, "population": 7}  # condition narrowed
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertIn("no-narrowing-under-low-signal", result["failed_checks"])
+        narrowing = next(c for c in result["checks"] if c["name"] == "no-narrowing-under-low-signal")
+        self.assertEqual(narrowing["evidence"]["per_block_reduced"], ["condition"])
+
+    def test_authorized_scope_reentry_permits_narrowing(self):
+        payload = self.payload()
+        payload["low_signal"] = {"no_included_candidates": True}
+        payload["baseline"]["search_term_count"] = 12
+        payload["revised"]["search_term_count"] = 7
+        # An authorized scope re-entry (new protocol version) legitimizes the narrowing.
+        payload["revised"]["scope_version"] = 2
+        payload["revised"]["protocol_sha256"] = "p2"
+        payload["scope_change"] = {"changed": True, "authorized": True, "reason": "Concept re-entry after screening."}
+        result = guard.evaluate_payload(payload, base=self.root)
+        narrowing = next(c for c in result["checks"] if c["name"] == "no-narrowing-under-low-signal")
+        self.assertTrue(narrowing["passed"])
+        self.assertTrue(narrowing["evidence"]["authorized_scope_reentry"])
+
+    def test_explicit_authorized_narrowing_permits_reduction(self):
+        payload = self.payload()
+        payload["low_signal"] = {
+            "no_included_candidates": True,
+            "authorized_narrowing": {"authorized": True, "reason": "User removed a confirmed out-of-scope term."},
+        }
+        payload["baseline"]["search_term_count"] = 12
+        payload["revised"]["search_term_count"] = 9
+        result = guard.evaluate_payload(payload, base=self.root)
+        narrowing = next(c for c in result["checks"] if c["name"] == "no-narrowing-under-low-signal")
+        self.assertTrue(narrowing["passed"])
+        self.assertTrue(narrowing["evidence"]["authorized_narrowing"])
+
     def test_cli_writes_selected_baseline_on_failure(self):
         payload = self.payload()
         payload["named_defect"]["fixed"] = False
