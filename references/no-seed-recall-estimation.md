@@ -83,6 +83,16 @@ python scripts/no_seed_discovery.py adjudicate \
 
 Without a discrimination artifact the empty-set verdict is `pending-discrimination` and saturation stays blocked, exactly like an unresolved safety cap. The gate applies only at or below `--min-screened-in-for-saturation` (default 1, i.e. only the empty set), so a single screened-in record still freezes a small non-independent (`both`-role) ledger as before.
 
+## Surface the decision to the user early
+
+Do not silently route an empty screened-in result to the record-free path and leave the confidence gap for the final peer-review label. Whenever the gate fires, `adjudicate` writes a `saturation_gate.user_decision` object and a ready-to-show `saturation_gate.user_decision_text`; the CLI receipt also sets `user_decision_required` and echoes the text. **Stop and present it to the user before continuing.** It states, in plain language:
+
+- **what happened** — how many relevant records screened in and the measured topic volume;
+- **why it matters** — whether the empty set is credible (sparse topic) or a red flag (literature exists but discovery missed it);
+- **the choices**, each with its consequence: (i) supply known-relevant seed PMIDs, (ii) name adjacent/prior systematic reviews to benchmark against, (iii) repair/broaden the pilots and retry discovery, or (iv) proceed with a protocol-only, empirically-unvalidated search.
+
+The recommended option follows the verdict: `discovery-bottleneck` and `indeterminate` recommend repairing discovery (and flag option (iv) as high-risk); `genuinely-sparse` recommends explicitly accepting the unvalidated search; `pending-discrimination` recommends measuring topic volume first. Accepting an empirically-unvalidated search is an **adoption-confidence decision the user makes up front**, not an automatic fallback the build takes on its own.
+
 Related neighbors used only for the benchmark may remain unscreened but must be called heuristic candidates, never relevant studies. Screen any neighbor before harvesting its vocabulary.
 
 Record candidate, related, and recall artifacts in the manifest.

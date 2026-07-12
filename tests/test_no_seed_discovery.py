@@ -191,6 +191,66 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
         self.assertIsNotNone(ledger)
 
 
+class UserDecisionTests(unittest.TestCase):
+    def test_bottleneck_recommends_repair_and_flags_accept(self):
+        decision = no_seed.build_user_decision(
+            verdict="discovery-bottleneck", screened_in_count=0, discriminating_volume=193628,
+            discriminating_basis="topic-core", consecutive_rounds=2,
+        )
+        self.assertEqual(decision["recommended_option"], "repair-pilots")
+        by_id = {opt["id"]: opt for opt in decision["options"]}
+        self.assertTrue(by_id["repair-pilots"]["recommended"])
+        self.assertFalse(by_id["accept-unvalidated"]["recommended"])
+        self.assertIn("not_recommended_reason", by_id["accept-unvalidated"])
+        # Every verdict must always offer the seed and adjacent-review routes.
+        self.assertIn("supply-seeds", by_id)
+        self.assertIn("name-adjacent-reviews", by_id)
+
+    def test_sparse_recommends_accepting_unvalidated(self):
+        decision = no_seed.build_user_decision(
+            verdict="genuinely-sparse", screened_in_count=0, discriminating_volume=80,
+            discriminating_basis="topic-core", consecutive_rounds=2,
+        )
+        self.assertEqual(decision["recommended_option"], "accept-unvalidated")
+        by_id = {opt["id"]: opt for opt in decision["options"]}
+        self.assertTrue(by_id["accept-unvalidated"]["recommended"])
+
+    def test_pending_recommends_measuring_volume(self):
+        decision = no_seed.build_user_decision(
+            verdict="pending-discrimination", screened_in_count=0, discriminating_volume=None,
+            discriminating_basis=None, consecutive_rounds=2,
+        )
+        self.assertEqual(decision["recommended_option"], "measure-volume")
+        text = no_seed.render_user_decision_text(decision)
+        self.assertIn("unmeasured", text)
+        self.assertIn("[recommended]", text)
+
+    def test_adjudicate_attaches_user_decision_on_empty_saturation(self):
+        screening, provenance, previous = _empty_saturating_round()
+        state, _ = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
+        )
+        gate = state["saturation_gate"]
+        self.assertIn("user_decision", gate)
+        self.assertIn("user_decision_text", gate)
+        self.assertEqual(gate["user_decision"]["verdict"], "pending-discrimination")
+
+    def test_single_included_record_has_no_user_decision(self):
+        candidate_id = no_seed.blind_id(1, "1")
+        record = {
+            "candidate_id": candidate_id, "pmid": "1", "title": "One", "abstract": "",
+            "year": "2020", "mesh_headings": [], "keywords": [],
+            "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "scope",
+        }
+        screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 3, "provenance_blinded": True, "records": [record]}
+        provenance = {"scope_version": 1, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
+        previous = {"consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
+        state, _ = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
+        )
+        self.assertNotIn("user_decision", state["saturation_gate"])
+
+
 class DiscriminateTests(unittest.TestCase):
     def test_topic_core_probe_drives_high_confidence_verdict(self):
         def fake_search(client, query, retmax=0, retstart=0, sort=None):

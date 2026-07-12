@@ -56,6 +56,151 @@ def classify_topic_volume(
     return "indeterminate"
 
 
+def build_user_decision(
+    *,
+    verdict: str,
+    screened_in_count: int,
+    discriminating_volume: int | None,
+    discriminating_basis: str | None,
+    consecutive_rounds: int,
+) -> dict[str, Any]:
+    """Build the explicit, user-facing decision for an empty/thin discovery result.
+
+    Accepting an empirically-unvalidated search is an adoption-confidence choice,
+    so it is surfaced early with what happened and the concrete options, rather
+    than deferred to the final peer-review label.
+    """
+    volume_text = "unmeasured" if discriminating_volume is None else f"~{discriminating_volume:,}"
+    seed_opt = {
+        "id": "supply-seeds",
+        "label": "Supply known-relevant seed PMIDs",
+        "consequence": "Anchors discovery and enables known-item recall validation (strongest fix).",
+    }
+    benchmark_opt = {
+        "id": "name-adjacent-reviews",
+        "label": "Name adjacent or prior systematic reviews to benchmark against",
+        "consequence": "Their included studies become a semi-independent recall benchmark.",
+    }
+    repair_opt = {
+        "id": "repair-pilots",
+        "label": "Repair or broaden the discovery pilots and run another round",
+        "consequence": "Re-attempts discovery; may surface screenable relevant records the current pilots miss.",
+    }
+    accept_opt = {
+        "id": "accept-unvalidated",
+        "label": "Proceed with a protocol-only search, accepting it is empirically unvalidated",
+        "consequence": "The search rests on the protocol plus structural checks; recall cannot be tested against any relevant-record set. Flagged for human PRESS peer review.",
+    }
+
+    if verdict == "discovery-bottleneck":
+        what = (
+            f"Discovery screened in {screened_in_count} relevant records, but the topic core returns "
+            f"{volume_text} records - substantial literature exists."
+        )
+        why = (
+            "An empty screened-in set on a topic this size almost always means the pilots or an essential "
+            "AND block are too narrow, not that the topic is empty. Accepting the search now risks shipping "
+            "a silent recall hole."
+        )
+        options = [
+            {**repair_opt, "recommended": True},
+            seed_opt,
+            benchmark_opt,
+            {**accept_opt, "recommended": False, "not_recommended_reason": "Evidence indicates the topic is not sparse, so an unvalidated search is high-risk."},
+        ]
+        recommended = "repair-pilots"
+    elif verdict == "genuinely-sparse":
+        what = (
+            f"Discovery screened in {screened_in_count} relevant records, and a broad probe confirms the topic "
+            f"is small ({volume_text} records)."
+        )
+        why = (
+            "There is no relevant-record set to validate recall against. The search will rest on the protocol "
+            "plus structural checks only - a reasonable outcome for a genuinely sparse topic, but you should "
+            "accept the unvalidated status explicitly."
+        )
+        options = [
+            {**accept_opt, "recommended": True},
+            seed_opt,
+            benchmark_opt,
+        ]
+        recommended = "accept-unvalidated"
+    elif verdict == "indeterminate":
+        what = (
+            f"Discovery screened in {screened_in_count} relevant records; the topic-volume probe is inconclusive "
+            f"({volume_text} records, between the sparse and bottleneck thresholds)."
+        )
+        why = "We cannot yet tell whether the topic is genuinely small or the search is too narrow."
+        options = [
+            {**repair_opt, "recommended": True},
+            seed_opt,
+            benchmark_opt,
+            {**accept_opt, "recommended": False, "not_recommended_reason": "Topic size is unresolved; establish the cause before accepting an unvalidated search."},
+        ]
+        recommended = "repair-pilots"
+    else:  # pending-discrimination
+        what = (
+            f"Discovery screened in {screened_in_count} relevant records and topic volume has not been measured yet."
+        )
+        why = "Run the volume-discrimination probe first so the empty result can be interpreted; the choices below then apply."
+        options = [
+            {
+                "id": "measure-volume",
+                "label": "Run the volume-discrimination probe (discriminate), then re-adjudicate",
+                "consequence": "Measures broad topic volume to tell a sparse topic from a broken search.",
+                "recommended": True,
+            },
+            seed_opt,
+            benchmark_opt,
+            accept_opt,
+        ]
+        recommended = "measure-volume"
+
+    return {
+        "trigger": "empty-or-thin-screened-in-discovery",
+        "verdict": verdict,
+        "screened_in_count": screened_in_count,
+        "topic_volume": discriminating_volume,
+        "topic_volume_basis": discriminating_basis,
+        "consecutive_saturated_rounds": consecutive_rounds,
+        "what_happened": what,
+        "why_it_matters": why,
+        "options": options,
+        "recommended_option": recommended,
+        "note": (
+            "Present this to the user before continuing. Accepting an empirically-unvalidated search is an "
+            "adoption-confidence decision, not an automatic fallback."
+        ),
+    }
+
+
+def render_user_decision_text(decision: dict[str, Any]) -> str:
+    """Render the user decision as a plain-text block the agent can surface verbatim."""
+    volume = decision.get("topic_volume")
+    volume_text = "unmeasured" if volume is None else f"{volume:,}"
+    lines = [
+        "Discovery confidence decision - your input needed",
+        "",
+        f"What happened: {decision['what_happened']}",
+        f"Why it matters: {decision['why_it_matters']}",
+        "",
+        (
+            f"Evidence: screened-in relevant records = {decision['screened_in_count']}; "
+            f"topic volume = {volume_text} ({decision.get('topic_volume_basis') or 'n/a'}); "
+            f"verdict = {decision['verdict']}."
+        ),
+        "",
+        "Your choices:",
+    ]
+    for index, option in enumerate(decision.get("options", []), start=1):
+        tag = "   [recommended]" if option.get("recommended") else ""
+        lines.append(f"  {index}. {option['label']}{tag}")
+        lines.append(f"       -> {option['consequence']}")
+        if option.get("not_recommended_reason"):
+            lines.append(f"       (not recommended: {option['not_recommended_reason']})")
+    return "\n".join(lines)
+
+
 def read_json(path: str) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -458,6 +603,15 @@ def adjudicate(
                     "a human decision before declaring saturation."
                 )
                 saturation_reached = False
+        decision = build_user_decision(
+            verdict=gate["verdict"],
+            screened_in_count=included_count,
+            discriminating_volume=gate.get("discriminating_volume"),
+            discriminating_basis=gate.get("discriminating_basis"),
+            consecutive_rounds=consecutive,
+        )
+        gate["user_decision"] = decision
+        gate["user_decision_text"] = render_user_decision_text(decision)
     state = {
         "operation": "orthogonal-pilot-adjudication",
         "ok": True,
@@ -641,15 +795,20 @@ def main(argv: list[str] | None = None) -> int:
                 write_json(args.ledger_output, ledger)
                 state["ledger_output"] = args.ledger_output
             write_json(args.state_output, state)
+            gate_state = state["saturation_gate"]
             receipt = {
                 "operation": "orthogonal-pilot-adjudicate",
                 "ok": True,
                 "state_output": args.state_output,
                 "saturation_reached": state["saturation_reached"],
-                "saturation_gate_verdict": state["saturation_gate"]["verdict"],
+                "saturation_gate_verdict": gate_state["verdict"],
                 "ledger_frozen": state["ledger_frozen"],
                 "ledger_output": args.ledger_output if ledger is not None else None,
             }
+            if gate_state.get("user_decision"):
+                receipt["user_decision_required"] = True
+                receipt["recommended_option"] = gate_state["user_decision"]["recommended_option"]
+                receipt["user_decision_text"] = gate_state["user_decision_text"]
     except (NoSeedDiscoveryError, pubmed_tool.PubMedError, candidate_ledger.CandidateLedgerError, OSError) as exc:
         receipt = {"operation": args.command, "ok": False, "error": str(exc)}
     print(json.dumps(receipt, indent=2, ensure_ascii=False))
