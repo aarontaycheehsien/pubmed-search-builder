@@ -407,5 +407,98 @@ class RecaptureCompletenessTests(unittest.TestCase):
             self.assertEqual(artifact["estimated_total_relevant"], 30.0)
 
 
+class PriorReviewBenchmarkTests(unittest.TestCase):
+    def test_harvest_merges_sources_excludes_reviews_and_blinds(self):
+        def fake_related(client, seeds, links, max_per_seed, max_total):
+            # Review 100 cites 3, 4, and (spuriously) itself.
+            return {"candidate_pmids": [{"pmid": "3"}, {"pmid": "4"}, {"pmid": "100"}], "candidate_count_before_cap": 3}
+
+        records = [{"pmid": p, "title": f"t{p}", "abstract": "", "year": "2020", "mesh_headings": [], "keywords": []} for p in ["1", "2", "3", "4"]]
+        with (
+            mock.patch.object(no_seed.pubmed_tool, "related_pmids", side_effect=fake_related),
+            mock.patch.object(no_seed.pubmed_tool, "efetch", return_value={"records": records}),
+        ):
+            screening, provenance = no_seed.harvest_benchmark(
+                FakeClient(), review_pmids=["100"], included_pmids=["1", "2"],
+                scope_version=1, safety_cap=500, max_per_review=200,
+            )
+        pmids = [r["pmid"] for r in screening["records"]]
+        self.assertEqual(pmids, ["1", "2", "3", "4"])  # review 100 excluded
+        self.assertNotIn("100", pmids)
+        self.assertNotIn("pilot_types", screening["records"][0])
+        self.assertTrue(all(r["title_abstract_reviewed"] is False for r in screening["records"]))
+        by_pmid = {r["pmid"]: r["benchmark_sources"] for r in provenance["records"]}
+        self.assertEqual(by_pmid["1"], ["included-study-list"])
+        self.assertEqual(by_pmid["3"], ["prior-review-refs"])
+
+    def _screened(self):
+        return {
+            "operation": "prior-review-benchmark-screening",
+            "scope_version": 1,
+            "source_reviews": ["100"],
+            "records": [
+                {"pmid": "1", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                {"pmid": "2", "decision": "exclude", "title_abstract_reviewed": True, "eligibility_reason": "wrong population"},
+                {"pmid": "3", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+            ],
+        }
+
+    def test_freeze_screened_keeps_only_included_and_labels_semi_independent(self):
+        artifact = no_seed.freeze_benchmark(self._screened(), scope_version=1, screened=True)
+        self.assertEqual(artifact["pmids"], ["1", "3"])
+        self.assertEqual(artifact["benchmark_status"], "screened")
+        self.assertEqual(artifact["confidence"], "semi-independent")
+        self.assertEqual(artifact["benchmark_source_label"], "prior-review-semi-independent")
+        self.assertEqual(artifact["benchmark_size"], 2)
+
+    def test_freeze_screened_rejects_unreviewed_record(self):
+        screening = self._screened()
+        screening["records"][0]["title_abstract_reviewed"] = False
+        with self.assertRaises(no_seed.NoSeedDiscoveryError):
+            no_seed.freeze_benchmark(screening, scope_version=1, screened=True)
+
+    def test_freeze_unscreened_keeps_all_as_indicative(self):
+        screening = self._screened()
+        for record in screening["records"]:  # unscreened path ignores decisions
+            record["decision"] = ""
+            record["title_abstract_reviewed"] = False
+        artifact = no_seed.freeze_benchmark(screening, scope_version=1, screened=False)
+        self.assertEqual(artifact["pmids"], ["1", "2", "3"])
+        self.assertEqual(artifact["confidence"], "indicative")
+        self.assertEqual(artifact["benchmark_status"], "unscreened")
+
+    def test_freeze_scope_mismatch_raises(self):
+        with self.assertRaises(no_seed.NoSeedDiscoveryError):
+            no_seed.freeze_benchmark(self._screened(), scope_version=2, screened=True)
+
+    def test_frozen_artifact_feeds_extract_benchmark_pmids(self):
+        artifact = no_seed.freeze_benchmark(self._screened(), scope_version=1, screened=True)
+        pmids = no_seed.pubmed_tool.extract_benchmark_pmids(artifact, min_seed_overlap=0)
+        self.assertEqual(pmids, ["1", "3"])
+
+    def test_cli_freeze_round_trip_and_harvest_requires_a_source(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screening_path = root / "bench_screening.json"
+            out_path = root / "benchmark.json"
+            screening_path.write_text(json.dumps(self._screened()), encoding="utf-8")
+            code = no_seed.main([
+                "benchmark-freeze", "--screening-file", str(screening_path),
+                "--scope-version", "1", "--output", str(out_path),
+            ])
+            self.assertEqual(code, 0)
+            artifact = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["pmids"], ["1", "3"])
+            # harvest with neither source is rejected before any network call.
+            code = no_seed.main([
+                "benchmark-harvest", "--scope-version", "1",
+                "--screening-output", str(root / "s.json"), "--provenance-output", str(root / "p.json"),
+            ])
+            self.assertEqual(code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
