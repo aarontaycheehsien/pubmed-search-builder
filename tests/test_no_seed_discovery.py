@@ -107,5 +107,117 @@ class NoSeedDiscoveryTests(unittest.TestCase):
         self.assertIsNone(ledger)
 
 
+def _empty_saturating_round():
+    """A round that reaches novelty saturation with an empty screened-in set."""
+    screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 2, "provenance_blinded": True, "records": []}
+    provenance = {"scope_version": 1, "records": [], "safety_cap_reached": False}
+    previous = {
+        "consecutive_saturated_rounds": 1,
+        "seen_pmids": [],
+        "included_pmids": [],
+        "vocabulary_terms": [],
+        "adjudicated_records": [],
+    }
+    return screening, provenance, previous
+
+
+class VolumeDiscriminationGateTests(unittest.TestCase):
+    def test_classify_topic_volume_boundaries(self):
+        self.assertEqual(no_seed.classify_topic_volume(500, sparse_ceiling=500, bottleneck_floor=1000), "genuinely-sparse")
+        self.assertEqual(no_seed.classify_topic_volume(750, sparse_ceiling=500, bottleneck_floor=1000), "indeterminate")
+        self.assertEqual(no_seed.classify_topic_volume(1000, sparse_ceiling=500, bottleneck_floor=1000), "discovery-bottleneck")
+
+    def test_empty_saturation_without_discrimination_is_blocked(self):
+        screening, provenance, previous = _empty_saturating_round()
+        state, ledger = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
+        )
+        self.assertTrue(state["novelty_saturation_reached"])
+        self.assertFalse(state["saturation_reached"])
+        self.assertEqual(state["saturation_gate"]["verdict"], "pending-discrimination")
+        self.assertIsNone(ledger)
+
+    def test_empty_saturation_with_bottleneck_verdict_is_blocked(self):
+        screening, provenance, previous = _empty_saturating_round()
+        discrimination = {"scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "topic-core"}
+        state, ledger = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
+            allocation_seed="test", discrimination=discrimination,
+        )
+        self.assertFalse(state["saturation_reached"])
+        self.assertEqual(state["saturation_gate"]["verdict"], "discovery-bottleneck")
+        self.assertIn("required_action", state["saturation_gate"])
+        self.assertIsNone(ledger)
+
+    def test_empty_saturation_with_sparse_verdict_is_accepted(self):
+        screening, provenance, previous = _empty_saturating_round()
+        discrimination = {"scope_version": 1, "discriminating_volume": 80, "discriminating_basis": "topic-core"}
+        state, ledger = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
+            allocation_seed="test", discrimination=discrimination,
+        )
+        self.assertTrue(state["saturation_reached"])
+        self.assertEqual(state["saturation_gate"]["verdict"], "genuinely-sparse")
+        self.assertIn("genuinely-sparse", state["stop_reason"])
+        self.assertIsNone(ledger)
+
+    def test_discrimination_scope_version_mismatch_raises(self):
+        screening, provenance, previous = _empty_saturating_round()
+        discrimination = {"scope_version": 2, "discriminating_volume": 80}
+        with self.assertRaises(no_seed.NoSeedDiscoveryError):
+            no_seed.adjudicate(
+                screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
+                allocation_seed="test", discrimination=discrimination,
+            )
+
+    def test_single_included_record_still_freezes_without_discrimination(self):
+        # A non-empty screened-in set is below neither the default floor nor the gate;
+        # the small-set (role "both") freeze path is preserved unchanged.
+        candidate_id = no_seed.blind_id(1, "1")
+        record = {
+            "candidate_id": candidate_id, "pmid": "1", "title": "One", "abstract": "",
+            "year": "2020", "mesh_headings": [], "keywords": [],
+            "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "scope",
+        }
+        screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 3, "provenance_blinded": True, "records": [record]}
+        provenance = {"scope_version": 1, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
+        previous = {"consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
+        state, ledger = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
+        )
+        self.assertTrue(state["saturation_reached"])
+        self.assertTrue(state["ledger_frozen"])
+        self.assertEqual(state["saturation_gate"]["verdict"], "not-applicable")
+        self.assertIsNotNone(ledger)
+
+
+class DiscriminateTests(unittest.TestCase):
+    def test_topic_core_probe_drives_high_confidence_verdict(self):
+        def fake_search(client, query, retmax=0, retstart=0, sort=None):
+            return {"count": 12000 if "core" in query else 999999, "pmids": []}
+
+        probes = [
+            {"label": "core", "role": "topic-core", "query": "core[tiab]"},
+            {"label": "broad", "role": "essential-concept", "query": "broad[tiab]"},
+        ]
+        with mock.patch.object(no_seed.pubmed_tool, "esearch", side_effect=fake_search):
+            artifact = no_seed.discriminate(FakeClient(), probes, scope_version=1, sparse_ceiling=500, bottleneck_floor=1000)
+        self.assertEqual(artifact["discriminating_basis"], "topic-core")
+        self.assertEqual(artifact["discriminating_volume"], 12000)
+        self.assertEqual(artifact["provisional_verdict"], "discovery-bottleneck")
+        self.assertEqual(artifact["verdict_confidence"], "high")
+
+    def test_essential_only_probes_are_low_confidence_proxy(self):
+        def fake_search(client, query, retmax=0, retstart=0, sort=None):
+            return {"count": 40, "pmids": []}
+
+        probes = [{"label": "c", "role": "essential-concept", "query": "c[tiab]"}]
+        with mock.patch.object(no_seed.pubmed_tool, "esearch", side_effect=fake_search):
+            artifact = no_seed.discriminate(FakeClient(), probes, scope_version=1, sparse_ceiling=500, bottleneck_floor=1000)
+        self.assertEqual(artifact["discriminating_basis"], "single-concept-proxy")
+        self.assertEqual(artifact["provisional_verdict"], "genuinely-sparse")
+        self.assertEqual(artifact["verdict_confidence"], "low")
+
+
 if __name__ == "__main__":
     unittest.main()
