@@ -1,0 +1,149 @@
+{
+  "id": "Bos_2018",
+  "suite": "synergy",
+  "question": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?",
+  "gold_relevant_pmids": [
+    23920020,
+    22945686,
+    12660385,
+    28143923,
+    27659853,
+    18501994,
+    28468844,
+    20167919,
+    27271785
+  ],
+  "evaluation_gold_pmids": [
+    23920020,
+    22945686,
+    12660385,
+    28143923,
+    27659853,
+    18501994,
+    28468844,
+    20167919,
+    27271785
+  ],
+  "source": "SYNERGY dataset Bos_2018; 'Cerebral small vessel disease and the risk of dementia' (Alzheimers Dement 2018, doi:10.1016/j.jalz.2018.04.007); gold = label_included==1 rows with DOI via [AID]",
+  "gold_source": "Local DOI list; 9/10 resolved via [AID]",
+  "gold_adjudication": "user-confirmed relevant set",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Bos_2018",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.33588/rn.3702.2002445"
+  ]
+}

@@ -1,0 +1,250 @@
+{
+  "id": "Liu_2023_VR_nursing",
+  "suite": "education-health",
+  "question": "In nursing students, is virtual reality-based teaching more effective than traditional or alternative teaching methods for improving theoretical knowledge, practical skills, skill retention, satisfaction, and critical thinking?",
+  "gold_relevant_pmids": [
+    30882355,
+    36357886,
+    36327261,
+    35457689,
+    33894407,
+    33555626
+  ],
+  "evaluation_gold_pmids": [
+    30882355,
+    36357886,
+    36327261,
+    35457689,
+    33894407,
+    33555626
+  ],
+  "source": "Health-professions (nursing) education systematic review + meta-analysis: Liu et al., 'Effectiveness of virtual reality in nursing education', BMC Med Educ 2023;23:710 (PMID 37770884, doi 10.1186/s12909-023-04662-x). Education-adjacent-health topic chosen for PubMed reachability; gold = 6/12 included RCTs that are MEDLINE-indexed (6 Chinese-language included studies are PubMed-unreachable).",
+  "gold_source": "PMIDs (CLI)",
+  "gold_adjudication": "Finally-included studies of the source meta-analysis (12 RCTs, refs 20-31); gold = the 6 MEDLINE-indexed studies, each title-verified against Table 1 (DOIs in the reference list were mis-parsed and could not be trusted). The other 6 included RCTs are Chinese-language journals (Yuan 2019 Nurs Res; X Wang 2023 China High Med Educ; P Wang 2020 China Nurs Manage; L Li 2017 Electron J Clin Med Lit; H Zhao 2022 Mod Hosp; N Cao 2021 Health Prof Educ) not indexed in PubMed.",
+  "review_search_date": "2023-03-31",
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-liu-2023-vr-nursing",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol for the VR-in-nursing-education recall fixture.",
+      "decision_source": "Evaluation fixture author; scope derived from Liu et al. 2023 (BMC Med Educ, PMID 37770884)."
+    },
+    "review": {
+      "question": "In nursing students, is virtual reality-based teaching more effective than traditional or alternative teaching methods for improving theoretical knowledge, practical skills, skill retention, satisfaction, and critical thinking?",
+      "framework": {
+        "name": "PICO",
+        "rationale": "An effectiveness question comparing an educational intervention against usual teaching; PICO cleanly separates the population and intervention (which drive retrieval) from the comparator and outcomes (which are screening-only, to protect recall).",
+        "slots": [
+          {
+            "id": "population",
+            "label": "Population",
+            "description": "Nursing students in pre- or post-registration nursing education."
+          },
+          {
+            "id": "intervention",
+            "label": "Intervention",
+            "description": "Virtual reality or virtual simulation used as a teaching or learning method."
+          },
+          {
+            "id": "comparator",
+            "label": "Comparator",
+            "description": "Traditional, conventional, or alternative teaching methods."
+          },
+          {
+            "id": "outcome",
+            "label": "Outcome",
+            "description": "Learning outcomes: knowledge, practical skills, skill retention, satisfaction, critical thinking."
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "inc-population",
+          "label": "Nursing students",
+          "description": "Participants are nursing students in a nursing education programme (undergraduate/pre-registration or postgraduate)."
+        },
+        {
+          "id": "inc-intervention",
+          "label": "Virtual reality teaching",
+          "description": "The intervention delivers education or training through virtual reality, immersive simulation, or a virtual patient/environment."
+        },
+        {
+          "id": "inc-comparator",
+          "label": "Traditional or alternative teaching",
+          "description": "Comparison against traditional/conventional teaching or an alternative (e.g. non-immersive) instructional method."
+        },
+        {
+          "id": "inc-outcome",
+          "label": "Educational outcome reported",
+          "description": "Reports at least one learning outcome: knowledge, practical/clinical skills, skill retention, satisfaction, self-efficacy, or critical thinking."
+        },
+        {
+          "id": "inc-design",
+          "label": "Comparative interventional design",
+          "description": "A randomized controlled trial or otherwise controlled comparative educational intervention."
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exc-not-nursing",
+          "label": "Non-nursing population",
+          "description": "Participants are not nursing students (e.g. medical, allied-health, or qualified staff only)."
+        },
+        {
+          "id": "exc-not-vr",
+          "label": "Not virtual reality",
+          "description": "The intervention is not virtual reality or virtual simulation (e.g. mannequin-only simulation, e-learning without a virtual environment)."
+        },
+        {
+          "id": "exc-not-education",
+          "label": "Not an educational context",
+          "description": "Virtual reality is used for patient therapy, rehabilitation, or clinical care rather than for teaching nursing students."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "nursing-education",
+          "label": "Nursing students / nursing education",
+          "role": "essential",
+          "eligibility_refs": [
+            "inc-population"
+          ],
+          "framework_slots": [
+            "population"
+          ],
+          "definition": "The population and setting: nursing students within nursing education. Retrieval must not depend on any single phrasing of 'nursing student'.",
+          "rationale": "A stable essential concept; every eligible record concerns nursing students, so it anchors the search without threatening recall.",
+          "provisional_fragility": "stable",
+          "term_families": [
+            "nursing students",
+            "nursing student",
+            "student nurses",
+            "nursing education",
+            "nurse education",
+            "education, nursing",
+            "baccalaureate nursing",
+            "undergraduate nursing",
+            "nursing curriculum",
+            "nurse training"
+          ]
+        },
+        {
+          "id": "virtual-reality",
+          "label": "Virtual reality / virtual simulation",
+          "role": "essential",
+          "eligibility_refs": [
+            "inc-intervention"
+          ],
+          "framework_slots": [
+            "intervention"
+          ],
+          "definition": "The intervention: virtual reality, immersive/virtual simulation, or a virtual patient/environment used for teaching. Includes head-mounted-display, augmented, and mixed-reality variants.",
+          "rationale": "A stable essential concept representing the technology under study; its vocabulary is varied (VR, virtual simulation, virtual patient, immersive), so it needs broad synonym expansion.",
+          "provisional_fragility": "stable",
+          "term_families": [
+            "virtual reality",
+            "VR",
+            "virtual simulation",
+            "virtual patient",
+            "virtual patients",
+            "immersive virtual",
+            "immersive technology",
+            "head-mounted display",
+            "augmented reality",
+            "mixed reality",
+            "computer simulation",
+            "serious games"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": [
+        {
+          "id": "comparator-teaching",
+          "label": "Comparator is traditional/alternative teaching",
+          "eligibility_refs": [
+            "inc-comparator"
+          ],
+          "instructions": "Confirm at screening that the study compares VR against traditional/conventional or an alternative teaching method. Do not add a comparator AND block to the search.",
+          "recall_rationale": "Comparator terms are inconsistently reported and often absent from titles/abstracts; making them a search block would silently drop eligible trials."
+        },
+        {
+          "id": "learning-outcomes",
+          "label": "Reports a learning outcome",
+          "eligibility_refs": [
+            "inc-outcome"
+          ],
+          "instructions": "Confirm at screening that a knowledge, skill, retention, satisfaction, self-efficacy, or critical-thinking outcome is reported. Do not add an outcome AND block.",
+          "recall_rationale": "Outcome vocabulary is highly varied and frequently not in the abstract; an outcome block is a classic recall bottleneck."
+        },
+        {
+          "id": "study-design-rct",
+          "label": "Controlled comparative design",
+          "eligibility_refs": [
+            "inc-design"
+          ],
+          "instructions": "Confirm at screening that the study is an RCT or otherwise controlled comparative educational intervention. Apply no methodological search filter.",
+          "recall_rationale": "Design filters/hedges miss poorly indexed education trials; screen for design instead of filtering the search."
+        }
+      ]
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological (study-design) filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "Recall-first evaluation build; study design is handled at screening, not by a search-time hedge that could drop eligible education trials."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits are authorized for the evaluation build."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries; the evaluation scores against a fixed gold set and applies no date limit."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_status": "tightened; lock-validated and compiled (protocol_tool.py validate --mode lock + compile)"
+}
