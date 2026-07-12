@@ -56,6 +56,33 @@ For later rounds, pass `--previous-state saturation_state_<N>.json` to both comm
 
 Discovery stops only after the required consecutive rounds add neither a screened-in relevant study nor new vocabulary from screened-in records. A pilot retrieval safety cap is an operational ceiling, not a stopping rule; if reached, saturation is blocked until the pilot is narrowed or retrieval is completed. On saturation, the adjudicator deterministically freezes discovery and holdout roles and writes the candidate ledger before term mining.
 
+## Volume-discrimination gate for an empty screened-in set
+
+Novelty saturation with **zero screened-in records** is ambiguous: it can mean the topic is genuinely sparse, or that the pilots are weak or an essential block is over-narrow and the search is broken. These look identical from the discovery signal alone, and the broken case is self-concealing — a search that misses the literature also finds nothing to screen in, so it cannot detect its own leak.
+
+The adjudicator therefore refuses to accept a zero-screened-in saturation until a broad-concept volume probe shows the topic really is small. Run `discriminate` with a **topic-core** probe (the essential concepts AND-ed together, with fragile/optional blocks stripped) — this is the high-confidence basis. Fall back to one or more **essential-concept** probes (each essential concept alone, no AND) only when a topic-core probe is impractical; a single-concept proxy can rule sparsity out but cannot confirm a bottleneck on its own.
+
+```bash
+# Measure broad topic volume (essentials only; no fragile/optional blocks).
+python scripts/no_seed_discovery.py discriminate \
+  --probes-file volume_probes.json --scope-version 1 \
+  --output discrimination_round_N.json
+
+# Feed the verdict into adjudication; required whenever the screened-in set is empty.
+python scripts/no_seed_discovery.py adjudicate \
+  --screening-file screening_round_N.json --provenance-file provenance_round_N.json \
+  --scope-version 1 --discrimination-file discrimination_round_N.json \
+  --state-output saturation_state_N.json --ledger-output candidate_ledger.json
+```
+
+`volume_probes.json` is a JSON list of `{ "label", "role", "query" }` where `role` is `topic-core` or `essential-concept`. The gate maps the measured volume to a verdict against two heuristic (not validated) triggers, `--sparse-volume-ceiling` (default 500) and `--bottleneck-volume-floor` (default 1000):
+
+- **genuinely-sparse** (volume ≤ ceiling): the empty set is credible; saturation is accepted with no included candidates.
+- **discovery-bottleneck** (volume ≥ floor): substantial literature exists but discovery surfaced nothing. Saturation is **blocked**. Repair or broaden the pilots, or reconsider an over-narrow essential block, then run another round. Do not narrow scope — a low screened-in count is never evidence the topic is small.
+- **indeterminate** (between the two): add a topic-core probe, widen the pilots, or obtain a human decision before declaring saturation.
+
+Without a discrimination artifact the empty-set verdict is `pending-discrimination` and saturation stays blocked, exactly like an unresolved safety cap. The gate applies only at or below `--min-screened-in-for-saturation` (default 1, i.e. only the empty set), so a single screened-in record still freezes a small non-independent (`both`-role) ledger as before.
+
 Related neighbors used only for the benchmark may remain unscreened but must be called heuristic candidates, never relevant studies. Screen any neighbor before harvesting its vocabulary.
 
 Record candidate, related, and recall artifacts in the manifest.

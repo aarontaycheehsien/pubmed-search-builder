@@ -23,9 +23,37 @@ PILOT_TYPES = {
     "historical-terminology-led",
 }
 
+PROBE_ROLES = {"topic-core", "essential-concept"}
+
+# Heuristic triggers, not validated cutoffs. A broad essential-concept/topic-core
+# volume at or below the ceiling is consistent with a genuinely sparse topic; a
+# volume at or above the floor means substantial literature exists, so an empty
+# screened-in set points at broken discovery rather than an empty topic.
+SPARSE_VOLUME_CEILING_DEFAULT = 500
+BOTTLENECK_VOLUME_FLOOR_DEFAULT = 1000
+
 
 class NoSeedDiscoveryError(ValueError):
     pass
+
+
+def classify_topic_volume(
+    discriminating_volume: int,
+    *,
+    sparse_ceiling: int,
+    bottleneck_floor: int,
+) -> str:
+    """Classify a zero-screened-in saturation by the broad topic volume.
+
+    Returns ``genuinely-sparse`` (the empty set is credible), ``discovery-bottleneck``
+    (literature exists but discovery surfaced nothing, so saturation is not real), or
+    ``indeterminate`` (the volume falls in the inconclusive band).
+    """
+    if discriminating_volume <= sparse_ceiling:
+        return "genuinely-sparse"
+    if discriminating_volume >= bottleneck_floor:
+        return "discovery-bottleneck"
+    return "indeterminate"
 
 
 def read_json(path: str) -> Any:
@@ -88,6 +116,93 @@ def load_pilots(path: str) -> list[dict[str, Any]]:
     if missing:
         raise NoSeedDiscoveryError("Pilots file is missing orthogonal types: " + ", ".join(missing))
     return pilots
+
+
+def load_probes(path: str) -> list[dict[str, Any]]:
+    """Load broad volume-discrimination probes.
+
+    Each probe measures how much literature exists for the topic core or an
+    essential concept *alone* (no fragile/optional AND blocks), so a
+    zero-screened-in saturation can be told apart from a genuinely empty topic.
+    """
+    raw = read_json(path)
+    if not isinstance(raw, list) or not raw:
+        raise NoSeedDiscoveryError("Probes file must be a non-empty JSON list")
+    probes: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise NoSeedDiscoveryError(f"Probe {index} must be an object")
+        role = str(item.get("role") or "essential-concept").strip().casefold()
+        if role not in PROBE_ROLES:
+            raise NoSeedDiscoveryError(f"Probe {index} has an invalid role: {role!r} (use topic-core or essential-concept)")
+        query = pubmed_tool.normalize_query(str(item.get("query") or ""))
+        if not query:
+            raise NoSeedDiscoveryError(f"Probe {index} ({role}) requires a query")
+        pubmed_tool.assert_plain_query(f"{role} probe", query)
+        probes.append({"label": str(item.get("label") or role), "role": role, "query": query})
+    return probes
+
+
+def discriminate(
+    client: pubmed_tool.NcbiClient,
+    probes: list[dict[str, Any]],
+    *,
+    scope_version: int,
+    sparse_ceiling: int,
+    bottleneck_floor: int,
+    binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Measure broad topic volume and emit a discrimination artifact.
+
+    A ``topic-core`` probe (essential concepts AND-ed, fragile/optional blocks
+    stripped) is the high-confidence basis. When only ``essential-concept``
+    probes are supplied, the maximum single-concept volume is a lower-confidence
+    proxy: it can only rule sparsity *out*, never confirm a bottleneck on its own.
+    """
+    probe_receipts = []
+    topic_core_volumes: list[int] = []
+    essential_volumes: list[int] = []
+    for probe in probes:
+        search = pubmed_tool.esearch(client, probe["query"], retmax=0, retstart=0, sort=None)
+        count = int(search.get("count", 0) or 0)
+        probe_receipts.append({"label": probe["label"], "role": probe["role"], "query": probe["query"], "count": count})
+        if probe["role"] == "topic-core":
+            topic_core_volumes.append(count)
+        else:
+            essential_volumes.append(count)
+    if topic_core_volumes:
+        discriminating_volume = min(topic_core_volumes)
+        basis = "topic-core"
+        confidence = "high"
+    else:
+        discriminating_volume = max(essential_volumes) if essential_volumes else 0
+        basis = "single-concept-proxy"
+        confidence = "low"
+    verdict = classify_topic_volume(
+        discriminating_volume, sparse_ceiling=sparse_ceiling, bottleneck_floor=bottleneck_floor
+    )
+    artifact = {
+        "operation": "orthogonal-pilot-discrimination",
+        "ok": True,
+        "scope_version": scope_version,
+        "probes": probe_receipts,
+        "topic_core_volume": min(topic_core_volumes) if topic_core_volumes else None,
+        "max_essential_concept_volume": max(essential_volumes) if essential_volumes else None,
+        "discriminating_volume": discriminating_volume,
+        "discriminating_basis": basis,
+        "verdict_confidence": confidence,
+        "sparse_volume_ceiling": sparse_ceiling,
+        "bottleneck_volume_floor": bottleneck_floor,
+        "provisional_verdict": verdict,
+        "note": (
+            "Provisional verdict is advisory; the adjudicate gate re-derives the binding "
+            "verdict against the actual screened-in count. A single-concept-proxy basis can "
+            "only rule sparsity out, not confirm a bottleneck."
+        ),
+    }
+    if binding:
+        artifact.update({key: value for key, value in binding.items() if key != "protocol_path"})
+    return artifact
 
 
 def blind_id(scope_version: int, pmid: str) -> str:
@@ -230,6 +345,10 @@ def adjudicate(
     required_saturated_rounds: int,
     allocation_seed: str,
     binding: dict[str, Any] | None = None,
+    discrimination: dict[str, Any] | None = None,
+    min_screened_in_for_saturation: int = 1,
+    sparse_volume_ceiling: int = SPARSE_VOLUME_CEILING_DEFAULT,
+    bottleneck_volume_floor: int = BOTTLENECK_VOLUME_FLOOR_DEFAULT,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if screening.get("operation") != "orthogonal-pilot-screening" or screening.get("provenance_blinded") is not True:
         raise NoSeedDiscoveryError("Screening artifact is not a provenance-blinded orthogonal-pilot file")
@@ -280,7 +399,65 @@ def adjudicate(
     # Every round reruns all required pilot families. A clean rerun resolves an earlier cap after
     # the pilot was narrowed/completed, while a cap in the current round still blocks saturation.
     cap_reached_any = provenance.get("safety_cap_reached") is True
-    saturation_reached = consecutive >= max(1, required_saturated_rounds) and not cap_reached_any
+    novelty_saturation_reached = consecutive >= max(1, required_saturated_rounds) and not cap_reached_any
+
+    # Volume-discrimination gate: an empty (or below-floor) screened-in set at novelty
+    # saturation cannot be trusted as "the topic is exhausted" until a broad-concept
+    # probe shows the topic really is sparse. Otherwise a broken search or weak pilots
+    # would masquerade as saturation. Applies only at/under the configured floor, so a
+    # single screened-in record still freezes a small (non-independent) ledger as before.
+    included_count = len(included)
+    min_screened_in = max(0, int(min_screened_in_for_saturation))
+    gate: dict[str, Any] = {
+        "applies": bool(novelty_saturation_reached and included_count < min_screened_in),
+        "screened_in_count": included_count,
+        "min_screened_in_for_saturation": min_screened_in,
+        "verdict": "not-applicable",
+    }
+    saturation_reached = novelty_saturation_reached
+    if gate["applies"]:
+        if discrimination is None:
+            gate["verdict"] = "pending-discrimination"
+            gate["required_action"] = (
+                "An empty screened-in set cannot be declared saturated. Run "
+                "`no_seed_discovery.py discriminate` with a topic-core or essential-concept "
+                "probe and pass it via --discrimination-file."
+            )
+            saturation_reached = False
+        else:
+            if discrimination.get("scope_version") != scope_version:
+                raise NoSeedDiscoveryError("Discrimination artifact scope_version does not match --scope-version")
+            volume = int(discrimination.get("discriminating_volume", 0) or 0)
+            verdict = classify_topic_volume(
+                volume, sparse_ceiling=sparse_volume_ceiling, bottleneck_floor=bottleneck_volume_floor
+            )
+            gate.update(
+                {
+                    "verdict": verdict,
+                    "discriminating_volume": volume,
+                    "discriminating_basis": discrimination.get("discriminating_basis"),
+                    "sparse_volume_ceiling": sparse_volume_ceiling,
+                    "bottleneck_volume_floor": bottleneck_volume_floor,
+                }
+            )
+            if verdict == "genuinely-sparse":
+                gate["interpretation"] = (
+                    "Broad topic volume is small, so an empty screened-in set is consistent with a "
+                    "genuinely sparse topic. Saturation accepted with no included candidates."
+                )
+            elif verdict == "discovery-bottleneck":
+                gate["required_action"] = (
+                    "Substantial literature exists for the topic but discovery surfaced no screened-in "
+                    "relevant records. Repair or broaden the orthogonal pilots (or reconsider an over-narrow "
+                    "essential block) and run another discovery round. Do not declare saturation."
+                )
+                saturation_reached = False
+            else:  # indeterminate
+                gate["required_action"] = (
+                    "Broad topic volume is inconclusive. Add a topic-core probe, widen the pilots, or obtain "
+                    "a human decision before declaring saturation."
+                )
+                saturation_reached = False
     state = {
         "operation": "orthogonal-pilot-adjudication",
         "ok": True,
@@ -299,8 +476,10 @@ def adjudicate(
         "consecutive_saturated_rounds": consecutive,
         "required_saturated_rounds": max(1, required_saturated_rounds),
         "safety_cap_reached_any": cap_reached_any,
+        "novelty_saturation_reached": novelty_saturation_reached,
+        "saturation_gate": gate,
         "saturation_reached": saturation_reached,
-        "stopping_rule": "Stop only after consecutive rounds add neither screened-in studies nor vocabulary; a reached safety cap blocks saturation.",
+        "stopping_rule": "Stop only after consecutive rounds add neither screened-in studies nor vocabulary; a reached safety cap or an unresolved volume-discrimination gate blocks saturation.",
         "ledger_frozen": False,
     }
     if binding:
@@ -339,7 +518,9 @@ def adjudicate(
         state["holdout_allocation"] = allocation
         state["candidate_ledger_summary"] = summary
     elif saturation_reached:
-        state["stop_reason"] = "vocabulary-and-relevant-study saturation reached with no included candidates"
+        verdict = gate.get("verdict")
+        detail = f" (volume-discrimination verdict: {verdict})" if verdict and verdict != "not-applicable" else ""
+        state["stop_reason"] = "vocabulary-and-relevant-study saturation reached with no included candidates" + detail
     return state, ledger
 
 
@@ -363,8 +544,27 @@ def build_parser() -> argparse.ArgumentParser:
     adjudicate_parser.add_argument("--protocol-file")
     adjudicate_parser.add_argument("--required-saturated-rounds", type=int, default=2)
     adjudicate_parser.add_argument("--allocation-seed", default="no-seed-orthogonal-pilots")
+    adjudicate_parser.add_argument(
+        "--discrimination-file",
+        help="Volume-discrimination artifact from the discriminate command; required to accept a zero-screened-in saturation.",
+    )
+    adjudicate_parser.add_argument(
+        "--min-screened-in-for-saturation",
+        type=int,
+        default=1,
+        help="Below this screened-in count the volume-discrimination gate must pass before saturation (default 1: gate only the empty set).",
+    )
+    adjudicate_parser.add_argument("--sparse-volume-ceiling", type=int, default=SPARSE_VOLUME_CEILING_DEFAULT)
+    adjudicate_parser.add_argument("--bottleneck-volume-floor", type=int, default=BOTTLENECK_VOLUME_FLOOR_DEFAULT)
     adjudicate_parser.add_argument("--state-output", required=True)
     adjudicate_parser.add_argument("--ledger-output", required=True)
+    discriminate_parser = sub.add_parser("discriminate")
+    discriminate_parser.add_argument("--probes-file", required=True)
+    discriminate_parser.add_argument("--scope-version", type=int, required=True)
+    discriminate_parser.add_argument("--protocol-file")
+    discriminate_parser.add_argument("--sparse-volume-ceiling", type=int, default=SPARSE_VOLUME_CEILING_DEFAULT)
+    discriminate_parser.add_argument("--bottleneck-volume-floor", type=int, default=BOTTLENECK_VOLUME_FLOOR_DEFAULT)
+    discriminate_parser.add_argument("--output", required=True)
     return parser
 
 
@@ -372,7 +572,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         binding = protocol_binding(args.protocol_file, args.scope_version)
-        previous = read_json(args.previous_state) if args.previous_state else None
+        previous_state_path = getattr(args, "previous_state", None)
+        previous = read_json(previous_state_path) if previous_state_path else None
         if previous is not None and not isinstance(previous, dict):
             raise NoSeedDiscoveryError("Previous state must be a JSON object")
         if args.command == "discover":
@@ -396,11 +597,33 @@ def main(argv: list[str] | None = None) -> int:
                 "candidate_count": len(screening["records"]),
                 "provenance_blinded": True,
             }
+        elif args.command == "discriminate":
+            probes = load_probes(args.probes_file)
+            artifact = discriminate(
+                pubmed_tool.NcbiClient(),
+                probes,
+                scope_version=args.scope_version,
+                sparse_ceiling=max(0, args.sparse_volume_ceiling),
+                bottleneck_floor=max(0, args.bottleneck_volume_floor),
+                binding=binding,
+            )
+            write_json(args.output, artifact)
+            receipt = {
+                "operation": "orthogonal-pilot-discriminate",
+                "ok": True,
+                "output": args.output,
+                "discriminating_volume": artifact["discriminating_volume"],
+                "discriminating_basis": artifact["discriminating_basis"],
+                "provisional_verdict": artifact["provisional_verdict"],
+            }
         else:
             screening = read_json(args.screening_file)
             provenance = read_json(args.provenance_file)
             if not isinstance(screening, dict) or not isinstance(provenance, dict):
                 raise NoSeedDiscoveryError("Screening and provenance files must contain JSON objects")
+            discrimination = read_json(args.discrimination_file) if args.discrimination_file else None
+            if discrimination is not None and not isinstance(discrimination, dict):
+                raise NoSeedDiscoveryError("Discrimination file must contain a JSON object")
             state, ledger = adjudicate(
                 screening,
                 provenance,
@@ -409,6 +632,10 @@ def main(argv: list[str] | None = None) -> int:
                 required_saturated_rounds=max(1, args.required_saturated_rounds),
                 allocation_seed=args.allocation_seed,
                 binding=binding,
+                discrimination=discrimination,
+                min_screened_in_for_saturation=args.min_screened_in_for_saturation,
+                sparse_volume_ceiling=max(0, args.sparse_volume_ceiling),
+                bottleneck_volume_floor=max(0, args.bottleneck_volume_floor),
             )
             if ledger is not None:
                 write_json(args.ledger_output, ledger)
@@ -419,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": True,
                 "state_output": args.state_output,
                 "saturation_reached": state["saturation_reached"],
+                "saturation_gate_verdict": state["saturation_gate"]["verdict"],
                 "ledger_frozen": state["ledger_frozen"],
                 "ledger_output": args.ledger_output if ledger is not None else None,
             }
