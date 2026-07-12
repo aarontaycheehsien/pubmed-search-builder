@@ -18,7 +18,16 @@ CHECK_NAMES = (
     "syntax-translation-stable",
     "scope-unchanged-or-explicit",
     "workload-recorded",
+    "no-narrowing-under-low-signal",
 )
+
+# Discovery verdicts (from no_seed_discovery.py) that mean the empty/thin
+# screened-in state is not yet trusted as a real signal of a small topic.
+UNTRUSTED_DISCOVERY_VERDICTS = {"discovery-bottleneck", "indeterminate", "pending-discrimination"}
+
+
+def _nonneg_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 class RevisionGuardError(ValueError):
@@ -160,6 +169,81 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
         "percent_change": round(((revised_count - baseline_count) / baseline_count) * 100, 2) if workload_pass and baseline_count else None,
     }
 
+    # No narrowing under a low-count / empty-discovery signal. The skill forbids
+    # narrowing scope or block breadth just because retrieval is low or discovery
+    # found few records, but that rule was previously only an instruction. When the
+    # caller records an active low_signal, this check mechanically fails any breadth
+    # reduction that is not an authorized scope re-entry, so the anti-pattern cannot
+    # pass silently. Absent a low_signal the check is not applicable and passes.
+    low_signal = data.get("low_signal") if isinstance(data.get("low_signal"), dict) else None
+    if low_signal is None:
+        low_narrowing_pass = True
+        low_signal_active = False
+        low_narrowing_failure = ""
+        low_narrowing_evidence: dict[str, Any] = {"applicable": False, "reason": "no low_signal supplied"}
+    else:
+        verdict = str(low_signal.get("discovery_verdict") or "").strip()
+        explicit_active = low_signal.get("active")
+        derived_active = (
+            bool(low_signal.get("low_count"))
+            or bool(low_signal.get("no_included_candidates"))
+            or verdict in UNTRUSTED_DISCOVERY_VERDICTS
+        )
+        low_signal_active = explicit_active if isinstance(explicit_active, bool) else derived_active
+        signal_evidence = {
+            "low_count": bool(low_signal.get("low_count")),
+            "topic_only_count": low_signal.get("topic_only_count"),
+            "no_included_candidates": bool(low_signal.get("no_included_candidates")),
+            "discovery_verdict": verdict or None,
+        }
+        if not low_signal_active:
+            low_narrowing_pass = True
+            low_narrowing_failure = ""
+            low_narrowing_evidence = {"applicable": True, "active": False, "signal": signal_evidence}
+        else:
+            baseline_terms = baseline.get("search_term_count")
+            revised_terms = revised.get("search_term_count")
+            breadth_recorded = _nonneg_int(baseline_terms) and _nonneg_int(revised_terms)
+            baseline_block_terms = baseline.get("block_term_counts") if isinstance(baseline.get("block_term_counts"), dict) else {}
+            revised_block_terms = revised.get("block_term_counts") if isinstance(revised.get("block_term_counts"), dict) else {}
+            per_block_reduced = sorted(
+                str(block_id)
+                for block_id in set(baseline_block_terms) & set(revised_block_terms)
+                if _nonneg_int(baseline_block_terms.get(block_id))
+                and _nonneg_int(revised_block_terms.get(block_id))
+                and revised_block_terms[block_id] < baseline_block_terms[block_id]
+            )
+            total_reduced = bool(breadth_recorded and revised_terms < baseline_terms)
+            narrowing = bool(total_reduced or per_block_reduced)
+            authorized_scope_reentry = bool(changed and scope_pass)
+            auth = low_signal.get("authorized_narrowing")
+            explicit_auth = (
+                isinstance(auth, dict) and auth.get("authorized") is True and bool(str(auth.get("reason") or "").strip())
+            )
+            authorized = authorized_scope_reentry or explicit_auth
+            if not breadth_recorded:
+                low_narrowing_pass = False
+                low_narrowing_failure = "baseline/revised search_term_count is required while a low-count or empty-discovery signal is active"
+            elif narrowing and not authorized:
+                low_narrowing_pass = False
+                low_narrowing_failure = "revision narrows block breadth while a low-count/empty-discovery signal is active without an authorized scope re-entry"
+            else:
+                low_narrowing_pass = True
+                low_narrowing_failure = ""
+            low_narrowing_evidence = {
+                "applicable": True,
+                "active": True,
+                "signal": signal_evidence,
+                "baseline_term_count": baseline_terms if _nonneg_int(baseline_terms) else None,
+                "revised_term_count": revised_terms if _nonneg_int(revised_terms) else None,
+                "breadth_recorded": breadth_recorded,
+                "total_breadth_reduced": total_reduced,
+                "per_block_reduced": per_block_reduced,
+                "narrowing": narrowing,
+                "authorized_scope_reentry": authorized_scope_reentry,
+                "authorized_narrowing": bool(explicit_auth),
+            }
+
     checks = [
         check("named-defect-fixed", defect_pass, {"defect_id": defect_id, "evidence": defect_evidence}, "named defect lacks a fixed=true evidence record"),
         check("heldout-preserved", not lost_heldout, {"baseline_retrieved": baseline_heldout, "revised_retrieved": revised_heldout, "lost_pmids": lost_heldout}, "revision loses previously retrieved held-out records"),
@@ -167,6 +251,7 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
         check("syntax-translation-stable", syntax_pass, {"syntax_ok": revised.get("syntax_ok"), "translation_drift_issues": drift}, "revision introduces syntax or translation drift"),
         check("scope-unchanged-or-explicit", scope_pass, {"changed": changed, "authorized": scope.get("authorized"), "baseline_scope_version": baseline_scope, "revised_scope_version": revised_scope}, "revision changes scope without a valid new protocol version"),
         check("workload-recorded", workload_pass, workload, "revision lacks numeric before/after result counts"),
+        check("no-narrowing-under-low-signal", low_narrowing_pass, low_narrowing_evidence, low_narrowing_failure or "revision narrows breadth under a low-count/empty-discovery signal"),
     ]
     experimental = data.get("experimental_variant") if isinstance(data.get("experimental_variant"), dict) else {}
     passed, disposition = disposition_for_checks(checks, experimental)
@@ -185,6 +270,7 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
         "no_harm_passed": passed,
         "failed_checks": [item["name"] for item in checks if not item["passed"]],
         "disposition": disposition,
+        "low_signal_active": low_signal_active,
         # Keep these absolute because the result artifact may be written to a
         # different directory from its input. Downstream manifest validation
         # must resolve the exact file that was hashed here.

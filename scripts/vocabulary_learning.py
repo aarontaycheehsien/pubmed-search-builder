@@ -387,6 +387,16 @@ def retest_learning(
             revision_guard.check("syntax-translation-stable", syntax_ok and not drift_issues, {"syntax_ok": syntax_ok, "translation_drift_issues": drift_issues, "query_translation": expanded_search.get("query_translation", "")}, "expanded block introduces syntax or PubMed translation drift"),
             revision_guard.check("scope-unchanged-or-explicit", extraction.get("scope_reentry_required") is False and concept.casefold() in locked, {"scope_version": scope_version, "concept": concept, "scope_reentry_required": extraction.get("scope_reentry_required")}, "vocabulary revision silently changes scope"),
             revision_guard.check("workload-recorded", True, workload, "before/after result counts are unavailable"),
+            revision_guard.check(
+                "no-narrowing-under-low-signal",
+                True,
+                {
+                    "applicable": False,
+                    "reason": "vocabulary expansion adds terms within an existing OR block; block breadth is non-decreasing",
+                    "added_term_query": term_query,
+                },
+                "vocabulary expansion unexpectedly reduced block breadth",
+            ),
         ]
         experimental = {
             "retain_if_failed": proposal.get("retain_experimental_if_failed") is True,
@@ -448,7 +458,7 @@ def retest_learning(
         "experimental_term_count": len(experimental),
         "reverted_term_count": len(reverted),
         "all_accepted_terms_retested": all(isinstance(item.get("retest"), dict) and item["retest"].get("required") is True and isinstance(item.get("no_harm"), dict) for item in accepted),
-        "no_harm_checks_complete": all(isinstance(item.get("no_harm"), dict) and len(item["no_harm"].get("checks", [])) == 6 for item in accepted),
+        "no_harm_checks_complete": all(isinstance(item.get("no_harm"), dict) and len(item["no_harm"].get("checks", [])) == len(revision_guard.CHECK_NAMES) for item in accepted),
         "note": "Accepted terms are additions within locked concepts only. New concepts or eligibility interpretations require scope re-entry.",
         "request_info": client.metadata(),
     }

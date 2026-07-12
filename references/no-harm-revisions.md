@@ -4,7 +4,7 @@ Use this gate for every critic-driven strategy revision and every accepted vocab
 
 ## Required checks
 
-Prove and save all six checks:
+Prove and save all seven checks:
 
 1. **Named defect fixed:** identify the critic finding or vocabulary gap and cite before/after evidence showing the change addresses it.
 2. **Held-out retrieval preserved:** every held-out PMID retrieved by the baseline remains retrieved after revision. Record the tested baseline and revised PMID sets even when the set is empty.
@@ -12,6 +12,23 @@ Prove and save all six checks:
 4. **Syntax and translation stable:** rerun the revised query and record syntax status, PubMed translation, warnings, and drift issues. A warning or unrecognized field fails the check until resolved.
 5. **Scope unchanged or explicitly versioned:** the protocol hash and scope version remain unchanged, or an authorized protocol re-entry increments the scope version and records the reason.
 6. **Workload effect recorded:** save exact before/after counts, absolute change, and percentage change where the baseline count is nonzero.
+7. **No narrowing under a low signal:** the search must not lose block breadth just because retrieval is low or discovery surfaced few relevant records. This is a mechanical tripwire, not only an instruction.
+
+### No narrowing under a low-count / empty-discovery signal
+
+A low retrieval count and an empty screened-in set are *triggers to investigate*, never evidence that the topic is small — so they must not be used to justify dropping terms or narrowing a block. When such a state exists, record it in the guard input as a `low_signal` object so the check can enforce this:
+
+```json
+"low_signal": {
+  "low_count": true,
+  "topic_only_count": 120,
+  "no_included_candidates": false,
+  "discovery_verdict": "discovery-bottleneck",
+  "authorized_narrowing": {"authorized": false, "reason": ""}
+}
+```
+
+The signal is **active** when `low_count`, `no_included_candidates`, or an untrusted `discovery_verdict` (`discovery-bottleneck`, `indeterminate`, `pending-discrimination` from `no_seed_discovery.py`) is set (or `active: true` is given explicitly). While it is active, the guard **requires** `search_term_count` on both baseline and revised (optionally per-block `block_term_counts`) and **fails** the check if the revised search reduces total or any per-block breadth — unless the reduction is an authorized scope re-entry (checks 5 passes with `scope_change.changed`) or an explicit `authorized_narrowing` with a recorded reason (e.g. the user confirmed a term is genuinely out of scope). Absent a `low_signal`, the check is not applicable and passes, so ordinary revisions are unaffected. This converts "never narrow on a low count" from a soft norm the model could violate silently into a checked invariant that reverts the revision to baseline.
 
 ## Critic revisions
 

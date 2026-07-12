@@ -115,7 +115,7 @@ class VocabularyLearningTests(unittest.TestCase):
         self.assertTrue(result["all_accepted_terms_retested"])
         self.assertTrue(result["no_harm_checks_complete"])
         self.assertEqual(result["proposals"][0]["effective_decision"], "adopted")
-        self.assertEqual(len(result["proposals"][0]["no_harm"]["checks"]), 6)
+        self.assertEqual(len(result["proposals"][0]["no_harm"]["checks"]), 7)
 
     def test_no_effect_revision_is_automatically_reverted(self):
         extraction = self.extract()
