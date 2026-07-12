@@ -1,0 +1,261 @@
+{
+  "id": "van_Dis_2020",
+  "suite": "synergy",
+  "question": "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders",
+  "gold_relevant_pmids": [
+    12602423,
+    10937426,
+    17974932,
+    19880935,
+    28829958,
+    27513363,
+    28557299,
+    21787052,
+    27459503,
+    27592635,
+    25461793,
+    27348462,
+    28673741,
+    17254365,
+    22012149,
+    11729015,
+    20870368,
+    20060517,
+    7706505,
+    20873905,
+    7887873,
+    22863540,
+    15274171,
+    8179463,
+    8099789,
+    1684704,
+    9554427,
+    21333272,
+    1955605,
+    27668723,
+    9337600,
+    20171327,
+    25607833,
+    10883554,
+    23916633,
+    19351943,
+    16488388,
+    27825724,
+    21644186,
+    15301642,
+    21208581,
+    18377122,
+    17032094,
+    21929830,
+    19634955,
+    10838679,
+    18292398,
+    25929985,
+    24480899,
+    14557148,
+    12701670,
+    20625129,
+    18230943,
+    26244854,
+    8741719,
+    12732372,
+    7962886,
+    8370856,
+    10815116,
+    22964540,
+    28270335
+  ],
+  "evaluation_gold_pmids": [
+    12602423,
+    10937426,
+    17974932,
+    19880935,
+    28829958,
+    27513363,
+    28557299,
+    21787052,
+    27459503,
+    27592635,
+    25461793,
+    27348462,
+    28673741,
+    17254365,
+    22012149,
+    11729015,
+    20870368,
+    20060517,
+    7706505,
+    20873905,
+    7887873,
+    22863540,
+    15274171,
+    8179463,
+    8099789,
+    1684704,
+    9554427,
+    21333272,
+    1955605,
+    27668723,
+    9337600,
+    20171327,
+    25607833,
+    10883554,
+    23916633,
+    19351943,
+    16488388,
+    27825724,
+    21644186,
+    15301642,
+    21208581,
+    18377122,
+    17032094,
+    21929830,
+    19634955,
+    10838679,
+    18292398,
+    25929985,
+    24480899,
+    14557148,
+    12701670,
+    20625129,
+    18230943,
+    26244854,
+    8741719,
+    12732372,
+    7962886,
+    8370856,
+    10815116,
+    22964540,
+    28270335
+  ],
+  "source": "SYNERGY dataset van_Dis_2020 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: psychology / psychiatry.",
+  "gold_source": "DOIs file (C:\\Users\\aaron\\AppData\\Local\\Temp\\tmpx_61l6cl.txt); 61/70 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-van_Dis_2020",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Long-term outcomes of cognitive behavioral therapy for anxiety-related disorders"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.1016/s0005-7894(05)80367-3",
+    "10.1016/j.invent.2014.08.002",
+    "10.1016/0887-6185(96)00008-4",
+    "10.1016/0887-6185(96)00008-4",
+    "10.1007/BF01173521",
+    "10.1007/BF01177658",
+    "10.1891/jcop.17.2.149.57432",
+    "10.1037/0022-006x.70.2.288",
+    "10.1016/s0005-7894(89)80073-5"
+  ]
+}

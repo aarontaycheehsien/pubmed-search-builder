@@ -1,0 +1,242 @@
+{
+  "id": "Brouwer_2019",
+  "suite": "synergy",
+  "question": "Psychological theories of depressive relapse and recurrence",
+  "gold_relevant_pmids": [
+    20163785,
+    23050993,
+    20004476,
+    26098793,
+    15466672,
+    17663607,
+    16818864,
+    23108435,
+    22445946,
+    11952186,
+    24491073,
+    26528654,
+    18251627,
+    22903859,
+    1537969,
+    11727952,
+    1636804,
+    17295573,
+    8731070,
+    18707676,
+    25277497,
+    17563161,
+    20797379,
+    27069286,
+    16840843,
+    17156852,
+    16785772,
+    17696703,
+    20584514,
+    10096642,
+    21848705,
+    25985046,
+    22448730,
+    23111147,
+    25560481,
+    26519635,
+    25462402,
+    18805590,
+    16538651,
+    11246082,
+    9500684,
+    15291658,
+    9170761,
+    14691361,
+    30223139,
+    28837949,
+    29265831,
+    30431297,
+    30138805,
+    28575049,
+    28388454,
+    17574685,
+    28286705,
+    25881281
+  ],
+  "evaluation_gold_pmids": [
+    20163785,
+    23050993,
+    20004476,
+    26098793,
+    15466672,
+    17663607,
+    16818864,
+    23108435,
+    22445946,
+    11952186,
+    24491073,
+    26528654,
+    18251627,
+    22903859,
+    1537969,
+    11727952,
+    1636804,
+    17295573,
+    8731070,
+    18707676,
+    25277497,
+    17563161,
+    20797379,
+    27069286,
+    16840843,
+    17156852,
+    16785772,
+    17696703,
+    20584514,
+    10096642,
+    21848705,
+    25985046,
+    22448730,
+    23111147,
+    25560481,
+    26519635,
+    25462402,
+    18805590,
+    16538651,
+    11246082,
+    9500684,
+    15291658,
+    9170761,
+    14691361,
+    30223139,
+    28837949,
+    29265831,
+    30431297,
+    30138805,
+    28575049,
+    28388454,
+    17574685,
+    28286705,
+    25881281
+  ],
+  "source": "SYNERGY dataset Brouwer_2019 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: psychology.",
+  "gold_source": "DOIs file (C:\\Users\\aaron\\AppData\\Local\\Temp\\tmp48qme207.txt); 55/59 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Brouwer_2019",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Psychological theories of depressive relapse and recurrence",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Psychological theories of depressive relapse and recurrence"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Psychological theories of depressive relapse and recurrence"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Psychological theories of depressive relapse and recurrence",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Psychological theories of depressive relapse and recurrence"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.1016/0146-6402(84)90005-5",
+    "10.1017/s1352465806002839",
+    "10.4088/jcp.v67n0508",
+    "10.1007/s10608-005-4290-7"
+  ]
+}

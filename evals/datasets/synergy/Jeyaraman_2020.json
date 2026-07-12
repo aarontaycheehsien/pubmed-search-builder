@@ -1,0 +1,315 @@
+{
+  "id": "Jeyaraman_2020",
+  "suite": "synergy",
+  "question": "Source of mesenchymal stem cells for the management of osteoarthritis of the knee",
+  "gold_relevant_pmids": [
+    16644224,
+    25548122,
+    19966102,
+    32713192,
+    28056183,
+    30063401,
+    35415075,
+    33492407,
+    32476445,
+    26069711,
+    32712785,
+    19059899,
+    32046514,
+    30543757,
+    34836478,
+    25349263,
+    15187860,
+    26768608,
+    34577930,
+    16552548,
+    31251661,
+    32620530,
+    31549208,
+    32617651,
+    26574602,
+    31297576,
+    28910133,
+    16171631,
+    26069570,
+    32520591,
+    27789021,
+    29335748,
+    26815276,
+    31395183,
+    26069709,
+    28737949,
+    24048551,
+    23880403,
+    22901594,
+    32528994,
+    12571292,
+    21460066,
+    15278206,
+    24714783,
+    24258020,
+    22539536,
+    23589126,
+    27881381,
+    28646824,
+    18434214,
+    27663035,
+    19846693,
+    31785390,
+    27614391,
+    32134685,
+    25143504,
+    23370980,
+    33359816,
+    35529427,
+    34048286,
+    33490296,
+    32667270,
+    32556433,
+    32043426,
+    31312692,
+    29909583,
+    29253350,
+    28913600,
+    28282221,
+    28170179,
+    28108777,
+    27826762,
+    27574261,
+    27474386,
+    27206690,
+    26956476,
+    26685030,
+    26585585,
+    25763853,
+    24286801,
+    23024150,
+    22637204,
+    22572868,
+    21908720,
+    21900624,
+    20104156,
+    20062969,
+    19846694,
+    19339575,
+    18202295,
+    14996869
+  ],
+  "evaluation_gold_pmids": [
+    16644224,
+    25548122,
+    19966102,
+    32713192,
+    28056183,
+    30063401,
+    35415075,
+    33492407,
+    32476445,
+    26069711,
+    32712785,
+    19059899,
+    32046514,
+    30543757,
+    34836478,
+    25349263,
+    15187860,
+    26768608,
+    34577930,
+    16552548,
+    31251661,
+    32620530,
+    31549208,
+    32617651,
+    26574602,
+    31297576,
+    28910133,
+    16171631,
+    26069570,
+    32520591,
+    27789021,
+    29335748,
+    26815276,
+    31395183,
+    26069709,
+    28737949,
+    24048551,
+    23880403,
+    22901594,
+    32528994,
+    12571292,
+    21460066,
+    15278206,
+    24714783,
+    24258020,
+    22539536,
+    23589126,
+    27881381,
+    28646824,
+    18434214,
+    27663035,
+    19846693,
+    31785390,
+    27614391,
+    32134685,
+    25143504,
+    23370980,
+    33359816,
+    35529427,
+    34048286,
+    33490296,
+    32667270,
+    32556433,
+    32043426,
+    31312692,
+    29909583,
+    29253350,
+    28913600,
+    28282221,
+    28170179,
+    28108777,
+    27826762,
+    27574261,
+    27474386,
+    27206690,
+    26956476,
+    26685030,
+    26585585,
+    25763853,
+    24286801,
+    23024150,
+    22637204,
+    22572868,
+    21908720,
+    21900624,
+    20104156,
+    20062969,
+    19846694,
+    19339575,
+    18202295,
+    14996869
+  ],
+  "source": "SYNERGY dataset Jeyaraman_2020 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: biomedical (orthopedics / regenerative medicine).",
+  "gold_source": "DOIs file (C:\\Users\\aaron\\AppData\\Local\\Temp\\tmp0f0ahz_2.txt); 91/94 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Jeyaraman_2020",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Source of mesenchymal stem cells for the management of osteoarthritis of the knee",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Source of mesenchymal stem cells for the management of osteoarthritis of the knee"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Source of mesenchymal stem cells for the management of osteoarthritis of the knee"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Source of mesenchymal stem cells for the management of osteoarthritis of the knee",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Source of mesenchymal stem cells for the management of osteoarthritis of the knee"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.3390/app10134615",
+    "10.47102/annals-acadmedsg.v41n11p511",
+    "10.21037/aoj.2018.06.08"
+  ]
+}
