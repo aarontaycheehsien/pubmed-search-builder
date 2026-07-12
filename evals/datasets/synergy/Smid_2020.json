@@ -1,0 +1,297 @@
+{
+  "id": "Smid_2020",
+  "suite": "synergy",
+  "question": "In structural equation models estimated with small samples, how does Bayesian estimation compare with frequentist (maximum likelihood) estimation in terms of performance, accuracy, and bias?",
+  "gold_relevant_pmids": [
+    23148476,
+    19001592,
+    26579002,
+    23527607,
+    24550881,
+    19968395,
+    26745462,
+    25361865,
+    29172613,
+    25765534,
+    27269278,
+    28342072,
+    24731180,
+    27594086
+  ],
+  "evaluation_gold_pmids": [
+    23148476,
+    19001592,
+    26579002,
+    23527607,
+    24550881,
+    19968395,
+    26745462,
+    25361865,
+    29172613,
+    25765534,
+    27269278,
+    28342072,
+    24731180,
+    27594086
+  ],
+  "source": "SYNERGY dataset (asreview/synergy-dataset) Smid_2020; social-science methodology review 'Bayesian Versus Frequentist Estimation for Structural Equation Models in Small Sample Contexts' (Struct Equ Modeling 2020, doi:10.1080/10705511.2019.1577140); gold = label_included==1 rows with DOI, resolved via [AID]",
+  "gold_source": "DOIs file (C:/Users/aaron/AppData/Local/Temp/claude/C--Users-aaron--codex-skill-packages-pubmed-search-builder/e920bc00-341e-4f71-89c4-175189edcd33/scratchpad/Smid_2020_dois.txt); 14/27 resolved via [AID]",
+  "gold_adjudication": "user-confirmed relevant set",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-smid-2020-bayesian-sem",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol for the Bayesian-vs-frequentist SEM recall fixture.",
+      "decision_source": "Evaluation fixture author; scope derived from Smid et al. 2020 (Struct Equ Modeling, doi:10.1080/10705511.2019.1577140)."
+    },
+    "review": {
+      "question": "In structural equation models estimated with small samples, how does Bayesian estimation compare with frequentist (maximum likelihood) estimation in terms of performance, accuracy, and bias?",
+      "framework": {
+        "name": "Methods-comparison (model x estimation method x sample context x evaluation)",
+        "rationale": "This is a methodological simulation-study review, not a clinical PICO question. The two axes that every eligible study shares and that drive retrieval are the model family (structural equation / latent-variable models) and the estimation method (Bayesian). The small-sample context, the simulation-study design, the frequentist comparator, and the social-science field are eligibility qualifiers that are inconsistently worded in abstracts, so they are screening-only to protect recall.",
+        "slots": [
+          {
+            "id": "model",
+            "label": "Model family",
+            "description": "Structural equation / latent-variable model family (SEM, CFA, latent growth/class, multilevel, mediation)."
+          },
+          {
+            "id": "method",
+            "label": "Estimation method",
+            "description": "Bayesian estimation (with priors / MCMC), the method under evaluation."
+          },
+          {
+            "id": "context",
+            "label": "Sample context",
+            "description": "Small-sample (or few-cluster) estimation context."
+          },
+          {
+            "id": "evaluation",
+            "label": "Evaluation",
+            "description": "Simulation-study comparison of estimator performance against frequentist/maximum-likelihood methods."
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "inc-model",
+          "label": "Structural-equation / latent-variable model",
+          "description": "The study concerns a structural equation model or a model in the SEM/latent-variable family (CFA, latent growth/class, multilevel, mediation)."
+        },
+        {
+          "id": "inc-bayesian",
+          "label": "Evaluates Bayesian estimation",
+          "description": "The study investigates Bayesian estimation (with prior distributions / MCMC) of such a model."
+        },
+        {
+          "id": "inc-comparison",
+          "label": "Compares against frequentist estimation",
+          "description": "Performance of Bayesian estimation is compared against frequentist / maximum-likelihood (or alternative) estimation."
+        },
+        {
+          "id": "inc-small-sample",
+          "label": "Small-sample context",
+          "description": "The estimation problem is set in a small-sample (or few-cluster) context."
+        },
+        {
+          "id": "inc-simulation",
+          "label": "Simulation-based evaluation",
+          "description": "Estimator performance is evaluated via a Monte Carlo / simulation study (optionally alongside an empirical example)."
+        },
+        {
+          "id": "inc-field",
+          "label": "Peer-reviewed, social-science methodology",
+          "description": "A peer-reviewed methodological paper in the field of the social/behavioural sciences."
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exc-not-model",
+          "label": "Not a latent-variable/SEM model",
+          "description": "The model is not in the structural-equation / latent-variable family."
+        },
+        {
+          "id": "exc-not-bayesian",
+          "label": "No Bayesian estimation",
+          "description": "The study does not evaluate Bayesian estimation."
+        },
+        {
+          "id": "exc-no-evaluation",
+          "label": "No performance evaluation",
+          "description": "The study is a purely applied analysis with no simulation/performance comparison of estimators."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "sem-model-family",
+          "label": "Structural equation / latent-variable model family",
+          "role": "essential",
+          "eligibility_refs": [
+            "inc-model"
+          ],
+          "framework_slots": [
+            "model"
+          ],
+          "definition": "The statistical model under study: structural equation models and the broader latent-variable family (confirmatory factor analysis, latent growth/class, multilevel, and mediation models). Retrieval must not depend on the single phrase 'structural equation'.",
+          "rationale": "A shared essential concept: every eligible study estimates a model in this family. It needs broad synonym expansion because the family spans SEM, CFA, latent growth, multilevel, and mediation labels.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "structural equation modeling",
+            "structural equation model",
+            "SEM",
+            "latent variable model",
+            "latent variable",
+            "latent class",
+            "latent growth",
+            "confirmatory factor analysis",
+            "factor analysis",
+            "mediation analysis",
+            "mediated effect",
+            "indirect effect",
+            "multilevel model",
+            "growth mixture model",
+            "mixture model"
+          ]
+        },
+        {
+          "id": "bayesian-estimation",
+          "label": "Bayesian estimation",
+          "role": "essential",
+          "eligibility_refs": [
+            "inc-bayesian"
+          ],
+          "framework_slots": [
+            "method"
+          ],
+          "definition": "The estimation method under evaluation: Bayesian estimation using prior distributions and MCMC/Gibbs sampling. Distinct from the frequentist comparator, which is handled at screening.",
+          "rationale": "A shared essential concept: every eligible study evaluates Bayesian estimation, so it co-anchors the search with the model family.",
+          "provisional_fragility": "stable",
+          "term_families": [
+            "Bayesian estimation",
+            "Bayesian",
+            "Bayes",
+            "prior distribution",
+            "informative prior",
+            "MCMC",
+            "Markov chain Monte Carlo",
+            "Gibbs sampling",
+            "posterior distribution"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": [
+        {
+          "id": "small-sample-context",
+          "label": "Small-sample (or few-cluster) context",
+          "eligibility_refs": [
+            "inc-small-sample"
+          ],
+          "instructions": "Confirm at screening that the estimation problem is set in a small-sample or few-cluster context. Do not add a small-sample AND block.",
+          "recall_rationale": "Small-sample phrasing ('small sample', 'few clusters', 'limited N', 'small data set') is inconsistent and often absent from abstracts; as a search block it drops eligible papers (empirically only ~11/14 of the gold)."
+        },
+        {
+          "id": "simulation-evaluation",
+          "label": "Simulation-based performance evaluation",
+          "eligibility_refs": [
+            "inc-simulation"
+          ],
+          "instructions": "Confirm at screening that estimator performance is evaluated via a Monte Carlo / simulation study. Do not add a simulation AND block.",
+          "recall_rationale": "Simulation-study terms are frequently not in the abstract of methods papers; as a block they bottleneck recall."
+        },
+        {
+          "id": "frequentist-comparator",
+          "label": "Comparison against frequentist / maximum-likelihood estimation",
+          "eligibility_refs": [
+            "inc-comparison"
+          ],
+          "instructions": "Confirm at screening that Bayesian estimation is compared against frequentist / maximum-likelihood (or an alternative) estimator. Do not add a comparator AND block.",
+          "recall_rationale": "The comparator arm ('frequentist', 'maximum likelihood', 'WLSMV') is not always named in title/abstract; a comparator block would silently drop eligible comparisons."
+        },
+        {
+          "id": "social-science-field",
+          "label": "Peer-reviewed social-science methodology",
+          "eligibility_refs": [
+            "inc-field"
+          ],
+          "instructions": "Confirm at screening that the paper is a peer-reviewed methodological paper in the social/behavioural sciences. Apply no field or publication-type search limit.",
+          "recall_rationale": "Field/discipline is essentially never stated in abstracts; a field limit would be a severe, arbitrary recall filter."
+        }
+      ]
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological (study-design) filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "Recall-first evaluation build; the simulation-study design is confirmed at screening, not by a search-time hedge."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, field, publication-status, or date limits are authorized for the evaluation build."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries; the evaluation scores against a fixed gold set and applies no date limit."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "unresolved_dois": [
+    "10.1080/10705511.2014.937849",
+    "10.1080/10705511.2012.634712",
+    "10.1080/10705511.2014.937322",
+    "10.3102/1076998615621299",
+    "10.18148/srm/2012.v6i2.5033",
+    "10.1214/06-ba117",
+    "10.1111/ajps.12001",
+    "10.1080/10705511.2016.1186549",
+    "10.1007/s001800000041",
+    "10.1027/1614-2241/a000162",
+    "10.1080/10705511.2012.659614",
+    "10.1007/s00180-007-0100-x",
+    "10.1080/10705511.2014.882688"
+  ],
+  "protocol_status": "tightened; lock-validated and compiled. Achievable recall ~13/14 with a screenable 2-block scope (Bayesian estimation x SEM/latent-variable model family); the applied outlier PMID 25765534 lacks any SEM term in its abstract and is only reachable by generic terms that explode retrieval ~40x, so it is left outside the precise scope by design."
+}
