@@ -1,0 +1,204 @@
+{
+  "id": "van_de_Schoot_2018",
+  "suite": "synergy",
+  "question": "Post-traumatic stress disorder symptom trajectories after a traumatic event",
+  "gold_relevant_pmids": [
+    25657356,
+    25029224,
+    22361018,
+    24683300,
+    20836603,
+    25255912,
+    25419860,
+    26401968,
+    25188895,
+    26268244,
+    25630586,
+    25990986,
+    26625353,
+    26799823,
+    25451407,
+    23206321,
+    20061839,
+    24786564,
+    20421202,
+    23290559,
+    20564365,
+    21898602,
+    21594899,
+    24819209,
+    15253091,
+    22807251,
+    26681368,
+    20307934,
+    23990895,
+    22911810,
+    23551932,
+    23129059,
+    20175629,
+    21440348,
+    25461873,
+    19403217,
+    26412244,
+    22661909
+  ],
+  "evaluation_gold_pmids": [
+    25657356,
+    25029224,
+    22361018,
+    24683300,
+    20836603,
+    25255912,
+    25419860,
+    26401968,
+    25188895,
+    26268244,
+    25630586,
+    25990986,
+    26625353,
+    26799823,
+    25451407,
+    23206321,
+    20061839,
+    24786564,
+    20421202,
+    23290559,
+    20564365,
+    21898602,
+    21594899,
+    24819209,
+    15253091,
+    22807251,
+    26681368,
+    20307934,
+    23990895,
+    22911810,
+    23551932,
+    23129059,
+    20175629,
+    21440348,
+    25461873,
+    19403217,
+    26412244,
+    22661909
+  ],
+  "source": "SYNERGY dataset van_de_Schoot_2018 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: social science (quantitative methodology) / psychology.",
+  "gold_source": "Local DOI list; 38/38 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-van_de_Schoot_2018",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Post-traumatic stress disorder symptom trajectories after a traumatic event",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Post-traumatic stress disorder symptom trajectories after a traumatic event"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Post-traumatic stress disorder symptom trajectories after a traumatic event"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Post-traumatic stress disorder symptom trajectories after a traumatic event",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Post-traumatic stress disorder symptom trajectories after a traumatic event"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py."
+}

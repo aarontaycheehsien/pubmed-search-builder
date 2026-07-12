@@ -1,0 +1,276 @@
+{
+  "id": "Menon_2022",
+  "suite": "synergy",
+  "question": "Methodological rigour of systematic reviews in environmental health",
+  "gold_relevant_pmids": [
+    31734383,
+    31692109,
+    31711095,
+    32246781,
+    32003024,
+    32342888,
+    31401745,
+    32252671,
+    32320481,
+    31767045,
+    32169997,
+    32278917,
+    32679627,
+    32398147,
+    32666031,
+    32313524,
+    32430062,
+    32357902,
+    32006883,
+    32443219,
+    31884209,
+    32276169,
+    32438096,
+    32497902,
+    32135359,
+    32113025,
+    32460093,
+    32668538,
+    32244108,
+    32516633,
+    32445942,
+    32356052,
+    32091510,
+    32143119,
+    30884495,
+    32343457,
+    32474653,
+    31925736,
+    32080892,
+    31932956,
+    32108942,
+    31070475,
+    32248699,
+    32344732,
+    32283742,
+    32316194,
+    32365627,
+    32272785,
+    32387882,
+    31541557,
+    32473798,
+    32167232,
+    30100164,
+    30696940,
+    31989413,
+    31727405,
+    32048436,
+    32026567,
+    32184210,
+    32361950,
+    31809833,
+    32059156,
+    31899558,
+    32349855,
+    31991162,
+    32044481,
+    32422434,
+    32325616,
+    32325560,
+    31761290,
+    32354630,
+    32446663,
+    32386510,
+    32240845
+  ],
+  "evaluation_gold_pmids": [
+    31734383,
+    31692109,
+    31711095,
+    32246781,
+    32003024,
+    32342888,
+    31401745,
+    32252671,
+    32320481,
+    31767045,
+    32169997,
+    32278917,
+    32679627,
+    32398147,
+    32666031,
+    32313524,
+    32430062,
+    32357902,
+    32006883,
+    32443219,
+    31884209,
+    32276169,
+    32438096,
+    32497902,
+    32135359,
+    32113025,
+    32460093,
+    32668538,
+    32244108,
+    32516633,
+    32445942,
+    32356052,
+    32091510,
+    32143119,
+    30884495,
+    32343457,
+    32474653,
+    31925736,
+    32080892,
+    31932956,
+    32108942,
+    31070475,
+    32248699,
+    32344732,
+    32283742,
+    32316194,
+    32365627,
+    32272785,
+    32387882,
+    31541557,
+    32473798,
+    32167232,
+    30100164,
+    30696940,
+    31989413,
+    31727405,
+    32048436,
+    32026567,
+    32184210,
+    32361950,
+    31809833,
+    32059156,
+    31899558,
+    32349855,
+    31991162,
+    32044481,
+    32422434,
+    32325616,
+    32325560,
+    31761290,
+    32354630,
+    32446663,
+    32386510,
+    32240845
+  ],
+  "source": "SYNERGY dataset Menon_2022 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: social science / research methodology.",
+  "gold_source": "Local DOI list; 75/75 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Menon_2022",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Methodological rigour of systematic reviews in environmental health",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Methodological rigour of systematic reviews in environmental health"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Methodological rigour of systematic reviews in environmental health"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Methodological rigour of systematic reviews in environmental health",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Methodological rigour of systematic reviews in environmental health"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py."
+}

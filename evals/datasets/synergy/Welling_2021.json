@@ -1,0 +1,241 @@
+{
+  "id": "Welling_2021",
+  "suite": "synergy",
+  "question": "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being",
+  "gold_relevant_pmids": [
+    32920993,
+    32762129,
+    33071408,
+    32525096,
+    33106820,
+    32589788,
+    32959000,
+    32947805,
+    33148091,
+    32242089,
+    33001455,
+    33083817,
+    32676491,
+    32784530,
+    33173756,
+    33182661,
+    32887592,
+    33016086,
+    33105275,
+    32763110,
+    33108612,
+    32764151,
+    32899277,
+    32872577,
+    33070000,
+    32458805,
+    33121998,
+    33071407,
+    33218018,
+    32716566,
+    33042917,
+    32871499,
+    33123063,
+    32463530,
+    33207786,
+    33181369,
+    32709738,
+    32352652,
+    33126117,
+    33121902,
+    32429705,
+    33004322,
+    32560550,
+    32227671,
+    33206868,
+    33047842,
+    32719646,
+    33152743,
+    33099049,
+    33205284,
+    32640077,
+    32360513,
+    33096659
+  ],
+  "evaluation_gold_pmids": [
+    32920993,
+    32762129,
+    33071408,
+    32525096,
+    33106820,
+    32589788,
+    32959000,
+    32947805,
+    33148091,
+    32242089,
+    33001455,
+    33083817,
+    32676491,
+    32784530,
+    33173756,
+    33182661,
+    32887592,
+    33016086,
+    33105275,
+    32763110,
+    33108612,
+    32764151,
+    32899277,
+    32872577,
+    33070000,
+    32458805,
+    33121998,
+    33071407,
+    33218018,
+    32716566,
+    33042917,
+    32871499,
+    33123063,
+    32463530,
+    33207786,
+    33181369,
+    32709738,
+    32352652,
+    33126117,
+    33121902,
+    32429705,
+    33004322,
+    32560550,
+    32227671,
+    33206868,
+    33047842,
+    32719646,
+    33152743,
+    33099049,
+    33205284,
+    32640077,
+    32360513,
+    33096659
+  ],
+  "source": "SYNERGY dataset Welling_2021 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: public health / social.",
+  "gold_source": "Local DOI list; 53/58 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Welling_2021",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Impact of the COVID-19 pandemic and related lockdown measures on lifestyle behaviors and well-being"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.1080/09291016.2020.1825284",
+    "10.3390/su12104072",
+    "10.17615/hdk0-th94",
+    "10.22541/au.158958012.27449923",
+    "10.3390/app10113997"
+  ]
+}

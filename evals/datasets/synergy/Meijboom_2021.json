@@ -1,0 +1,201 @@
+{
+  "id": "Meijboom_2021",
+  "suite": "synergy",
+  "question": "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic",
+  "gold_relevant_pmids": [
+    30739183,
+    32662409,
+    28130330,
+    32999362,
+    25974251,
+    31269678,
+    30396903,
+    32850911,
+    31853152,
+    29687730,
+    33133246,
+    30767391,
+    29205444,
+    33495387,
+    33570142,
+    33538298,
+    33442230,
+    29609207,
+    28331376,
+    29102156,
+    32888052,
+    33005860,
+    32524081,
+    26549204,
+    32776313,
+    32514676,
+    31363522,
+    33121931,
+    32795432,
+    32268935,
+    29154920,
+    29045077,
+    30498332,
+    29538037,
+    29368188
+  ],
+  "evaluation_gold_pmids": [
+    30739183,
+    32662409,
+    28130330,
+    32999362,
+    25974251,
+    31269678,
+    30396903,
+    32850911,
+    31853152,
+    29687730,
+    33133246,
+    30767391,
+    29205444,
+    33495387,
+    33570142,
+    33538298,
+    33442230,
+    29609207,
+    28331376,
+    29102156,
+    32888052,
+    33005860,
+    32524081,
+    26549204,
+    32776313,
+    32514676,
+    31363522,
+    33121931,
+    32795432,
+    32268935,
+    29154920,
+    29045077,
+    30498332,
+    29538037,
+    29368188
+  ],
+  "source": "SYNERGY dataset Meijboom_2021 (asreview/synergy-dataset); gold = included records with DOIs from the source systematic review. Discipline: biomedical (pharmacology / rheumatology).",
+  "gold_source": "Local DOI list; 35/36 resolved via [AID]",
+  "gold_adjudication": "included studies of the published systematic review (SYNERGY label_included=1)",
+  "review_search_date": null,
+  "seed_pmids_given_to_skill": [],
+  "development_pmids_given_to_skill": [],
+  "notes": "Created with make_fixture.py. No baseline strategy: use evals/generate.py (Phase 2). Harness reports reachable vs. unreachable gold separately.",
+  "review_protocol": {
+    "dsl_version": 1,
+    "protocol_id": "eval-Meijboom_2021",
+    "scope_version": 1,
+    "version_change": {
+      "previous_scope_version": null,
+      "reason": "Initial evaluation protocol.",
+      "decision_source": "Evaluation fixture author."
+    },
+    "review": {
+      "question": "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic",
+      "framework": {
+        "name": "PCC",
+        "rationale": "Generic fixture default; replace with the topic-appropriate framework before generation.",
+        "slots": [
+          {
+            "id": "topic",
+            "label": "Review topic",
+            "description": "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic"
+          }
+        ]
+      }
+    },
+    "eligibility": {
+      "inclusion": [
+        {
+          "id": "include-topic",
+          "label": "Addresses review topic",
+          "description": "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic"
+        }
+      ],
+      "exclusion": [
+        {
+          "id": "exclude-outside-topic",
+          "label": "Outside review topic",
+          "description": "Does not address the stated review question."
+        }
+      ]
+    },
+    "searchable_scope": {
+      "concepts": [
+        {
+          "id": "review-topic",
+          "label": "Review topic",
+          "role": "essential",
+          "eligibility_refs": [
+            "include-topic"
+          ],
+          "framework_slots": [
+            "topic"
+          ],
+          "definition": "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic",
+          "rationale": "Default broad anchor; split into stable essential concepts before generation.",
+          "provisional_fragility": "fragile",
+          "term_families": [
+            "Patients retransitioning from a biosimilar TNF-alpha inhibitor back to the originator biologic"
+          ]
+        }
+      ]
+    },
+    "screening_only": {
+      "properties": []
+    },
+    "filters_and_limits": {
+      "decisions": [
+        {
+          "id": "methodological-filter",
+          "type": "filter",
+          "label": "Methodological filter",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No methodological filter is authorized for the recall-first evaluation build."
+        },
+        {
+          "id": "database-limits",
+          "type": "limit",
+          "label": "Database limits",
+          "status": "rejected",
+          "value": "none",
+          "validated_source": "not applicable",
+          "rationale": "No language, age, species, publication-status, or full-text limits."
+        }
+      ]
+    },
+    "date_boundaries": {
+      "eligibility": {
+        "start": null,
+        "end": null
+      },
+      "search": {
+        "start": null,
+        "end": null
+      },
+      "rationale": "No date boundaries."
+    },
+    "seeds": {
+      "records": []
+    },
+    "priorities": {
+      "recall": {
+        "policy": "Recall first; decline the optional no-seed heuristic during evaluation because hidden gold is scored independently.",
+        "minimum_heldout_recall": 1.0
+      },
+      "workload": {
+        "policy": "Do not narrow solely because retrieval is large.",
+        "selection_rule": "Workload may choose only among variants that meet the held-out recall requirement."
+      }
+    },
+    "focused_variants": []
+  },
+  "protocol_note": "Auto-generated default protocol \u2014 review and tighten for this topic before running generate.py.",
+  "unresolved_dois": [
+    "10.1136/annrheumdis-2019-eular.2419"
+  ]
+}
