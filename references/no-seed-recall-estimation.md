@@ -97,6 +97,30 @@ Related neighbors used only for the benchmark may remain unscreened but must be 
 
 Record candidate, related, and recall artifacts in the manifest.
 
+## Capture-recapture completeness estimate
+
+When discovery *does* screen in a handful of relevant records but you have **no external benchmark**, the volume gate (empty-set only) and benchmark relative-recall (needs a known relevant set) both go quiet — yet the search may still be missing studies. Capture-recapture fills that gap using data discovery already produced: the provenance map records, per candidate, *which pilot families found it*. Treat each of the six orthogonal families as an independent capture occasion over the screened-in relevant set. Records re-found across many families mean the union has converged; a set dominated by singletons means the families retrieve largely **disjoint** relevant records and the union is undersaturated — a recall risk that holds even without a benchmark.
+
+The estimator (Chao1 richness over the pilot-family capture-frequency distribution) reports an estimated total relevant count `N_hat`, an estimated completeness `S_obs / N_hat` with a log-normal 95% CI, per-family capture counts, and pairwise Jaccard overlap.
+
+```bash
+# After adjudicating a round that screened in relevant records:
+python scripts/no_seed_discovery.py recapture \
+  --provenance-file provenance_round_N.json \
+  --state-file saturation_state_N.json \
+  --scope-version 1 --output completeness_round_N.json
+```
+
+`adjudicate` also computes the estimate automatically whenever the screened-in set is non-empty and attaches it as `completeness_estimate`; an `undersaturated` verdict additionally writes a `recall_risk` object with `critic_must_clear: true`.
+
+Interpret it **asymmetrically**, exactly like relative recall — a high estimate is weak positive evidence, a low one is a real leak signal — and note it is a **soft** signal: it never blocks saturation or widens eligibility on its own (the orthogonal families are deliberately precision-focused, so some disjointness is expected). The verdict maps against heuristic (not validated) triggers exposed as CLI flags:
+
+- **converged** (completeness ≥ `--converged-completeness`, default 0.85): the union appears close to complete; weak positive evidence only.
+- **undersaturated** (completeness < `--undersaturated-completeness`, default 0.60): largely disjoint pilots, recall risk. Surfaced to the user and flagged for the critic/peer review to clear (add an adjacent-review benchmark, broaden a pilot family, or supply seeds). It does **not** stop the build automatically.
+- **indeterminate**: completeness between the thresholds, or the sample is too thin to estimate.
+
+To avoid false precision the estimator stays `indeterminate` below `--min-screened-in-for-estimate` (default 5 records) and reports only an *indicative* verdict below `--min-screened-in-for-firm-verdict` (default 15). With no doubleton (no record found by exactly two families) overlap is undefined: it returns the bias-corrected point estimate with no CI and an `indeterminate` / `no-recaptures` verdict. This is the same "below ~15–20 reachable candidates, indicative only" guardrail applied to the capture-recapture denominator.
+
 ## Convenience one-liner
 
 `recall --pilot-query-file --auto-expand` can chain pilot retrieval and related expansion, but it cannot insert candidate screening between them. Use it only as a heuristic smoke test. It does not satisfy candidate-screening integrity, and its raw anchors or neighbors must not feed term mining.

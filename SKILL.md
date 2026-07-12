@@ -49,6 +49,8 @@ Stop only when a decision would change review scope, eligibility interpretation,
 
 Also stop early when no-seed discovery yields an empty or thin screened-in set (the adjudicator emits `saturation_gate.user_decision`). Surface it verbatim — what happened, the measured topic volume, and the choices (supply seeds, name adjacent reviews to benchmark against, repair the pilots, or accept an empirically-unvalidated search) — and let the user choose before continuing. Proceeding with an unvalidated search is the user's adoption-confidence decision, not a silent fallback deferred to the final peer-review label.
 
+When no-seed discovery *does* screen in relevant records but no external benchmark exists, the adjudicator also computes a capture-recapture completeness estimate over the orthogonal pilot families (`completeness_estimate`; standalone `no_seed_discovery.py recapture`). Interpret it asymmetrically — a high estimate is weak positive evidence, an `undersaturated` verdict is a real recall-risk signal. It is a soft signal: it never blocks saturation or narrows scope, but an `undersaturated` verdict raises a `recall_risk` the critic/peer review must clear (add an adjacent-review benchmark, broaden a pilot family, or supply seeds). See `references/no-seed-recall-estimation.md`.
+
 ## Evidence Integrity
 
 - No reviewed JSON, no decision: inspect saved `fetch`, `mine`, `sample`, candidate-ledger, and critic artifacts before using them as evidence.

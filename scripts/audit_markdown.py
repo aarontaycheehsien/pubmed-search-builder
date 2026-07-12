@@ -731,6 +731,43 @@ def render_relative_recall(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_capture_recapture(data: dict[str, Any]) -> list[str]:
+    """Render the capture-recapture completeness estimate when one is present.
+
+    Emits nothing when the build carried no estimate, so ordinary (seeded or
+    estimate-free) audits are unaffected.
+    """
+    estimate = as_dict(
+        first_value(data, ["completeness_estimate", "capture_recapture", "recapture"], {})
+    )
+    if not estimate:
+        return []
+    lines = ["### Capture-recapture completeness (no-seed)", ""]
+    fields = [
+        ("Verdict", "verdict"),
+        ("Confidence", "confidence"),
+        ("Screened-in relevant observed", "screened_in_observed"),
+        ("Estimated total relevant (Chao1)", "estimated_total_relevant"),
+        ("Estimated completeness", "completeness"),
+        ("Completeness 95% CI", "completeness_ci95"),
+        ("Singletons (f1)", "f1_singletons"),
+        ("Doubletons (f2)", "f2_doubletons"),
+        ("Mean pairwise Jaccard", "mean_pairwise_jaccard"),
+    ]
+    for label, key in fields:
+        lines.append(f"- **{label}:** {compact_text(estimate.get(key), DEFAULT_STATUS)}")
+    lines.append(
+        f"- **Interpretation:** {compact_text(estimate.get('interpretation'), 'heuristic completeness signal')}"
+    )
+    lines.append(
+        "- **Caveat:** capture-recapture is a heuristic, asymmetric signal - a high estimate is weak "
+        "positive evidence, an undersaturated verdict is a real recall-risk flag; it never widens "
+        "eligibility or blocks saturation on its own."
+    )
+    lines.append("")
+    return lines
+
+
 def render_ncbi_work(data: dict[str, Any]) -> list[str]:
     lines = ["## NCBI CLI work performed", "", "### MeSH descriptors considered (per concept)", ""]
     concepts = concept_rows(data)
@@ -780,6 +817,7 @@ def render_ncbi_work(data: dict[str, Any]) -> list[str]:
     lines.append(markdown_table(["Block / query tested", "Result count"], check_rows))
     lines.append("")
     lines.extend(render_relative_recall(data))
+    lines.extend(render_capture_recapture(data))
     return lines
 
 
