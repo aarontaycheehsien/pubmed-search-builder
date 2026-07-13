@@ -29,6 +29,12 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from mesh_evidence import build_mesh_evidence
+
 
 # Keep the real wall clock available even when sweep tests replace the module-level ``time``
 # object with a deterministic monotonic clock.
@@ -1030,6 +1036,13 @@ def provenance(
     return value
 
 
+def with_mesh_evidence(result: dict[str, object]) -> dict[str, object]:
+    """Attach the canonical backend/fidelity summary without changing legacy fields."""
+    value = dict(result)
+    value["mesh_evidence"] = build_mesh_evidence(value)
+    return value
+
+
 def annotate_records(
     records: list[dict[str, object]],
     *,
@@ -1447,11 +1460,26 @@ def term_descriptor_candidates_batch(
     limit: int,
     *,
     backend: str | None = None,
+    provenance_out: dict[str, object] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
+    def rdf_call(fallback_reason: str | None) -> dict[str, list[dict[str, object]]]:
+        if provenance_out is not None:
+            provenance_out["provenance"] = provenance(
+                "rdf", "full", "rdf_term_to_concept_batch", fallback_reason
+            )
+        return rdf_term_descriptor_candidates_batch(list(term_labels), limit)
+
+    def eutils_call(fallback_reason: str | None) -> dict[str, list[dict[str, object]]]:
+        if provenance_out is not None:
+            provenance_out["provenance"] = provenance(
+                "eutils", "reduced", "eutils_batch_esearch_esummary", fallback_reason
+            )
+        return eutils_term_descriptor_candidates_batch(term_labels, limit, fallback_reason)
+
     return use_backend(
         "batched term-to-descriptor resolution",
-        lambda _reason: rdf_term_descriptor_candidates_batch(list(term_labels), limit),
-        lambda reason: eutils_term_descriptor_candidates_batch(term_labels, limit, reason),
+        rdf_call,
+        eutils_call,
         backend=backend,
     )
 
@@ -1487,11 +1515,13 @@ def eutils_lookup(label: str, match: str, limit: int, fallback_reason: str | Non
 
 
 def lookup(label: str, match: str, limit: int, *, backend: str | None = None) -> dict[str, object]:
-    return use_backend(
-        "descriptor lookup",
-        lambda reason: rdf_lookup(label, match, limit, reason),
-        lambda reason: eutils_lookup(label, match, limit, reason),
-        backend=backend,
+    return with_mesh_evidence(
+        use_backend(
+            "descriptor lookup",
+            lambda reason: rdf_lookup(label, match, limit, reason),
+            lambda reason: eutils_lookup(label, match, limit, reason),
+            backend=backend,
+        )
     )
 
 
@@ -1537,11 +1567,13 @@ def eutils_terms(label: str, match: str, limit: int, fallback_reason: str | None
 
 
 def terms(label: str, match: str, limit: int, *, backend: str | None = None) -> dict[str, object]:
-    return use_backend(
-        "entry-term lookup",
-        lambda reason: rdf_terms(label, match, limit, reason),
-        lambda reason: eutils_terms(label, match, limit, reason),
-        backend=backend,
+    return with_mesh_evidence(
+        use_backend(
+            "entry-term lookup",
+            lambda reason: rdf_terms(label, match, limit, reason),
+            lambda reason: eutils_terms(label, match, limit, reason),
+            backend=backend,
+        )
     )
 
 
@@ -1597,11 +1629,13 @@ def eutils_details(descriptor: str, include: str, fallback_reason: str | None = 
 
 
 def details(descriptor: str, include: str, *, backend: str | None = None) -> dict[str, object]:
-    return use_backend(
-        "descriptor details",
-        lambda reason: rdf_details(descriptor, include, reason),
-        lambda reason: eutils_details(descriptor, include, reason),
-        backend=backend,
+    return with_mesh_evidence(
+        use_backend(
+            "descriptor details",
+            lambda reason: rdf_details(descriptor, include, reason),
+            lambda reason: eutils_details(descriptor, include, reason),
+            backend=backend,
+        )
     )
 
 
@@ -2296,6 +2330,12 @@ def eutils_tree(
         "annotation": None,
         "history_note": None,
         "public_mesh_note": None,
+        "unavailable_fields": [
+            "annotation",
+            "history_note",
+            "public_mesh_note",
+            "scr_mapping",
+        ],
         "entry_terms": term_entries({"terms": terms_data}, preferred=False),
         "tree_numbers": tree_numbers,
         "broader_descriptors": broader,
@@ -2328,11 +2368,13 @@ def tree(
     *,
     backend: str | None = None,
 ) -> dict[str, object]:
-    return use_backend(
-        "descriptor tree context",
-        lambda reason: rdf_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
-        lambda reason: eutils_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
-        backend=backend,
+    return with_mesh_evidence(
+        use_backend(
+            "descriptor tree context",
+            lambda reason: rdf_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
+            lambda reason: eutils_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
+            backend=backend,
+        )
     )
 
 
@@ -2443,6 +2485,7 @@ def build_sweep_result(
     term_mapping_batch_size: int = DEFAULT_TERM_MAPPING_BATCH_SIZE,
     term_mapping_batch_count: int = 0,
     term_mapping_pending_count: int = 0,
+    term_mapping_provenance: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Assemble the full sweep result dict, including the completeness/recall accounting. The same
     shape is used for on-disk checkpoints and the final returned result."""
@@ -2479,7 +2522,7 @@ def build_sweep_result(
             "Some candidates use reduced-fidelity E-utilities metadata. Confirm preferred headings, entry terms, "
             "qualifiers, and tree context against MeSH RDF before accepting or rejecting them."
         )
-    return {
+    result = {
         "operation": "sweep",
         "concept": concept,
         "variants": variants,
@@ -2503,6 +2546,7 @@ def build_sweep_result(
         "candidate_count": len(candidate_list),
         "candidates": candidate_list,
         "backend_provenance": backend_provenance,
+        "term_mapping_provenance": term_mapping_provenance or [],
         "raw_searches": raw_searches,
         "network_budget": {
             "request_cache_entries": len(REQUEST_CACHE),
@@ -2525,6 +2569,13 @@ def build_sweep_result(
         },
         "review_required": review_required,
     }
+    result["mesh_evidence"] = build_mesh_evidence(result)
+    evidence_review = result["mesh_evidence"].get("review_required", [])
+    if isinstance(evidence_review, list):
+        for item in reversed(evidence_review):
+            if isinstance(item, str) and item not in review_required:
+                review_required.insert(0, item)
+    return result
 
 
 def sweep(
@@ -2565,6 +2616,7 @@ def sweep(
     seen_term_resources: set[str] = set()
     term_mapping_queue: dict[str, dict[str, object]] = {}
     resolved_term_descriptor_hits: dict[str, list[dict[str, object]]] = {}
+    term_mapping_provenance: list[dict[str, object]] = []
     term_mapping_batch_count = 0
     errors: list[dict[str, object]] = []
     details_map: dict[str, object] = {}
@@ -2658,11 +2710,16 @@ def sweep(
                 continue
             try:
                 term_mapping_batch_count += 1
+                batch_metadata: dict[str, object] = {}
                 batch_hits = term_descriptor_candidates_batch(
                     labels_by_resource,
                     limit=10,
                     backend=backend,
+                    provenance_out=batch_metadata,
                 )
+                batch_provenance = batch_metadata.get("provenance")
+                if isinstance(batch_provenance, dict) and batch_provenance not in term_mapping_provenance:
+                    term_mapping_provenance.append(dict(batch_provenance))
             except CircuitOpenError as exc:
                 circuit_interrupted = True
                 errors.append(
@@ -2720,6 +2777,7 @@ def sweep(
             term_mapping_batch_size=batch_size,
             term_mapping_batch_count=term_mapping_batch_count,
             term_mapping_pending_count=len(term_mapping_queue),
+            term_mapping_provenance=term_mapping_provenance,
         )
 
     def checkpoint(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> None:
@@ -2742,6 +2800,7 @@ def sweep(
                     "label": label,
                     "match": match,
                     "results": descriptor_result.get("results", []),
+                    "provenance": descriptor_result.get("provenance"),
                 }
             )
             for item in descriptor_result.get("results", []):
@@ -2779,6 +2838,7 @@ def sweep(
                     "label": label,
                     "match": match,
                     "results": term_result.get("results", []),
+                    "provenance": term_result.get("provenance"),
                 }
             )
             for item in term_result.get("results", []):
@@ -2984,6 +3044,7 @@ def summarize_sweep(result: dict[str, object]) -> dict[str, object]:
         "coverage": result.get("coverage"),
         "candidate_count": result.get("candidate_count"),
         "candidates": candidates,
+        "mesh_evidence": result.get("mesh_evidence"),
         "network_budget": result.get("network_budget"),
         "elapsed_seconds": result.get("elapsed_seconds"),
         "max_seconds": result.get("max_seconds"),
@@ -2999,10 +3060,12 @@ def summarize_sweep(result: dict[str, object]) -> dict[str, object]:
         summary["errors"] = errors[:5]
         if len(errors) > 5:
             summary["errors_truncated_total"] = len(errors)
-    if result.get("status") != "complete":
+    evidence = result.get("mesh_evidence")
+    reduced = isinstance(evidence, dict) and evidence.get("reduced_fidelity_present") is True
+    if result.get("status") != "complete" or reduced:
         review = result.get("review_required") or []
         if review:
-            summary["review_required"] = [review[0]]
+            summary["review_required"] = [str(item) for item in review if str(item).strip()][:2]
     return summary
 
 

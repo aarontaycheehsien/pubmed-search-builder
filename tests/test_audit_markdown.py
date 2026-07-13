@@ -62,6 +62,33 @@ def sample_data():
 
 
 class AuditMarkdownTests(unittest.TestCase):
+    def test_mesh_backend_evidence_renders_hash_bound_fidelity_disclosure(self):
+        data = sample_data()
+        data["mesh_backend_evidence"] = {
+            "schema_version": 1,
+            "artifacts": [
+                {
+                    "block": "condition",
+                    "artifact": "condition_mesh.json",
+                    "artifact_sha256": "abc123",
+                    "evidence": {
+                        "operation": "sweep",
+                        "status": "complete",
+                        "overall_fidelity": "reduced",
+                        "backends_used": ["eutils"],
+                        "review_required": ["Confirm against MeSH RDF."],
+                    },
+                }
+            ],
+        }
+
+        markdown = audit_markdown.render_audit_markdown(data)
+
+        self.assertIn("## MeSH backend and fidelity evidence", markdown)
+        self.assertIn("condition_mesh.json", markdown)
+        self.assertIn("reduced / eutils", markdown)
+        self.assertIn("Confirm against MeSH RDF.", markdown)
+
     def test_pubmed_only_audit_disclaims_review_level_completeness(self):
         data = sample_data()
         data["information_source_mode"] = "pubmed-only"

@@ -130,6 +130,62 @@ class BuildScaffoldTests(unittest.TestCase):
         self.assertTrue(all(str(v).startswith("[") for v in audit["rationale"].values()))
         self.assertTrue(str(audit["peer_review_attention_points"][0]).startswith("["))
 
+    def test_reduced_mesh_evidence_is_projected_with_automatic_peer_review_attention(self):
+        evidence = {
+            "schema_version": 1,
+            "operation": "sweep",
+            "status": "complete",
+            "overall_fidelity": "reduced",
+            "backends_used": ["eutils"],
+            "methods": ["eutils_batch_esearch_esummary"],
+            "fallback_reasons": ["rdf_transient"],
+            "provenance_markers": [],
+            "records": {"total": 0, "full_only": 0, "reduced_only": 0, "mixed": 0, "unclassified": 0},
+            "reduced_fidelity_present": True,
+            "limitations": ["Confirm against MeSH RDF."],
+            "review_required": ["Confirm against MeSH RDF."],
+        }
+        m = manifest(
+            [
+                {
+                    "seq": 7,
+                    "kind": "mesh",
+                    "block": "condition",
+                    "label": "condition sweep",
+                    "returncode": 0,
+                    "output_path": "condition_mesh.json",
+                    "output_sha256": "abc123",
+                    "mesh_evidence": evidence,
+                }
+            ]
+        )
+
+        audit, _ = self.build(manifest_data=m)
+
+        projected = audit["mesh_backend_evidence"]
+        self.assertTrue(projected["reduced_fidelity_present"])
+        self.assertEqual(projected["artifacts"][0]["artifact"], "condition_mesh.json")
+        self.assertIn("condition_mesh.json", projected["automatic_peer_review_attention_points"][0])
+        self.assertIn("condition_mesh.json", audit["peer_review_attention_points"][0])
+
+    def test_superseded_mesh_evidence_is_not_projected(self):
+        m = manifest(
+            [
+                {
+                    "seq": 1,
+                    "kind": "mesh",
+                    "returncode": 0,
+                    "output_path": "old_mesh.json",
+                    "mesh_evidence": {"operation": "sweep", "status": "complete", "reduced_fidelity_present": True},
+                }
+            ],
+            superseded=[{"path": "old_mesh.json"}],
+        )
+
+        audit, _ = self.build(manifest_data=m)
+
+        self.assertNotIn("mesh_backend_evidence", audit)
+
     def test_variant_choice_from_decision_status_and_role(self):
         v = {"results": [
             {"label": "main", "count": 369, "decision_status": "selected", "role": "sensitive"},

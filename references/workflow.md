@@ -200,6 +200,8 @@ The audit must include:
 - every critic round and the revision-cycle ledger;
 - final QA, caveats, and external peer-review attention points.
 
+When any current MeSH artifact used the E-utilities fallback, also include the generated **MeSH backend and fidelity evidence** table: each hash-bound artifact, operation/status, backend/fidelity, and its RDF-confirmation follow-up. Run `pubmed_tool.py audit-scaffold --manifest run_manifest.json` so this disclosure and its peer-review attention points are copied from the manifest rather than authored from memory. A partial sweep is incomplete evidence, not a fallback disclosure substitute.
+
 Append the audit and final artifacts to `run_manifest.json`. Run:
 
 ```text
@@ -216,6 +218,7 @@ Stop only when:
 - a versioned retrieval scope is locked;
 - candidate screening is complete or explicitly not applicable;
 - every essential block has required MeSH and count evidence or a reasoned waiver;
+- every current reduced-fidelity MeSH artifact is disclosed in the final audit with its RDF-confirmation follow-up;
 - held-out/seed/heuristic validation is correctly labelled and all in-scope misses are resolved;
 - the latest critic round passes and all required re-probes are recorded;
 - final QA and low-count/filter checks pass where applicable;

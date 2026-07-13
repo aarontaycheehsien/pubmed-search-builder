@@ -385,6 +385,14 @@ If no:
 
 Do not report formal precision or NNR unless PMID-level relevance labels were provided. If labelled samples were used, report labelled sample size, estimated precision, NNR, and the caveat that pilot NNR is only as valid as the labelled sample.
 
+## MeSH backend and fidelity evidence
+
+Populate this section from `pubmed_tool.py audit-scaffold --manifest run_manifest.json`; do not infer backend or fidelity from memory. Include every current, non-superseded MeSH artifact. If any row is reduced or mixed fidelity, keep its automatic RDF-confirmation follow-up and repeat it in the peer-review attention points.
+
+| Block / label | Artifact (hash-bound in manifest) | Operation / status | Fidelity / backend | Required follow-up |
+|---|---|---|---|---|
+| [condition] | [condition_mesh.json] | [sweep / complete] | [full/reduced/mixed; rdf/eutils] | [confirm reduced-fidelity candidate decisions against MeSH RDF, or none] |
+
 ## Peer review status
 
 **This is a draft strategy. Per PRESS (McGowan et al., 2016), it should be peer reviewed by a second information specialist before being run as the final search.**

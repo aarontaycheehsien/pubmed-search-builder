@@ -108,8 +108,10 @@ class MeshPhase3Tests(unittest.TestCase):
             "results": [term_records[label]] if match == "exact" else [],
         }
 
-        def fake_batch(labels, limit, *, backend=None):
+        def fake_batch(labels, limit, *, backend=None, provenance_out=None):
             calls.append((dict(labels), limit, backend))
+            if provenance_out is not None:
+                provenance_out["provenance"] = {"backend": "rdf", "fidelity": "full", "method": "fixture"}
             return {
                 resource: [
                     {

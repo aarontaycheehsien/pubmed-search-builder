@@ -328,6 +328,80 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("no-seed build lacks orthogonal-pilot saturation evidence", receipt["issues"])
 
+    def test_final_audit_must_disclose_each_current_reduced_mesh_artifact(self):
+        reduced = {
+            "operation": "sweep",
+            "status": "complete",
+            "reduced_fidelity_present": True,
+            "methods": ["eutils_batch_esearch_esummary"],
+        }
+        data = manifest_tool.new_manifest("demo", "1.0")
+        data["entries"] = [
+            {
+                "seq": 1,
+                "kind": "mesh",
+                "returncode": 0,
+                "output_path": "mesh_condition.json",
+                "output_sha256": "mesh-sha",
+                "scope_version": 2,
+                "mesh_evidence": reduced,
+            }
+        ]
+        data["build_state"] = {"scope": {"version": 2}}
+
+        missing = manifest_tool.mesh_audit_disclosure_issues(data, self.manifest, {"final_strategy": "x"})
+        self.assertTrue(any("lacks mesh_backend_evidence" in issue for issue in missing))
+
+        disclosed = {
+            "mesh_backend_evidence": {
+                "artifacts": [
+                    {
+                        "artifact": "mesh_condition.json",
+                        "artifact_sha256": "mesh-sha",
+                        "evidence": reduced,
+                    }
+                ],
+                "automatic_peer_review_attention_points": [
+                    "Confirm mesh_condition.json against MeSH RDF before finalizing the strategy."
+                ],
+            }
+        }
+        self.assertEqual(manifest_tool.mesh_audit_disclosure_issues(data, self.manifest, disclosed), [])
+
+        disclosed["mesh_backend_evidence"]["artifacts"][0]["evidence"] = {
+            "operation": "sweep", "status": "complete", "reduced_fidelity_present": True, "methods": ["wrong-method"]
+        }
+        mismatch = manifest_tool.mesh_audit_disclosure_issues(data, self.manifest, disclosed)
+        self.assertTrue(any("does not disclose" in issue for issue in mismatch))
+
+    def test_superseded_or_old_scope_reduced_mesh_does_not_block_final_audit(self):
+        reduced = {"operation": "sweep", "status": "complete", "reduced_fidelity_present": True}
+        data = manifest_tool.new_manifest("demo", "1.0")
+        data["entries"] = [
+            {
+                "seq": 1,
+                "kind": "mesh",
+                "returncode": 0,
+                "output_path": "old_scope_mesh.json",
+                "output_sha256": "old-sha",
+                "scope_version": 1,
+                "mesh_evidence": reduced,
+            },
+            {
+                "seq": 2,
+                "kind": "mesh",
+                "returncode": 0,
+                "output_path": "superseded_mesh.json",
+                "output_sha256": "superseded-sha",
+                "scope_version": 2,
+                "mesh_evidence": reduced,
+            },
+        ]
+        data["superseded"] = [{"path": "superseded_mesh.json"}]
+        data["build_state"] = {"scope": {"version": 2}}
+
+        self.assertEqual(manifest_tool.mesh_audit_disclosure_issues(data, self.manifest, {}), [])
+
     def test_complete_gate_requires_empirical_fragility_when_screened_records_exist(self):
         self.resolve_base_gates_and_scope()
         ledger = self.write_json("candidate_ledger.json", {"scope_version": 1, "records": []})

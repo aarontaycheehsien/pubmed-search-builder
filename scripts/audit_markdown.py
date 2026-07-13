@@ -1059,6 +1059,33 @@ def render_peer_review(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_mesh_backend_evidence(data: dict[str, Any]) -> list[str]:
+    evidence = as_dict(data.get("mesh_backend_evidence"))
+    artifacts = [item for item in as_list(evidence.get("artifacts")) if isinstance(item, dict)]
+    if not artifacts:
+        return []
+    lines = [
+        "## MeSH backend and fidelity evidence",
+        "",
+        "| Block / label | Artifact | Operation / status | Fidelity / backend | Required follow-up |",
+        "|---|---|---|---|---|",
+    ]
+    for item in artifacts:
+        summary = as_dict(item.get("evidence"))
+        identity = compact_text(item.get("block") or item.get("label"), "unlabelled MeSH evidence")
+        artifact = compact_text(item.get("artifact"))
+        operation = compact_text(summary.get("operation"))
+        status = compact_text(summary.get("status"))
+        fidelity = compact_text(summary.get("overall_fidelity"), "unknown")
+        backends = ", ".join(compact_text(value) for value in as_list(summary.get("backends_used")))
+        follow_up = "; ".join(compact_text(value) for value in as_list(summary.get("review_required")))
+        lines.append(
+            f"| {identity} | {artifact} | {operation} / {status} | {fidelity} / {backends or 'not recorded'} | {follow_up or 'none recorded'} |"
+        )
+    lines.append("")
+    return lines
+
+
 def render_reporting_notes(data: dict[str, Any], output_path: Path | None = None) -> list[str]:
     notes = as_dict(data.get("reporting_notes"))
     output_text = str(output_path) if output_path else compact_text(notes.get("audit_markdown_file") or notes.get("audit_markdown_path"))
@@ -1242,6 +1269,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_press_coverage(data))
     lines.extend(render_seed_validation(data))
     lines.extend(render_external_registry_validation(data))
+    lines.extend(render_mesh_backend_evidence(data))
     lines.extend(render_peer_review(data))
     lines.extend(render_reporting_notes(data, output_path))
     lines.extend(render_prisma_s_appendix(data))

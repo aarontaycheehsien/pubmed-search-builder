@@ -114,6 +114,8 @@ class MeshEutilsTests(unittest.TestCase):
         self.assertTrue(result["results"])
         self.assertEqual(result["results"][0]["descriptor"], "D000076142")
         self.assertEqual(result["results"][0]["fidelity"], "reduced")
+        self.assertTrue(result["mesh_evidence"]["reduced_fidelity_present"])
+        self.assertEqual(result["mesh_evidence"]["overall_fidelity"], "reduced")
 
     def test_eutils_details_preserves_the_supported_summary_metadata(self):
         mesh_tool.eutils_search_uids = lambda *_args, **_kwargs: ["2023512"]
@@ -232,6 +234,7 @@ class MeshEutilsTests(unittest.TestCase):
         self.assertEqual(result["candidates"][0]["descriptor"], descriptor)
         self.assertEqual(result["backend_provenance"][0]["fidelity"], "reduced")
         self.assertIn("reduced-fidelity", result["review_required"][0])
+        self.assertTrue(result["mesh_evidence"]["reduced_fidelity_present"])
 
     def test_cli_exposes_eutils_for_tree(self):
         parser = mesh_tool.build_parser()
