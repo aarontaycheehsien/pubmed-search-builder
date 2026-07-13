@@ -97,33 +97,33 @@ Related neighbors used only for the benchmark may remain unscreened but must be 
 
 Record candidate, related, and recall artifacts in the manifest.
 
-## Capture-recapture completeness estimate
+## Internal pilot-convergence diagnostic (not capture-recapture)
 
-When discovery *does* screen in a handful of relevant records but you have **no external benchmark**, the volume gate (empty-set only) and benchmark relative-recall (needs a known relevant set) both go quiet — yet the search may still be missing studies. Capture-recapture fills that gap using data discovery already produced: the provenance map records, per candidate, *which pilot families found it*. Treat each of the six orthogonal families as an independent capture occasion over the screened-in relevant set. Records re-found across many families mean the union has converged; a set dominated by singletons means the families retrieve largely **disjoint** relevant records and the union is undersaturated — a recall risk that holds even without a benchmark.
+When discovery screens in relevant records but no external benchmark exists, use pilot-family overlap only as an **internal convergence diagnostic**. The six formulations share the same database, concepts, indexing, and often terms or anchors. They are deliberately heterogeneous and statistically dependent, so they are not valid independent capture occasions. Do not apply Chao1/Chao2, estimate an unseen population, report a completeness percentage, or use overlap to pass a completion gate.
 
-The estimator (Chao1 richness over the pilot-family capture-frequency distribution) reports an estimated total relevant count `N_hat`, an estimated completeness `S_obs / N_hat` with a log-normal 95% CI, per-family capture counts, and pairwise Jaccard overlap.
+The diagnostic reports per-family eligible yield, unique-family yield, repeat-capture proportion (`convergence_score`), and pairwise Jaccard overlap. Frequent re-finding is weak internal convergence evidence. A high yield of eligible records unique to one family is a recall-risk signal. Zero eligible records cannot support this diagnostic or capture-recapture.
 
 ```bash
 # After adjudicating a round that screened in relevant records:
 python scripts/no_seed_discovery.py recapture \
   --provenance-file provenance_round_N.json \
   --state-file saturation_state_N.json \
-  --scope-version 1 --output completeness_round_N.json
+  --scope-version 1 --output convergence_round_N.json
 ```
 
-`adjudicate` also computes the estimate automatically whenever the screened-in set is non-empty and attaches it as `completeness_estimate`; an `undersaturated` verdict additionally writes a `recall_risk` object with `critic_must_clear: true`.
+`recapture` is retained as a deprecated command name for backward compatibility. `adjudicate` computes the same diagnostic when the screened-in set is non-empty and stores it as `internal_convergence_diagnostic`; a `recall-risk` verdict also writes a `recall_risk` object.
 
 Interpret it **asymmetrically**, exactly like relative recall — a high estimate is weak positive evidence, a low one is a real leak signal — and note it is a **soft** signal: it never blocks saturation or widens eligibility on its own (the orthogonal families are deliberately precision-focused, so some disjointness is expected). The verdict maps against heuristic (not validated) triggers exposed as CLI flags:
 
-- **converged** (completeness ≥ `--converged-completeness`, default 0.85): the union appears close to complete; weak positive evidence only.
-- **undersaturated** (completeness < `--undersaturated-completeness`, default 0.60): largely disjoint pilots, recall risk. Surfaced to the user and flagged for the critic/peer review to clear (add an adjacent-review benchmark, broaden a pilot family, or supply seeds). It does **not** stop the build automatically.
-- **indeterminate**: completeness between the thresholds, or the sample is too thin to estimate.
+- **converged** (`convergence_score` ≥ the legacy `--converged-completeness` threshold): weak positive internal evidence only.
+- **recall-risk** (`convergence_score` below the legacy `--undersaturated-completeness` threshold, or no eligible record is re-found): investigate using seeds, adjacent reviews, citations, broader pilots, or optional trial-registry validation.
+- **indeterminate**: intermediate overlap or too few eligible records.
 
-To avoid false precision the estimator stays `indeterminate` below `--min-screened-in-for-estimate` (default 5 records) and reports only an *indicative* verdict below `--min-screened-in-for-firm-verdict` (default 15). With no doubleton (no record found by exactly two families) overlap is undefined: it returns the bias-corrected point estimate with no CI and an `indeterminate` / `no-recaptures` verdict. This is the same "below ~15–20 reachable candidates, indicative only" guardrail applied to the capture-recapture denominator.
+The legacy threshold option names remain to avoid breaking recorded commands. Below `--min-screened-in-for-estimate` (default 5), the result is indeterminate; below `--min-screened-in-for-firm-verdict` (default 15), it is indicative. These are heuristic display thresholds, not estimator validation.
 
 ## Semi-independent benchmark from adjacent prior reviews
 
-"No seeds" is not the same as "no ground truth." Standard SR practice harvests the **included/cited studies of adjacent systematic reviews** as a weak external recall check. It is imperfect — it imports the prior review's scope bias — but a noisy external check beats MeSH/structural checks alone when discovery comes up empty or thin, and it is the concrete action behind the "name adjacent reviews to benchmark against" option in the empty-set `user_decision` and the capture-recapture `recall_risk`.
+"No seeds" is not the same as "no ground truth." Standard SR practice harvests the **included/cited studies of adjacent systematic reviews** as a weak external recall check. It is imperfect — it imports the prior review's scope bias — but a noisy external check beats MeSH/structural checks alone when discovery comes up empty or thin, and it is the concrete action behind the "name adjacent reviews to benchmark against" option and the internal-convergence `recall_risk`.
 
 It is **semi-independent: non-independent and external**, never an independent gold standard. Two rules keep it honest: the harvested records must be **screened against the locked scope before they count** (unscreened citations would deflate recall spuriously), and benchmark records **must never feed term mining** (only internal screened-in discovery records do).
 

@@ -275,6 +275,55 @@ class ManifestProtocolTests(unittest.TestCase):
         self.assertEqual(state["scope"]["protocol_sha256"], protocol_tool.canonical_sha256(protocol))
         self.assertTrue(all(not Path(row["path"]).is_absolute() for row in receipt["artifacts"]))
 
+    def test_external_validation_requires_source_status_and_resolved_benchmark(self):
+        protocol = self.lock_valid_protocol()
+        protocol["information_source_mode"] = "pubmed-plus-external-validation"
+        protocol["external_validation"] = {
+            "status": "enabled",
+            "purpose": "pubmed-leak-detection",
+            "sources": ["clinicaltrials.gov", "who-ictrp"],
+        }
+        protocol_path = self.directory / "review_protocol_v1.json"
+        output_dir = self.directory / "protocol-v1"
+        receipt_path = self.directory / "protocol-v1" / "compile.json"
+        protocol_path.write_bytes(protocol_tool.pretty_bytes(protocol))
+        protocol_tool.compile_protocol(protocol_path, output_dir, receipt_path)
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 0, error)
+
+        issues = manifest_tool.complete_loop_readiness(self.load(), self.manifest)
+        self.assertTrue(any("external registry sources lack" in issue for issue in issues))
+        self.assertTrue(any("no external-pubmed-benchmark" in issue for issue in issues))
+
+        binding = {
+            "protocol_id": protocol["protocol_id"],
+            "scope_version": protocol["scope_version"],
+            "protocol_sha256": protocol_tool.canonical_sha256(protocol),
+        }
+        ctgov = self.directory / "ctgov.json"
+        ctgov.write_text(json.dumps({
+            "operation": "registry-search", "source": "clinicaltrials.gov", "status": "complete", **binding,
+        }), encoding="utf-8")
+        who = self.directory / "who.json"
+        who.write_text(json.dumps({
+            "operation": "registry-source-status", "source": "who-ictrp", "status": "unavailable", **binding,
+        }), encoding="utf-8")
+        benchmark = self.directory / "benchmark.json"
+        benchmark.write_text(json.dumps({
+            "operation": "external-pubmed-benchmark",
+            "handoff_blocked": False,
+            "summary": {"unresolved_pubmed_misses": []},
+            **binding,
+        }), encoding="utf-8")
+        self.add("registry-search", "registry_sentinel.py clinicaltrials-search", ctgov)
+        self.add("artifact", "registry_sentinel.py source-status", who)
+        self.add("external-recall-validation", "registry_sentinel.py evaluate-pubmed", benchmark)
+
+        issues = manifest_tool.complete_loop_readiness(self.load(), self.manifest)
+        self.assertFalse(any("external registry sources lack" in issue for issue in issues))
+        self.assertFalse(any("no external-pubmed-benchmark" in issue for issue in issues))
+        self.assertFalse(any("unresolved eligible linked PMID" in issue for issue in issues))
+
     def test_lock_protocol_rejects_protocol_hash_mismatch(self):
         protocol_path, receipt_path, _, receipt = self.compiled_protocol()
         receipt["protocol_sha256"] = "0" * 64

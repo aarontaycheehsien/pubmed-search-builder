@@ -26,6 +26,24 @@
     "dsl_version": {"const": 1},
     "protocol_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
     "scope_version": {"type": "integer", "minimum": 1},
+    "information_source_mode": {
+      "enum": ["pubmed-only", "pubmed-plus-external-validation"]
+    },
+    "external_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["status", "purpose", "sources"],
+      "properties": {
+        "status": {"enum": ["enabled", "declined", "not-applicable"]},
+        "purpose": {"const": "pubmed-leak-detection"},
+        "sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
     "version_change": {
       "type": "object",
       "additionalProperties": false,

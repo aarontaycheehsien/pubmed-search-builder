@@ -25,6 +25,8 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue((output / "scripts" / "manifest_tool.py").is_file())
             self.assertTrue((output / "scripts" / "revision_guard.py").is_file())
             self.assertTrue((output / "references" / "no-harm-revisions.md").is_file())
+            self.assertTrue((output / "references" / "external-trial-registry-validation.md").is_file())
+            self.assertTrue((output / "scripts" / "registry_sentinel.py").is_file())
             self.assertFalse((output / "README.md").exists())
             self.assertFalse((output / "tests").exists())
             self.assertFalse((output / "evals").exists())

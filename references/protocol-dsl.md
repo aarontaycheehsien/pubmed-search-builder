@@ -15,6 +15,7 @@ A version `1` protocol contains:
 - `filters_and_limits.decisions` and `date_boundaries`;
 - `seeds.records`, with candidate roles rather than assumed eligibility;
 - `priorities`, separating the recall policy from workload-based selection; and
+- optional `information_source_mode` and `external_validation`, selecting `pubmed-only` (the default) or a registry-based PubMed leak check; and
 - `focused_variants`, which may prioritize screening but cannot replace the recall-first main strategy.
 
 See `schemas/review-protocol.schema.json` for the binding field and value constraints.

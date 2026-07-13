@@ -299,68 +299,63 @@ def _provenance(spec):
     return {"scope_version": 1, "records": records, "safety_cap_reached": False}, included
 
 
-class RecaptureCompletenessTests(unittest.TestCase):
-    def test_worked_example_matches_chao1_math(self):
-        # 10 singletons, 5 doubletons, 5 triples -> S_obs=20, f1=10, f2=5.
+class InternalConvergenceTests(unittest.TestCase):
+    def test_reports_overlap_without_population_estimate(self):
         provenance, included = _provenance([(10, 1), (5, 2), (5, 3)])
-        result = no_seed.estimate_completeness(included, provenance)
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
         self.assertEqual(result["screened_in_observed"], 20)
         self.assertEqual((result["f1_singletons"], result["f2_doubletons"]), (10, 5))
-        self.assertEqual(result["estimated_total_relevant"], 30.0)
-        self.assertAlmostEqual(result["completeness"], 0.6667, places=3)
-        self.assertEqual(result["chao1_estimate"]["variance"], 70.0)
-        self.assertEqual(result["chao1_estimate"]["ci95"], [22.4, 61.69])
+        self.assertEqual(result["diagnostic_type"], "internal-convergence-not-capture-recapture")
+        self.assertFalse(result["independence_assumption_met"])
+        self.assertIsNone(result["formal_population_estimate"])
+        self.assertEqual(result["unique_family_yield"], 0.5)
+        self.assertEqual(result["convergence_score"], 0.5)
+        self.assertNotIn("completeness", result)
 
-    def test_low_overlap_is_undersaturated_leak_signal(self):
-        # 18 singletons + 2 doubletons -> N_hat huge, completeness far below 0.60.
+    def test_low_overlap_is_recall_risk_signal(self):
         provenance, included = _provenance([(18, 1), (2, 2)])
-        result = no_seed.estimate_completeness(included, provenance)
-        self.assertEqual(result["verdict"], "undersaturated")
-        self.assertLess(result["completeness"], 0.60)
-        self.assertIn("leak signal", result["interpretation"])
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
+        self.assertEqual(result["verdict"], "recall-risk")
+        self.assertLess(result["convergence_score"], 0.60)
+        self.assertIn("recall-risk signal", result["interpretation"])
 
     def test_high_overlap_is_converged_weak_positive(self):
-        # 2 singletons, 10 doubletons, 8 triples -> completeness ~0.99.
         provenance, included = _provenance([(2, 1), (10, 2), (8, 3)])
-        result = no_seed.estimate_completeness(included, provenance)
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
         self.assertEqual(result["verdict"], "converged")
-        self.assertGreaterEqual(result["completeness"], 0.85)
-        self.assertIn("weak positive", result["interpretation"])
+        self.assertGreaterEqual(result["convergence_score"], 0.85)
+        self.assertIn("weak", result["interpretation"])
 
     def test_too_few_screened_in_stays_indeterminate_without_estimate(self):
-        provenance, included = _provenance([(2, 1), (1, 2)])  # S_obs=3 < 5
-        result = no_seed.estimate_completeness(included, provenance)
+        provenance, included = _provenance([(2, 1), (1, 2)])
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
         self.assertEqual(result["verdict"], "indeterminate")
         self.assertEqual(result["reason"], "too-few-screened-in")
-        self.assertIsNone(result["completeness"])
-        self.assertIsNone(result["estimated_total_relevant"])
+        self.assertIsNone(result["formal_population_estimate"])
 
-    def test_no_doubletons_gives_indicative_point_estimate_without_ci(self):
-        # 8 records, all singletons -> f2=0: bias-corrected point estimate, no CI, no firm verdict.
+    def test_no_recaptures_is_recall_risk_without_estimate(self):
         provenance, included = _provenance([(8, 1)])
-        result = no_seed.estimate_completeness(included, provenance)
-        self.assertEqual(result["verdict"], "indeterminate")
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
+        self.assertEqual(result["verdict"], "recall-risk")
         self.assertEqual(result["reason"], "no-recaptures")
-        self.assertEqual(result["estimated_total_relevant"], 8 + 8 * 7 / 2)  # bias-corrected Chao1
-        self.assertIsNone(result["chao1_estimate"]["ci95"])
-        self.assertIsNone(result["completeness"])
+        self.assertIsNone(result["formal_population_estimate"])
+        self.assertEqual(result["unique_family_yield"], 1.0)
 
     def test_indicative_confidence_below_firm_verdict_floor(self):
-        # S_obs between 5 and 15 -> completeness computed but flagged indicative.
-        provenance, included = _provenance([(2, 1), (5, 2)])  # S_obs=7
-        result = no_seed.estimate_completeness(included, provenance)
+        provenance, included = _provenance([(2, 1), (5, 2)])
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
         self.assertEqual(result["confidence"], "indicative")
         self.assertEqual(result["reason"], "below-firm-verdict-floor")
 
     def test_jaccard_and_per_family_counts_populated(self):
         provenance, included = _provenance([(4, 1), (6, 2)])
-        result = no_seed.estimate_completeness(included, provenance)
+        result = no_seed.internal_convergence_diagnostic(included, provenance)
         self.assertTrue(result["per_family_capture_counts"])
         self.assertTrue(result["pairwise_jaccard"])
         self.assertIsNotNone(result["mean_pairwise_jaccard"])
 
-    def test_adjudicate_attaches_estimate_and_recall_risk(self):
-        provenance, included = _provenance([(18, 1), (2, 2)])  # undersaturated
+    def test_adjudicate_attaches_diagnostic_and_recall_risk(self):
+        provenance, included = _provenance([(18, 1), (2, 2)])
         # Build a screening/provenance pair that adjudicates these as included.
         screening_records = []
         prov_records = []
@@ -381,8 +376,8 @@ class RecaptureCompletenessTests(unittest.TestCase):
             screening, prov, previous_state=None, scope_version=1,
             required_saturated_rounds=2, allocation_seed="test",
         )
-        self.assertIn("completeness_estimate", state)
-        self.assertEqual(state["completeness_estimate"]["verdict"], "undersaturated")
+        self.assertIn("internal_convergence_diagnostic", state)
+        self.assertEqual(state["internal_convergence_diagnostic"]["verdict"], "recall-risk")
         self.assertTrue(state["recall_risk"]["critic_must_clear"])
 
     def test_cli_recapture_round_trip(self):
@@ -403,8 +398,9 @@ class RecaptureCompletenessTests(unittest.TestCase):
             ])
             self.assertEqual(code, 0)
             artifact = json.loads(out_path.read_text(encoding="utf-8"))
-            self.assertEqual(artifact["operation"], "orthogonal-pilot-recapture")
-            self.assertEqual(artifact["estimated_total_relevant"], 30.0)
+            self.assertEqual(artifact["operation"], "internal-convergence-diagnostic")
+            self.assertIsNone(artifact["formal_population_estimate"])
+            self.assertNotIn("completeness", artifact)
 
 
 class PriorReviewBenchmarkTests(unittest.TestCase):
