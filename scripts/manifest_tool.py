@@ -91,6 +91,12 @@ ENTRY_KINDS = (
     "critic",
     "revision",
     "mesh",
+    "registry-search",
+    "registry-import",
+    "registry-merge",
+    "registry-screen",
+    "publication-link",
+    "external-recall-validation",
     "artifact",
     "other",
 )
@@ -1325,6 +1331,33 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if isinstance(payload, dict) and payload.get("operation") == operation:
                 found.append(entry)
         return sorted(found, key=lambda item: int(item.get("seq") or 0))
+
+    if scope.get("lock_mode") == "protocol":
+        protocol_payload = read_manifest_output_json(manifest_path, scope.get("protocol_file")) or {}
+        mode = protocol_payload.get("information_source_mode", "pubmed-only")
+        external = protocol_payload.get("external_validation") if isinstance(protocol_payload.get("external_validation"), dict) else {}
+        if mode == "pubmed-plus-external-validation" and external.get("status") == "enabled":
+            represented_sources: set[str] = set()
+            for operation in ("registry-search", "registry-import", "registry-source-status"):
+                for entry in operation_entries(operation):
+                    payload = read_manifest_output_json(manifest_path, str(entry.get("output_path") or "")) or {}
+                    source_name = str(payload.get("source") or "").strip().casefold()
+                    source_status = str(payload.get("status") or "complete")
+                    if source_name and source_status in {"complete", "completed", "declined", "unavailable", "not-applicable"}:
+                        represented_sources.add(source_name)
+            expected_sources = {str(value).strip().casefold() for value in external.get("sources", []) if str(value).strip()}
+            missing_sources = sorted(expected_sources - represented_sources)
+            if missing_sources:
+                issues.append("external registry sources lack completed/declined/unavailable status: " + ", ".join(missing_sources))
+            benchmark_entries = operation_entries("external-pubmed-benchmark")
+            if not benchmark_entries:
+                issues.append("external validation is enabled but no external-pubmed-benchmark artifact is recorded")
+            else:
+                payload = read_manifest_output_json(manifest_path, str(benchmark_entries[-1].get("output_path") or "")) or {}
+                issues.extend(protocol_binding_issues(payload, scope, "external PubMed benchmark"))
+                if payload.get("handoff_blocked") is True:
+                    misses = ((payload.get("summary") or {}).get("unresolved_pubmed_misses") if isinstance(payload.get("summary"), dict) else [])
+                    issues.append("external PubMed benchmark has unresolved eligible linked PMID misses: " + ", ".join(str(x) for x in misses))
 
     if scope.get("lock_mode") == "protocol":
         for operation, label in (

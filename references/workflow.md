@@ -13,6 +13,7 @@ Track the detailed stages in `run_manifest.json`, but show users only four conci
 5. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
 6. `block-testing` - build blocks and run reversible counts, samples, gaps, variants, and filter comparisons.
 7. `validation` - test held-out records, or label reused-seed/heuristic checks as non-independent.
+   When protocol-enabled, run the separate external trial-registry sentinel after PubMed vocabulary and strategy development; registry records never enter term mining.
 8. `critic-review` - run a fresh-context PRESS-informed critic against the current artifacts.
 9. `revision` - route findings, reopen scope when structural, and rerun affected evidence.
 10. `final-qa` - confirm PubMed translation, syntax, hygiene, and final counts.
@@ -143,6 +144,8 @@ Prefer held-out screened-in records that did not contribute vocabulary. Report:
 - whether validation is independent, non-independent reused-seed, or heuristic.
 
 When no seeds or holdout exist, the pilot-related recall check in `references/no-seed-recall-estimation.md` may identify leaks, but it is not validated sensitivity. Low heuristic recall is evidence to inspect misses, not permission to widen scope automatically.
+
+When intervention trials are eligible, consider the optional `pubmed-plus-external-validation` path in `references/external-trial-registry-validation.md`, especially for empty or thin discovery. Prior reviews and citation searching remain important for broad or historical psychotherapy questions because trial registries are incomplete for older studies. Eligible registry-linked PubMed misses are query leaks; non-PubMed, unpublished, registry-only, and ongoing trials are coverage findings. No eligible registry trials provide no reassurance.
 
 Never hand off a final strategy with an unexplained missed in-scope holdout, seed, or gold-standard PMID. Classify every miss as query failure or documented out-of-scope evidence.
 

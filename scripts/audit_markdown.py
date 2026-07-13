@@ -740,24 +740,23 @@ def render_relative_recall(data: dict[str, Any]) -> list[str]:
 
 
 def render_capture_recapture(data: dict[str, Any]) -> list[str]:
-    """Render the capture-recapture completeness estimate when one is present.
+    """Render the internal pilot-overlap diagnostic when one is present.
 
     Emits nothing when the build carried no estimate, so ordinary (seeded or
     estimate-free) audits are unaffected.
     """
-    estimate = as_dict(
-        first_value(data, ["completeness_estimate", "capture_recapture", "recapture"], {})
-    )
+    estimate = as_dict(first_value(data, ["internal_convergence_diagnostic"], {}))
     if not estimate:
         return []
-    lines = ["### Capture-recapture completeness (no-seed)", ""]
+    lines = ["### Internal pilot convergence (no-seed)", ""]
     fields = [
         ("Verdict", "verdict"),
         ("Confidence", "confidence"),
         ("Screened-in relevant observed", "screened_in_observed"),
-        ("Estimated total relevant (Chao1)", "estimated_total_relevant"),
-        ("Estimated completeness", "completeness"),
-        ("Completeness 95% CI", "completeness_ci95"),
+        ("Diagnostic type", "diagnostic_type"),
+        ("Independence assumption met", "independence_assumption_met"),
+        ("Convergence score", "convergence_score"),
+        ("Unique-family yield", "unique_family_yield"),
         ("Singletons (f1)", "f1_singletons"),
         ("Doubletons (f2)", "f2_doubletons"),
         ("Mean pairwise Jaccard", "mean_pairwise_jaccard"),
@@ -765,14 +764,51 @@ def render_capture_recapture(data: dict[str, Any]) -> list[str]:
     for label, key in fields:
         lines.append(f"- **{label}:** {compact_text(estimate.get(key), DEFAULT_STATUS)}")
     lines.append(
-        f"- **Interpretation:** {compact_text(estimate.get('interpretation'), 'heuristic completeness signal')}"
+        f"- **Interpretation:** {compact_text(estimate.get('interpretation'), 'internal overlap signal')}"
     )
     lines.append(
-        "- **Caveat:** capture-recapture is a heuristic, asymmetric signal - a high estimate is weak "
-        "positive evidence, an undersaturated verdict is a real recall-risk flag; it never widens "
-        "eligibility or blocks saturation on its own."
+        "- **Caveat:** pilot families are dependent and heterogeneous. This is not capture-recapture, "
+        "does not estimate unseen records or completeness, and cannot resolve saturation or handoff."
     )
     lines.append("")
+    return lines
+
+
+def render_external_registry_validation(data: dict[str, Any]) -> list[str]:
+    registry = as_dict(first_value(data, ["external_registry_validation", "registry_validation"], {}))
+    mode = compact_text(first_value(data, ["information_source_mode"], "pubmed-only"))
+    lines = ["## External trial-registry validation", "", f"- **Operating mode:** {mode}"]
+    if not registry:
+        lines.extend([
+            "- **Status:** not performed",
+            "- **Completeness statement:** No review-level completeness was assessed; this is a PubMed search strategy.",
+            "",
+        ])
+        return lines
+    summary = as_dict(registry.get("summary"))
+    fields = [
+        ("Status", registry.get("status") or ("blocked" if registry.get("handoff_blocked") else "complete")),
+        ("Sources", registry.get("sources")),
+        ("Interfaces", registry.get("interfaces")),
+        ("Queries/imports", registry.get("queries_imports")),
+        ("Run/data dates", registry.get("dates")),
+        ("Source records", registry.get("source_record_counts")),
+        ("Deduplicated trials", registry.get("deduplicated_trial_count") or len(as_list(registry.get("records")))),
+        ("Screening counts", registry.get("screening_counts")),
+        ("Publication-status counts", registry.get("publication_status_counts")),
+        ("Eligible linked PubMed PMIDs", summary.get("eligible_linked_pubmed_pmids")),
+        ("Relative recall percent", summary.get("relative_recall_percent")),
+        ("Retrieved PMIDs", summary.get("retrieved_pmids")),
+        ("Missed PMIDs", summary.get("missed_pmids")),
+        ("Unavailable/declined sources", registry.get("unavailable_declined_sources")),
+    ]
+    for label, value in fields:
+        lines.append(f"- **{label}:** {compact_text(value, DEFAULT_STATUS)}")
+    lines.extend([
+        f"- **Interpretation:** {compact_text(summary.get('interpretation'), DEFAULT_STATUS)}",
+        "- **Caveat:** Registry validation is an external PubMed leak check, not a review-level completeness estimate. Registry records did not feed term mining.",
+        "",
+    ])
     return lines
 
 
@@ -1204,6 +1240,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_revision_cycles(data))
     lines.extend(render_press_coverage(data))
     lines.extend(render_seed_validation(data))
+    lines.extend(render_external_registry_validation(data))
     lines.extend(render_peer_review(data))
     lines.extend(render_reporting_notes(data, output_path))
     lines.extend(render_prisma_s_appendix(data))

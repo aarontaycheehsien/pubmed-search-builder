@@ -117,6 +117,20 @@ If a validated filter or focused variant was also tested:
 - **Fragility metrics by block:** [explicit title/abstract naming %, MeSH coverage %, exact-label coverage %, descriptive rescue %, safety-layer noise, held-out attributable misses, era variation]
 - **Empirical and final handling:** [stable / fragile / very-fragile; human override and required reason, or none]
 - **Orthogonal no-seed pilots:** [MeSH / exact phrase / operational description / prior review / citation-registry / historical terminology, or not applicable]
+- **Internal pilot convergence:** [convergence score / unique-family yield / recall-risk / indeterminate; explicitly not capture-recapture or a completeness estimate]
+
+## External trial-registry validation
+
+- **Operating mode:** [pubmed-only / pubmed-plus-external-validation]
+- **Sources and status:** [completed / declined / unavailable / not applicable]
+- **Interfaces, queries/imports, and run/data dates:** [details]
+- **Source and deduplicated trial counts:** [details]
+- **Eligibility decisions and reasons:** [counts]
+- **Publication linkage methods/confidence:** [details]
+- **Publication-status classes:** [PubMed indexed / published non-PubMed / registry results only / completed no results / ongoing / terminated / unknown]
+- **Eligible linked PubMed denominator, hits, and misses:** [details]
+- **Interpretation:** [misses resolved; coverage findings; no eligible trials gives no reassurance]
+- **Limitation:** [registry check is a PubMed leak sentinel, not review-level completeness]
 - **Provenance-blinded screening:** [yes/no/not applicable]
 - **Saturation history:** [new included studies and new vocabulary per round; consecutive zero-novelty rounds]
 - **Holdout freeze:** [allocation method and ledger path before term mining, or not applicable]

@@ -61,6 +61,34 @@ def sample_data():
 
 
 class AuditMarkdownTests(unittest.TestCase):
+    def test_pubmed_only_audit_disclaims_review_level_completeness(self):
+        data = sample_data()
+        data["information_source_mode"] = "pubmed-only"
+        markdown = audit_markdown.render_audit_markdown(data)
+        self.assertIn("## External trial-registry validation", markdown)
+        self.assertIn("No review-level completeness was assessed", markdown)
+
+    def test_external_registry_validation_renders_benchmark_and_misses(self):
+        data = sample_data()
+        data.update({
+            "information_source_mode": "pubmed-plus-external-validation",
+            "external_registry_validation": {
+                "status": "blocked",
+                "sources": ["clinicaltrials.gov", "who-ictrp"],
+                "summary": {
+                    "eligible_linked_pubmed_pmids": 2,
+                    "relative_recall_percent": 50.0,
+                    "retrieved_pmids": ["12345"],
+                    "missed_pmids": ["67890"],
+                    "interpretation": "Investigate the eligible linked PMID miss.",
+                },
+            },
+        })
+        markdown = audit_markdown.render_audit_markdown(data)
+        self.assertIn("pubmed-plus-external-validation", markdown)
+        self.assertIn("67890", markdown)
+        self.assertIn("not a review-level completeness estimate", markdown)
+
     def test_protocol_outline_generates_bound_headings(self):
         data = sample_data()
         data.update({

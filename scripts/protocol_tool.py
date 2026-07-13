@@ -29,7 +29,9 @@ ROOT_KEYS = {
     "dsl_version", "protocol_id", "scope_version", "version_change", "review",
     "eligibility", "searchable_scope", "screening_only", "filters_and_limits",
     "date_boundaries", "seeds", "priorities", "focused_variants",
+    "information_source_mode", "external_validation",
 }
+REQUIRED_ROOT_KEYS = ROOT_KEYS - {"information_source_mode", "external_validation"}
 
 
 class ProtocolError(ValueError):
@@ -163,7 +165,7 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
     if not isinstance(data, dict):
         return ["protocol must be an object"]
     _unknown(data, ROOT_KEYS, "$", issues)
-    for key in sorted(ROOT_KEYS - data.keys()):
+    for key in sorted(REQUIRED_ROOT_KEYS - data.keys()):
         issues.append(f"$.{key} is required")
 
     if data.get("dsl_version") != DSL_VERSION:
@@ -187,6 +189,35 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
         expected = None if scope_version == 1 else scope_version - 1
         if previous != expected:
             issues.append(f"$.version_change.previous_scope_version must be {expected!r} for scope version {scope_version}")
+
+    source_mode = data.get("information_source_mode", "pubmed-only")
+    if source_mode not in {"pubmed-only", "pubmed-plus-external-validation"}:
+        issues.append("$.information_source_mode must be pubmed-only or pubmed-plus-external-validation")
+    external = data.get("external_validation")
+    if external is not None:
+        external = _object(
+            external,
+            "$.external_validation",
+            {"status", "purpose", "sources"},
+            {"status", "purpose", "sources"},
+            issues,
+        )
+        status = external.get("status")
+        if status not in {"enabled", "declined", "not-applicable"}:
+            issues.append("$.external_validation.status must be enabled, declined, or not-applicable")
+        purpose = _text(external.get("purpose"), "$.external_validation.purpose", issues, lock=lock)
+        sources = _array(external.get("sources"), "$.external_validation.sources", issues)
+        for index, source in enumerate(sources):
+            _text(source, f"$.external_validation.sources[{index}]", issues, lock=lock)
+        if lock and status == "enabled" and not sources:
+            issues.append("$.external_validation.sources must not be empty when external validation is enabled")
+        if lock and status == "enabled" and purpose != "pubmed-leak-detection":
+            issues.append("$.external_validation.purpose must be pubmed-leak-detection when enabled")
+    if source_mode == "pubmed-plus-external-validation":
+        if not isinstance(external, dict) or external.get("status") != "enabled":
+            issues.append("$.external_validation.status must be enabled in pubmed-plus-external-validation mode")
+    elif isinstance(external, dict) and external.get("status") == "enabled":
+        issues.append("$.external_validation cannot be enabled in pubmed-only mode")
 
     review = _object(data.get("review"), "$.review", {"question", "framework"}, {"question", "framework"}, issues)
     _text(review.get("question"), "$.review.question", issues, lock=lock)
@@ -402,6 +433,12 @@ def new_protocol() -> dict[str, Any]:
             "workload": {"policy": "", "selection_rule": ""},
         },
         "focused_variants": [],
+        "information_source_mode": "pubmed-only",
+        "external_validation": {
+            "status": "not-applicable",
+            "purpose": "pubmed-leak-detection",
+            "sources": [],
+        },
     }
 
 
@@ -469,7 +506,7 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
         "required_domains": [
             "review-question", "scope-version-change", "eligibility-vs-searchable-scope", "concept-structure",
             "screening-only-properties", "filters-and-limits", "date-boundaries",
-            "seed-roles", "recall-and-workload", "focused-variants",
+            "seed-roles", "recall-and-workload", "focused-variants", "information-source-mode",
         ],
         "protocol_summary": {
             "version_change": protocol["version_change"],
@@ -482,6 +519,11 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
             "seeds": protocol["seeds"],
             "priorities": protocol["priorities"],
             "focused_variants": protocol["focused_variants"],
+            "information_source_mode": protocol.get("information_source_mode", "pubmed-only"),
+            "external_validation": protocol.get(
+                "external_validation",
+                {"status": "not-applicable", "purpose": "pubmed-leak-detection", "sources": []},
+            ),
         },
     }
     conditional_sections: list[dict[str, Any]] = []
@@ -493,6 +535,8 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
         conditional_sections.append({"id": "filters-and-limits", "title": "Filters and limits", "required": True, "source_refs": ["filters_and_limits"]})
     if protocol["focused_variants"]:
         conditional_sections.append({"id": "focused-variants", "title": "Focused variants", "required": True, "source_refs": ["focused_variants"]})
+    if protocol.get("information_source_mode", "pubmed-only") == "pubmed-plus-external-validation":
+        conditional_sections.append({"id": "external-validation", "title": "External trial-registry validation", "required": True, "source_refs": ["external_validation"]})
     audit_outline = {
         **_envelope(protocol, source, "audit-outline"),
         "sections": [

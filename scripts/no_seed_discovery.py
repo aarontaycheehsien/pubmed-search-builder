@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,11 +32,9 @@ PROBE_ROLES = {"topic-core", "essential-concept"}
 SPARSE_VOLUME_CEILING_DEFAULT = 500
 BOTTLENECK_VOLUME_FLOOR_DEFAULT = 1000
 
-# Capture-recapture completeness thresholds. Heuristic triggers, not validated
-# cutoffs (mirroring the volume-discrimination defaults above). Capture-recapture
-# treats each orthogonal pilot family as an independent capture occasion over the
-# screened-in relevant records; the estimator is only trustworthy once enough
-# records have been re-found across families.
+# Internal convergence thresholds. These are heuristic triggers, not validated
+# cutoffs. Pilot families share concepts, indexing, and a database, so they are
+# not independent capture occasions and must not be used for capture-recapture.
 RECAPTURE_MIN_SCREENED_IN_FOR_ESTIMATE = 5  # below this: no estimate at all
 RECAPTURE_MIN_SCREENED_IN_FOR_FIRM_VERDICT = 15  # below this: verdict is indicative-only
 RECAPTURE_CONVERGED_COMPLETENESS = 0.85  # completeness at/above this reads as converged
@@ -212,38 +209,7 @@ def render_user_decision_text(decision: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _chao1(s_obs: int, f1: int, f2: int) -> dict[str, Any]:
-    """Chao1 richness estimate over a capture-frequency distribution.
-
-    Returns the point estimate of total relevant records (``n_hat``), the
-    estimated unseen count, and a log-normal 95% CI. The CI is emitted only when
-    a doubleton exists (``f2 >= 1``); the ``f2 == 0`` variance is unstable, so we
-    report the bias-corrected point estimate without a false-precision interval.
-    """
-    if f2 > 0:
-        estimated_unseen = (f1 * f1) / (2.0 * f2)
-        n_hat = s_obs + estimated_unseen
-        ratio = f1 / f2
-        variance = f2 * (0.5 * ratio**2 + ratio**3 + 0.25 * ratio**4)
-        ci: list[float] | None = None
-        if estimated_unseen > 0 and variance > 0:
-            k = math.exp(1.96 * math.sqrt(math.log(1.0 + variance / (estimated_unseen**2))))
-            ci = [round(s_obs + estimated_unseen / k, 2), round(s_obs + estimated_unseen * k, 2)]
-    else:
-        # Bias-corrected Chao1 (no doubletons): stable point estimate, unstable CI.
-        estimated_unseen = f1 * (f1 - 1) / 2.0
-        n_hat = s_obs + estimated_unseen
-        variance = None
-        ci = None
-    return {
-        "n_hat": round(n_hat, 2),
-        "estimated_unseen": round(estimated_unseen, 2),
-        "variance": None if variance is None else round(variance, 4),
-        "ci95": ci,
-    }
-
-
-def estimate_completeness(
+def internal_convergence_diagnostic(
     included_pmids: list[str],
     provenance: dict[str, Any],
     *,
@@ -252,18 +218,13 @@ def estimate_completeness(
     converged_completeness: float = RECAPTURE_CONVERGED_COMPLETENESS,
     undersaturated_completeness: float = RECAPTURE_UNDERSATURATED_COMPLETENESS,
 ) -> dict[str, Any]:
-    """Capture-recapture completeness estimate over the screened-in relevant set.
+    """Internal overlap/convergence diagnostic over eligible pilot records.
 
-    Each orthogonal pilot family is treated as an independent capture occasion.
-    The pilot-family overlap already recorded per candidate in the provenance map
-    is the capture-frequency signal: records re-found across many families mean
-    the union has converged; a set dominated by singletons means the pilots
-    retrieve largely disjoint relevant records and the union is undersaturated.
-
-    Interpretation is asymmetric (see ``no-seed-recall-estimation.md``): a high
-    completeness estimate is weak positive evidence, a low one is a real leak
-    signal. The estimator stays silent (``indeterminate``) below the minimum
-    screened-in count or when no record has yet been re-captured.
+    This intentionally does *not* perform capture-recapture. The pilot families
+    are dependent and heterogeneous. Re-finding records across families is weak
+    evidence of internal convergence; a high unique-family yield is a recall-risk
+    flag. Neither result estimates the unseen population or completes a gate.
+    The historical function name is retained for API compatibility.
     """
     prov_by_pmid = {
         str(item.get("pmid")): item
@@ -320,11 +281,11 @@ def estimate_completeness(
         "f2_doubletons": f2,
         "pairwise_jaccard": pairwise_jaccard,
         "mean_pairwise_jaccard": mean_jaccard,
-        "chao1_estimate": None,
-        "estimated_total_relevant": None,
-        "estimated_unseen_relevant": None,
-        "completeness": None,
-        "completeness_ci95": None,
+        "diagnostic_type": "internal-convergence-not-capture-recapture",
+        "independence_assumption_met": False,
+        "formal_population_estimate": None,
+        "unique_family_yield": None if not s_obs else round(f1 / s_obs, 4),
+        "convergence_score": None if not s_obs else round(1.0 - (f1 / s_obs), 4),
     }
 
     if s_obs < max(1, int(min_screened_in_for_estimate)):
@@ -335,71 +296,61 @@ def estimate_completeness(
                 "reason": "too-few-screened-in",
                 "interpretation": (
                     f"Only {s_obs} screened-in relevant record(s) with pilot provenance; below the "
-                    f"{min_screened_in_for_estimate}-record floor, capture-recapture cannot estimate completeness."
+                    f"{min_screened_in_for_estimate}-record floor, overlap cannot be interpreted reliably."
                 ),
             }
         )
         return result
-    if f2 < 1:
-        chao = _chao1(s_obs, f1, f2)
+    if not any(count >= 2 for count in capture_counts.values()):
         result.update(
             {
-                "chao1_estimate": chao,
-                "estimated_total_relevant": chao["n_hat"],
-                "estimated_unseen_relevant": chao["estimated_unseen"],
-                "verdict": "indeterminate",
+                "verdict": "recall-risk",
                 "confidence": "indicative",
                 "reason": "no-recaptures",
                 "interpretation": (
-                    "No relevant record was captured by two or more pilot families, so overlap is undefined. "
-                    "The point estimate is indicative only; treat wide disjointness as a possible leak signal "
-                    "and consider naming an adjacent-review benchmark or adding a pilot family."
+                    "Every eligible record is unique to one pilot family. This is an internal instability "
+                    "signal, not a population estimate; investigate with seeds, an adjacent-review benchmark, "
+                    "citation searching, or optional external trial-registry validation."
                 ),
             }
         )
         return result
 
-    chao = _chao1(s_obs, f1, f2)
-    completeness = round(s_obs / chao["n_hat"], 4) if chao["n_hat"] else None
-    completeness_ci = None
-    if chao["ci95"] and chao["ci95"][1]:
-        completeness_ci = [round(s_obs / chao["ci95"][1], 4), round(s_obs / chao["ci95"][0], 4)]
+    convergence = result["convergence_score"]
     firm = s_obs >= max(1, int(min_screened_in_for_firm_verdict))
-    if completeness is not None and completeness >= converged_completeness:
+    if convergence is not None and convergence >= converged_completeness:
         verdict = "converged"
         interpretation = (
-            "Pilot families re-found the same relevant records, so the union appears close to complete. "
-            "This is weak positive evidence only - it does not prove completeness."
+            "Pilot families frequently re-found eligible records. This is weak internal convergence evidence "
+            "only; it does not estimate or prove completeness."
         )
-    elif completeness is not None and completeness < undersaturated_completeness:
-        verdict = "undersaturated"
+    elif convergence is not None and convergence < undersaturated_completeness:
+        verdict = "recall-risk"
         interpretation = (
-            "Independent pilot families retrieved largely disjoint relevant records, so the union likely "
-            "misses relevant studies (recall risk). This is a real leak signal: add a benchmark, broaden a "
-            "pilot family, or supply seeds before trusting the search."
+            "Pilot families have a high unique eligible yield. This is an internal recall-risk signal: add an "
+            "external benchmark, broaden a pilot family, or supply seeds before trusting recall."
         )
     else:
         verdict = "indeterminate"
         interpretation = (
-            "Estimated completeness sits between the converged and undersaturated thresholds; overlap is "
-            "partial. Treat as a soft recall-risk flag pending a stronger benchmark."
+            "Pilot overlap is intermediate. Treat it as inconclusive pending a stronger external benchmark."
         )
     result.update(
         {
-            "chao1_estimate": chao,
-            "estimated_total_relevant": chao["n_hat"],
-            "estimated_unseen_relevant": chao["estimated_unseen"],
-            "completeness": completeness,
-            "completeness_ci95": completeness_ci,
             "verdict": verdict,
-            "confidence": "estimated" if firm else "indicative",
-            "reason": "estimated" if firm else "below-firm-verdict-floor",
+            "confidence": "descriptive" if firm else "indicative",
+            "reason": "descriptive-overlap" if firm else "below-firm-verdict-floor",
             "interpretation": interpretation,
             "converged_completeness": converged_completeness,
             "undersaturated_completeness": undersaturated_completeness,
         }
     )
     return result
+
+
+# Backward-compatible import alias. The returned artifact is a convergence
+# diagnostic and contains no population-size or completeness estimate.
+estimate_completeness = internal_convergence_diagnostic
 
 
 def read_json(path: str) -> Any:
@@ -757,11 +708,9 @@ def adjudicate(
     # would masquerade as saturation. Applies only at/under the configured floor, so a
     # single screened-in record still freezes a small (non-independent) ledger as before.
     included_count = len(included)
-    # Capture-recapture completeness estimate over the screened-in relevant set.
-    # Soft signal only: it never changes saturation on its own (an intentionally
-    # precision-focused pilot family is expected to look disjoint), but an
-    # undersaturated verdict raises a recall-risk flag the critic must clear.
-    completeness = estimate_completeness(
+    # Internal convergence diagnostic over the screened-in relevant set. This is
+    # descriptive only and never changes saturation or estimates completeness.
+    completeness = internal_convergence_diagnostic(
         sorted(included, key=int),
         provenance,
         min_screened_in_for_estimate=recapture_min_screened_in_for_estimate,
@@ -827,11 +776,11 @@ def adjudicate(
             discriminating_basis=gate.get("discriminating_basis"),
             consecutive_rounds=consecutive,
         )
-        if completeness is not None and completeness.get("verdict") == "undersaturated":
-            decision["completeness_flag"] = (
-                "Capture-recapture over the screened-in records is undersaturated "
-                f"(estimated completeness {completeness.get('completeness')}); the pilots retrieve largely "
-                "disjoint relevant records, reinforcing the recall-risk reading above."
+        if completeness is not None and completeness.get("verdict") == "recall-risk":
+            decision["convergence_flag"] = (
+                "The internal pilot-overlap diagnostic shows a high unique eligible yield "
+                f"({completeness.get('unique_family_yield')}); this reinforces the recall-risk reading above "
+                "but is not a capture-recapture estimate."
             )
         gate["user_decision"] = decision
         gate["user_decision_text"] = render_user_decision_text(decision)
@@ -860,21 +809,19 @@ def adjudicate(
         "ledger_frozen": False,
     }
     if completeness is not None:
-        state["completeness_estimate"] = completeness
-        if completeness.get("verdict") == "undersaturated":
+        state["internal_convergence_diagnostic"] = completeness
+        if completeness.get("verdict") == "recall-risk":
             state["recall_risk"] = {
-                "source": "capture-recapture",
-                "verdict": "undersaturated",
-                "completeness": completeness.get("completeness"),
-                "completeness_ci95": completeness.get("completeness_ci95"),
+                "source": "internal-pilot-convergence",
+                "verdict": "recall-risk",
+                "unique_family_yield": completeness.get("unique_family_yield"),
+                "convergence_score": completeness.get("convergence_score"),
                 "critic_must_clear": True,
                 "user_message": (
-                    "Capture-recapture over the screened-in relevant records is undersaturated "
-                    f"(estimated completeness {completeness.get('completeness')}, "
-                    f"CI {completeness.get('completeness_ci95')}). Independent pilot families found largely "
-                    "disjoint relevant records, so the search may miss relevant studies. Add an adjacent-review "
-                    "benchmark, broaden a pilot family, or supply seeds before trusting recall. This is a soft "
-                    "signal - it does not block saturation, but the critic/peer review must address it."
+                    "The internal pilot-overlap diagnostic found a high unique eligible yield "
+                    f"({completeness.get('unique_family_yield')}). Add an adjacent-review benchmark, broaden a "
+                    "pilot family, supply seeds, or use optional external trial-registry validation. This is "
+                    "not capture-recapture and does not estimate completeness or block saturation."
                 ),
             }
     if binding:
@@ -1148,7 +1095,7 @@ def build_parser() -> argparse.ArgumentParser:
     discriminate_parser.add_argument("--output", required=True)
     recapture_parser = sub.add_parser(
         "recapture",
-        help="Capture-recapture completeness estimate over the screened-in relevant set (soft recall-risk signal).",
+        help="Deprecated command name: emit an internal pilot-overlap convergence diagnostic (not capture-recapture).",
     )
     recapture_parser.add_argument("--provenance-file", required=True)
     recapture_parser.add_argument(
@@ -1304,7 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
                     if provenance.get(key) != binding.get(key):
                         raise NoSeedDiscoveryError(f"Provenance {key} does not match the supplied protocol")
             included_pmids = [str(value) for value in state.get("included_pmids", [])]
-            estimate = estimate_completeness(
+            estimate = internal_convergence_diagnostic(
                 included_pmids,
                 provenance,
                 min_screened_in_for_estimate=max(1, args.min_screened_in_for_estimate),
@@ -1313,29 +1260,29 @@ def main(argv: list[str] | None = None) -> int:
                 undersaturated_completeness=args.undersaturated_completeness,
             )
             artifact = {
-                "operation": "orthogonal-pilot-recapture",
+                "operation": "internal-convergence-diagnostic",
                 "ok": True,
                 "scope_version": args.scope_version,
                 **estimate,
                 "note": (
-                    "Capture-recapture completeness is heuristic and asymmetric: a high estimate is weak "
-                    "positive evidence, an undersaturated verdict is a real recall-risk signal. It never "
-                    "widens eligibility or blocks saturation on its own."
+                    "This is a descriptive overlap diagnostic, not capture-recapture. High convergence is weak "
+                    "positive evidence; high unique eligible yield is a recall-risk flag. It never estimates "
+                    "the unseen population or resolves a completion gate."
                 ),
             }
             if binding:
                 artifact.update({key: value for key, value in binding.items() if key != "protocol_path"})
             write_json(args.output, artifact)
             receipt = {
-                "operation": "orthogonal-pilot-recapture",
+                "operation": "internal-convergence-diagnostic",
                 "ok": True,
                 "output": args.output,
                 "screened_in_observed": estimate["screened_in_observed"],
                 "verdict": estimate["verdict"],
-                "completeness": estimate.get("completeness"),
-                "recall_risk": estimate["verdict"] == "undersaturated",
+                "convergence_score": estimate.get("convergence_score"),
+                "recall_risk": estimate["verdict"] == "recall-risk",
             }
-            if estimate["verdict"] == "undersaturated":
+            if estimate["verdict"] == "recall-risk":
                 receipt["interpretation"] = estimate["interpretation"]
         else:
             screening = read_json(args.screening_file)

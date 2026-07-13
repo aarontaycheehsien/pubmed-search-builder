@@ -165,13 +165,19 @@ python scripts/strategy_analysis.py two-strand --main-strategy-file final_main_s
 python scripts/strategy_analysis.py fragility-score --concepts-file fragility_concepts.json --candidate-ledger candidate_ledger.json --concept-ablation-json concept_ablation.json --scope-version 1 --output fragility_score.json
 ```
 
-For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot families, writes a provenance-blinded screening file and a separate source map, tracks study/vocabulary saturation across rounds, and freezes the discovery/holdout ledger only after saturation.
+For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot families, writes a provenance-blinded screening file and a separate source map, tracks study/vocabulary saturation across rounds, and freezes the discovery/holdout ledger only after saturation. Pilot-family overlap is reported only as an internal convergence diagnostic; the families are dependent and are not valid capture occasions, so the tool does not report a Chao or literature-completeness estimate.
 
 After candidate screening, `scripts/vocabulary_learning.py` extracts terms from newly included records, keeps excluded-record terminology diagnostic-only, blocks scope-changing proposals, and retests accepted within-concept additions against holdouts and differential samples.
 
 For strategy variants, `scripts/screening_burden.py` builds reproducible complete-frame stratified samples, estimates weighted precision with confidence intervals, reports records screened per relevant report, and permits burden-based selection only among variants meeting the independent held-out recall requirement.
 
 Every critic or vocabulary revision also passes `scripts/revision_guard.py`: the named defect must be fixed without losing prior held-out retrieval, adding an unauthorized required block, introducing syntax/translation drift, silently changing scope, or omitting before/after workload counts. Failed revisions automatically keep the baseline authoritative or remain labelled experimental-only.
+
+### Optional Trial-Registry Sentinel (`scripts/registry_sentinel.py`)
+
+The default workflow remains PubMed-only. When a locked protocol enables `pubmed-plus-external-validation`, the registry sentinel can query ClinicalTrials.gov API v2, import a user-obtained WHO ICTRP CSV/XML export, deduplicate and screen trials, link publications, and test eligible confidently linked PMIDs against the final PubMed strategy. Registry records stay outside PubMed term mining. Eligible linked PMID misses block handoff; non-PubMed, unpublished, registry-only, and ongoing trials are reported as coverage findings rather than PubMed query failures.
+
+See [`references/external-trial-registry-validation.md`](references/external-trial-registry-validation.md) for commands, access conditions, ledger fields, and interpretation.
 
 ### Audit Markdown (`scripts/audit_markdown.py`)
 
@@ -319,6 +325,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/wildcard-and-truncation.md](references/wildcard-and-truncation.md)**: Wildcard safety, current PubMed wildcard limits, and testing
 - **[references/bramer-reciprocal-gap-analysis.md](references/bramer-reciprocal-gap-analysis.md)**: Conditional controlled-vocabulary/text-word gap analysis
 - **[references/seed-pmid-validation.md](references/seed-pmid-validation.md)**: Post-scope seed discovery, screening, term mining, and validation
+- **[references/external-trial-registry-validation.md](references/external-trial-registry-validation.md)**: Optional ClinicalTrials.gov/ICTRP sentinel for external PubMed leak detection
 - **[references/validated-methodological-filters-and-hedges.md](references/validated-methodological-filters-and-hedges.md)**: Cochrane, McMaster, and other validated filters
 - **[references/anti-patterns.md](references/anti-patterns.md)**: Catalogued LLM failure modes with literature anchors
 - **[references/audit-template.md](references/audit-template.md)**: Complete audit report Markdown template

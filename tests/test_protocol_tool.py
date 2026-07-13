@@ -122,6 +122,34 @@ class ProtocolValidationTests(unittest.TestCase):
         self.assertEqual(protocol_tool.validate_protocol(draft, "draft"), [])
         self.assertTrue(protocol_tool.validate_protocol(draft, "lock"))
 
+    def test_legacy_protocol_without_mode_defaults_to_pubmed_only(self):
+        protocol = valid_protocol()
+        self.assertEqual(protocol_tool.validate_protocol(protocol, "lock"), [])
+
+    def test_external_validation_mode_requires_enabled_source_configuration(self):
+        protocol = valid_protocol()
+        protocol["information_source_mode"] = "pubmed-plus-external-validation"
+        protocol["external_validation"] = {
+            "status": "enabled",
+            "purpose": "pubmed-leak-detection",
+            "sources": ["clinicaltrials.gov", "who-ictrp"],
+        }
+        self.assertEqual(protocol_tool.validate_protocol(protocol, "lock"), [])
+        protocol["external_validation"]["status"] = "not-applicable"
+        issues = protocol_tool.validate_protocol(protocol, "lock")
+        self.assertTrue(any("must be enabled" in issue for issue in issues))
+
+    def test_pubmed_only_rejects_enabled_external_validation(self):
+        protocol = valid_protocol()
+        protocol["information_source_mode"] = "pubmed-only"
+        protocol["external_validation"] = {
+            "status": "enabled",
+            "purpose": "pubmed-leak-detection",
+            "sources": ["clinicaltrials.gov"],
+        }
+        issues = protocol_tool.validate_protocol(protocol, "lock")
+        self.assertTrue(any("cannot be enabled" in issue for issue in issues))
+
     def test_unknown_core_fields_require_x_prefix(self):
         protocol = valid_protocol()
         protocol["surprise"] = True
@@ -191,6 +219,7 @@ class ProtocolCompilationTests(unittest.TestCase):
             critic = json.loads((directory / "critic_packet_v1.json").read_text(encoding="utf-8"))
             self.assertIn("required_domains", critic)
             self.assertIn("protocol_summary", critic)
+            self.assertEqual(critic["protocol_summary"]["information_source_mode"], "pubmed-only")
             audit = json.loads((directory / "audit_outline_v1.json").read_text(encoding="utf-8"))
             self.assertTrue(all({"id", "title", "required", "source_refs"} <= set(row) for row in audit["sections"]))
             section_ids = {row["id"] for row in audit["sections"]}
