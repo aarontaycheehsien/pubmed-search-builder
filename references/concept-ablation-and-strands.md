@@ -12,6 +12,7 @@ python scripts/strategy_analysis.py concept-ablation \
   --candidate-ledger candidate_ledger.json \
   --scope-version 1 \
   --sample-size 10 \
+  --focused-min-reduction-percent 10 \
   --output concept_ablation.json
 ```
 
@@ -23,7 +24,7 @@ Each block object may include `role`, `fragility`, and `parent_block`. The tool 
 - exact `(without block) NOT (full)` differential counts and fetched samples;
 - one recommendation: `keep-as-required`, `move-inside-another-or-block`, `handle-at-screening`, or `focused-variant-only`.
 
-Recommendations are deterministic triage, not scope decisions. A known-item loss makes a block unsafe for the recall-first strand and routes it to screening unless the scope itself must be reopened. A `parent_block` or within-block role routes vocabulary inside the parent `OR` block. Optional/fragile blocks with useful workload reduction are focused-only. Stable, scope-essential blocks with no observed loss remain required. Inspect saved differential records before adoption.
+Recommendations are deterministic triage, not scope decisions. A known-item loss makes a block unsafe for the recall-first strand and routes it to screening unless the scope itself must be reopened. A `parent_block` or within-block role routes vocabulary inside the parent `OR` block. By default, an optional/fragile block with no observed known-item loss is focused-only when its estimated workload reduction is at least 10%; below that it is handled at screening. This heuristic, unvalidated trigger can be tuned with `--focused-min-reduction-percent`, and the effective value is saved in `decision_thresholds.focused_variant_min_reduction_percent`. Stable, scope-essential blocks with no observed loss remain required. Inspect saved differential records before adoption.
 
 Record `concept_ablation.json` in the manifest. The complete-loop gate requires coverage of every registered block and requires the critic to run after the ablation.
 

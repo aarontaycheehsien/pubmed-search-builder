@@ -390,6 +390,104 @@ class InternalConvergenceTests(unittest.TestCase):
         self.assertEqual(result["unique_family_yield"], 0.5)
         self.assertEqual(result["convergence_score"], 0.5)
         self.assertNotIn("completeness", result)
+        self.assertEqual(result["decision_thresholds"], {
+            "min_screened_in_for_estimate": 5,
+            "min_screened_in_for_firm_verdict": 15,
+            "converged_convergence_score_at_or_above": 0.85,
+            "recall_risk_convergence_score_below": 0.60,
+        })
+
+    def test_custom_overlap_threshold_changes_verdict_and_is_recorded(self):
+        provenance, included = _provenance([(10, 1), (5, 2), (5, 3)])
+        result = no_seed.internal_convergence_diagnostic(
+            included,
+            provenance,
+            undersaturated_completeness=0.40,
+        )
+        self.assertEqual(result["verdict"], "indeterminate")
+        self.assertEqual(result["decision_thresholds"]["recall_risk_convergence_score_below"], 0.40)
+
+    def test_adjudicate_parser_exposes_convergence_thresholds(self):
+        args = no_seed.build_parser().parse_args([
+            "adjudicate",
+            "--screening-file", "screening.json",
+            "--provenance-file", "provenance.json",
+            "--scope-version", "1",
+            "--state-output", "state.json",
+            "--ledger-output", "ledger.json",
+            "--min-screened-in-for-estimate", "7",
+            "--min-screened-in-for-firm-verdict", "21",
+            "--converged-completeness", "0.9",
+            "--undersaturated-completeness", "0.5",
+        ])
+        self.assertEqual(args.min_screened_in_for_estimate, 7)
+        self.assertEqual(args.min_screened_in_for_firm_verdict, 21)
+        self.assertEqual(args.converged_completeness, 0.9)
+        self.assertEqual(args.undersaturated_completeness, 0.5)
+
+    def test_cli_adjudicate_applies_and_records_custom_convergence_thresholds(self):
+        import json
+        import tempfile
+
+        provenance, included = _provenance([(10, 1), (5, 2), (5, 3)])
+        screening_records = []
+        provenance_records = []
+        for pmid in included:
+            candidate_id = no_seed.blind_id(1, pmid)
+            screening_records.append({
+                "candidate_id": candidate_id,
+                "pmid": pmid,
+                "title": "t",
+                "abstract": "",
+                "year": "2020",
+                "mesh_headings": [],
+                "keywords": [],
+                "decision": "include",
+                "title_abstract_reviewed": True,
+                "eligibility_reason": "in scope",
+            })
+            families = next(row["pilot_types"] for row in provenance["records"] if row["pmid"] == pmid)
+            provenance_records.append({
+                "candidate_id": candidate_id,
+                "pmid": pmid,
+                "pilot_types": families,
+                "pilot_labels": families,
+            })
+        screening = {
+            "operation": "orthogonal-pilot-screening",
+            "scope_version": 1,
+            "round": 1,
+            "provenance_blinded": True,
+            "records": screening_records,
+        }
+        provenance_artifact = {
+            "scope_version": 1,
+            "safety_cap_reached": False,
+            "records": provenance_records,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screening_path = root / "screening.json"
+            provenance_path = root / "provenance.json"
+            state_path = root / "state.json"
+            ledger_path = root / "ledger.json"
+            screening_path.write_text(json.dumps(screening), encoding="utf-8")
+            provenance_path.write_text(json.dumps(provenance_artifact), encoding="utf-8")
+            code = no_seed.main([
+                "adjudicate",
+                "--screening-file", str(screening_path),
+                "--provenance-file", str(provenance_path),
+                "--scope-version", "1",
+                "--state-output", str(state_path),
+                "--ledger-output", str(ledger_path),
+                "--undersaturated-completeness", "0.4",
+            ])
+
+            self.assertEqual(code, 0)
+            diagnostic = json.loads(state_path.read_text(encoding="utf-8"))["internal_convergence_diagnostic"]
+            self.assertEqual(diagnostic["verdict"], "indeterminate")
+            self.assertEqual(diagnostic["decision_thresholds"]["recall_risk_convergence_score_below"], 0.4)
 
     def test_low_overlap_is_recall_risk_signal(self):
         provenance, included = _provenance([(18, 1), (2, 2)])

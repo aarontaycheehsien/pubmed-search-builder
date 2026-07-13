@@ -115,11 +115,11 @@ python scripts/no_seed_discovery.py recapture \
 
 Interpret it **asymmetrically**, exactly like relative recall — a high estimate is weak positive evidence, a low one is a real leak signal — and note it is a **soft** signal: it never blocks saturation or widens eligibility on its own (the orthogonal families are deliberately precision-focused, so some disjointness is expected). The verdict maps against heuristic (not validated) triggers exposed as CLI flags:
 
-- **converged** (`convergence_score` ≥ the legacy `--converged-completeness` threshold): weak positive internal evidence only.
-- **recall-risk** (`convergence_score` below the legacy `--undersaturated-completeness` threshold, or no eligible record is re-found): investigate using seeds, adjacent reviews, citations, broader pilots, or optional trial-registry validation.
+- **converged** (`convergence_score` ≥ the legacy `--converged-completeness` threshold, default 0.85): weak positive internal evidence only.
+- **recall-risk** (`convergence_score` below the legacy `--undersaturated-completeness` threshold, default 0.60, or no eligible record is re-found): investigate using seeds, adjacent reviews, citations, broader pilots, or optional trial-registry validation.
 - **indeterminate**: intermediate overlap or too few eligible records.
 
-The legacy threshold option names remain to avoid breaking recorded commands. Below `--min-screened-in-for-estimate` (default 5), the result is indeterminate; below `--min-screened-in-for-firm-verdict` (default 15), it is indicative. These are heuristic display thresholds, not estimator validation.
+The legacy threshold option names remain to avoid breaking recorded commands. Below `--min-screened-in-for-estimate` (default 5), the result is indeterminate; below `--min-screened-in-for-firm-verdict` (default 15), it is indicative. These four options are accepted by both `adjudicate` and the deprecated standalone `recapture` command. They are heuristic display thresholds, not estimator validation. Every diagnostic artifact records the effective values under `decision_thresholds` so a verdict remains reproducible if defaults later change.
 
 ## Semi-independent benchmark from adjacent prior reviews
 
