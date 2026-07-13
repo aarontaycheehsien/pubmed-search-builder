@@ -57,6 +57,9 @@ DEFAULT_RATE_LIMIT = 2.0
 DEFAULT_EUTILS_RATE_WITHOUT_KEY = 3.0
 DEFAULT_EUTILS_RATE_WITH_KEY = 10.0
 DEFAULT_EUTILS_CANDIDATE_POOL = 100
+DEFAULT_TERM_MAPPING_BATCH_SIZE = 40
+DEFAULT_EUTILS_MAX_RETMAX = 1000
+EUTILS_WILDCARD_EXPANSION_LIMIT = 600
 DEFAULT_THROTTLE_RETRIES = 1
 DEFAULT_TRANSIENT_RETRIES = 3
 DEFAULT_CIRCUIT_THRESHOLD = 3
@@ -1114,16 +1117,18 @@ def eutils_search_term(label: str, match: str) -> str:
     raise MeshError(f"Unsupported MeSH match mode: {match}")
 
 
-def eutils_search_uids(label: str, match: str, limit: int, *, field: str) -> list[str]:
+def eutils_search(query: str, limit: int, *, field: str | None = None) -> dict[str, object]:
+    params = {
+        "db": "mesh",
+        "term": query,
+        "retmode": "json",
+        "retmax": str(max(1, min(DEFAULT_EUTILS_MAX_RETMAX, limit))),
+    }
+    if field:
+        params["field"] = field
     data = request_json(
         f"{EUTILS_BASE}/esearch.fcgi",
-        {
-            "db": "mesh",
-            "term": eutils_search_term(label, match),
-            "field": field,
-            "retmode": "json",
-            "retmax": str(max(1, min(DEFAULT_EUTILS_CANDIDATE_POOL, limit))),
-        },
+        params,
         backend="eutils",
     )
     if not isinstance(data, dict):
@@ -1132,7 +1137,27 @@ def eutils_search_uids(label: str, match: str, limit: int, *, field: str) -> lis
     if not isinstance(result, dict):
         raise TransientResponseError("EUtils ESearch response has no esearchresult")
     ids = result.get("idlist", [])
-    return [str(value) for value in ids] if isinstance(ids, list) else []
+    return {
+        "count": str(result.get("count", "0")),
+        "ids": [str(value) for value in ids] if isinstance(ids, list) else [],
+        "query_translation": str(result.get("querytranslation", "")),
+    }
+
+
+def eutils_search_uids(label: str, match: str, limit: int, *, field: str) -> list[str]:
+    result = eutils_search(
+        eutils_search_term(label, match),
+        min(DEFAULT_EUTILS_CANDIDATE_POOL, limit),
+        field=field,
+    )
+    return list(result["ids"])
+
+
+def eutils_search_count(value: object) -> int:
+    try:
+        return max(0, int(str(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def xml_text(element: ET.Element | None, path: str) -> str:
@@ -1281,6 +1306,152 @@ def term_descriptor_candidates(
         "term-to-descriptor resolution",
         lambda _reason: rdf_term_descriptor_candidates(term_resource, limit),
         lambda reason: eutils_term_descriptor_candidates(term_label, limit, reason),
+        backend=backend,
+    )
+
+
+def mesh_term_resource(value: str) -> str | None:
+    if not value.startswith(MESH_BASE):
+        return None
+    identifier = resource_id(value)
+    if not re.fullmatch(r"T\d+", identifier):
+        return None
+    return value
+
+
+def rdf_term_descriptor_candidates_batch(
+    term_resources: list[str],
+    limit: int,
+) -> dict[str, list[dict[str, object]]]:
+    """Resolve bounded MeSH term resources through one RDF VALUES query."""
+    resources = []
+    for value in term_resources:
+        resource = mesh_term_resource(value)
+        if resource and resource not in resources:
+            resources.append(resource)
+    resources.sort()
+    grouped: dict[str, list[dict[str, object]]] = {resource: [] for resource in resources}
+    effective_limit = max(0, limit)
+    if not resources or effective_limit == 0:
+        return grouped
+    values = " ".join(f"<{resource}>" for resource in resources)
+    query_limit = len(resources) * effective_limit
+    query = f"""
+PREFIX meshv: <http://id.nlm.nih.gov/mesh/vocab#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?term ?descriptor ?descriptorLabel ?concept ?conceptLabel WHERE {{
+  VALUES ?term {{ {values} }}
+  ?concept ?p ?term .
+  OPTIONAL {{ ?concept rdfs:label ?conceptLabel . }}
+  {{
+    ?descriptor meshv:concept ?concept .
+  }}
+  UNION
+  {{
+    ?descriptor meshv:preferredConcept ?concept .
+  }}
+  ?descriptor rdfs:label ?descriptorLabel .
+}}
+ORDER BY ?term ?descriptorLabel
+    LIMIT {query_limit}
+""".strip()
+    result = sparql(query, limit=query_limit, offset=0, inference=False)
+    bindings = sparql_bindings(result.get("results", {}))
+    if len(bindings) >= query_limit:
+        raise MeshError(
+            "Batched term-to-descriptor mapping reached its result safeguard; "
+            "rerun with a smaller --term-mapping-batch-size so recall is not silently truncated."
+        )
+    for binding in bindings:
+        term_resource = binding_value(binding, "term")
+        descriptor_uri = binding_value(binding, "descriptor")
+        if term_resource not in grouped or not descriptor_uri or len(grouped[term_resource]) >= effective_limit:
+            continue
+        grouped[term_resource].append(
+            {
+                "descriptor": resource_id(descriptor_uri),
+                "resource": descriptor_uri,
+                "label": binding_value(binding, "descriptorLabel"),
+                "concept": binding_value(binding, "concept"),
+                "concept_label": binding_value(binding, "conceptLabel"),
+            }
+        )
+    return {
+        resource: annotate_records(
+            records,
+            backend="rdf",
+            fidelity="full",
+            method="rdf_term_to_concept_batch",
+        )
+        for resource, records in grouped.items()
+    }
+
+
+def eutils_term_descriptor_candidates_batch(
+    term_labels: dict[str, str],
+    limit: int,
+    fallback_reason: str | None,
+) -> dict[str, list[dict[str, object]]]:
+    """Resolve exact term labels through one ESearch/ESummary pair after an RDF failure."""
+    normalized_to_resources: defaultdict[str, list[str]] = defaultdict(list)
+    query_labels: dict[str, str] = {}
+    for resource, label in term_labels.items():
+        cleaned = " ".join(label.split())
+        if cleaned:
+            key = normalized_label(cleaned)
+            normalized_to_resources[key].append(resource)
+            query_labels.setdefault(key, cleaned)
+    grouped: dict[str, list[dict[str, object]]] = {resource: [] for resource in term_labels}
+    if not normalized_to_resources:
+        return grouped
+    clauses = []
+    for key in sorted(normalized_to_resources):
+        escaped = query_labels[key].replace('"', r'\"')
+        clauses.append(f'"{escaped}"[WORD]')
+    search_limit = max(limit * len(clauses) * 5, 25)
+    search = eutils_search(" OR ".join(clauses), search_limit)
+    returned_ids = search.get("ids", [])
+    returned_count = len(returned_ids) if isinstance(returned_ids, list) else 0
+    if eutils_search_count(search.get("count")) > returned_count:
+        raise MeshError(
+            "Batched E-utilities term mapping exceeded its candidate pool; "
+            "reduce --term-mapping-batch-size or rerun against RDF so recall is not silently truncated."
+        )
+    for record in eutils_summary_records(list(returned_ids)):
+        for term in record.get("terms", []):
+            key = normalized_label(term)
+            for resource in normalized_to_resources.get(key, []):
+                grouped[resource].append(
+                    {
+                        "descriptor": record["descriptor"],
+                        "resource": record["resource"],
+                        "label": record["label"],
+                        "concept": "",
+                        "concept_label": "",
+                    }
+                )
+    return {
+        resource: annotate_records(
+            records[:limit],
+            backend="eutils",
+            fidelity="reduced",
+            method="eutils_batch_esearch_esummary",
+            fallback_reason=fallback_reason,
+        )
+        for resource, records in grouped.items()
+    }
+
+
+def term_descriptor_candidates_batch(
+    term_labels: dict[str, str],
+    limit: int,
+    *,
+    backend: str | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    return use_backend(
+        "batched term-to-descriptor resolution",
+        lambda _reason: rdf_term_descriptor_candidates_batch(list(term_labels), limit),
+        lambda reason: eutils_term_descriptor_candidates_batch(term_labels, limit, reason),
         backend=backend,
     )
 
@@ -1857,15 +2028,13 @@ def explosion_review_prompts(
     return prompts
 
 
-def tree(
+def rdf_tree(
     descriptor: str,
     max_descendants: int,
     max_siblings: int,
     *,
-    backend: str | None = None,
+    fallback_reason: str | None = None,
 ) -> dict[str, object]:
-    if selected_backend(backend) == "eutils":
-        raise MeshError("The MeSH tree command is RDF-only in Phase 2; use --backend rdf or auto.")
     descriptor_id = resource_id(descriptor)
     detail_data = details(descriptor_id, "terms,seealso,qualifiers", backend="rdf").get("details", {})
     if not isinstance(detail_data, dict):
@@ -1921,7 +2090,250 @@ def tree(
             siblings_truncated,
             mapping,
         ),
+        "provenance": provenance("rdf", "full", "rdf_tree", fallback_reason),
     }
+
+
+def tree_number_sort_key(value: str) -> tuple[str, int, str]:
+    return (value.split(".", 1)[0], value.count("."), value)
+
+
+def parent_tree_number(value: str) -> str:
+    parts = value.split(".")
+    return ".".join(parts[:-1]) if len(parts) > 1 else ""
+
+
+def matching_tree_numbers(record: dict[str, object], predicate) -> list[str]:
+    values = record.get("tree_numbers", [])
+    if not isinstance(values, list):
+        return []
+    return sorted(
+        unique_strings([str(value) for value in values if predicate(str(value))]),
+        key=tree_number_sort_key,
+    )
+
+
+def eutils_tree_records(records: list[dict[str, object]], predicate) -> list[dict[str, object]]:
+    """Project ESummary records into the descriptor/tree shape used by RDF tree helpers."""
+    output: dict[str, dict[str, object]] = {}
+    for raw in records:
+        descriptor_id = resource_id(str(raw.get("descriptor", "")))
+        if not descriptor_id:
+            continue
+        tree_numbers = matching_tree_numbers(raw, predicate)
+        if not tree_numbers:
+            continue
+        record = output.setdefault(
+            descriptor_id,
+            {
+                "descriptor": descriptor_id,
+                "resource": str(raw.get("resource") or mesh_resource(descriptor_id)),
+                "label": str(raw.get("label", "")),
+                "tree_numbers": [],
+            },
+        )
+        for tree_number in tree_numbers:
+            add_tree_number(record, tree_number)
+    return sorted(output.values(), key=descriptor_record_sort_key)
+
+
+def eutils_tree(
+    descriptor: str,
+    max_descendants: int,
+    max_siblings: int,
+    *,
+    fallback_reason: str | None = None,
+) -> dict[str, object]:
+    """Reconstruct bounded descriptor tree context from MeSH ESearch and ESummary.
+
+    E-utilities exposes tree numbers but not RDF's richer hierarchy and SCR mapping predicates.
+    This intentionally supports only descriptors and labels the result reduced fidelity so callers
+    know to confirm any final decision against RDF when it becomes available.
+    """
+    descriptor_id = resource_id(descriptor)
+    if not descriptor_id.startswith("D"):
+        raise MeshError(
+            "E-utilities tree fallback supports descriptor records (D...) only; "
+            "Supplementary Concept Record tree and mapping context remains RDF-only."
+        )
+
+    primary_uids = eutils_search_uids(descriptor_id, "exact", 5, field="MHUI")
+    primary_records = eutils_summary_records(primary_uids)
+    primary = next(
+        (record for record in primary_records if resource_id(str(record.get("descriptor", ""))) == descriptor_id),
+        None,
+    )
+    if not isinstance(primary, dict):
+        raise MeshError(f"E-utilities did not return a MeSH descriptor record for {descriptor_id}.")
+
+    tree_numbers = matching_tree_numbers(primary, lambda _value: True)
+    preferred_label = str(primary.get("label", ""))
+    terms_data = [
+        {
+            "resource": "",
+            "label": str(term),
+            "preferred": index == 0,
+        }
+        for index, term in enumerate(primary.get("terms", []))
+        if str(term).strip()
+    ]
+
+    parent_trees = sorted(
+        unique_strings([parent_tree_number(value) for value in tree_numbers]),
+        key=tree_number_sort_key,
+    )
+    # A parent exact lookup supplies direct broader context; prefix searches supply children and
+    # deeper descendants for each tree placement. ESearch is deliberately bounded: it is a
+    # reduced-fidelity review aid, never an unbounded substitute for the RDF hierarchy.
+    clauses = [f"{value}[TN]" for value in parent_trees]
+    clauses.extend(f"{value}*[TN]" for value in tree_numbers)
+    hierarchy_search: dict[str, object] = {"count": "0", "ids": [], "query_translation": ""}
+    hierarchy_records: list[dict[str, object]] = []
+    if clauses:
+        search_limit = min(
+            DEFAULT_EUTILS_MAX_RETMAX,
+            EUTILS_WILDCARD_EXPANSION_LIMIT,
+            max(25, max_descendants + max_siblings + (len(tree_numbers) * 3) + 1),
+        )
+        hierarchy_search = eutils_search(" OR ".join(clauses), search_limit, field="TN")
+        hierarchy_records = eutils_summary_records(list(hierarchy_search["ids"]))
+
+    all_records: dict[str, dict[str, object]] = {
+        descriptor_id: dict(primary),
+    }
+    for record in hierarchy_records:
+        record_id = resource_id(str(record.get("descriptor", "")))
+        if record_id:
+            all_records[record_id] = record
+    records = list(all_records.values())
+
+    parent_tree_set = set(parent_trees)
+    broader = eutils_tree_records(records, lambda value: value in parent_tree_set)
+    narrower = eutils_tree_records(
+        records,
+        lambda value: any(value.startswith(f"{root}.") and value.count(".") == root.count(".") + 1 for root in tree_numbers),
+    )
+    narrower = [record for record in narrower if record["descriptor"] != descriptor_id]
+    descendants = eutils_tree_records(
+        records,
+        lambda value: any(value.startswith(f"{root}.") for root in tree_numbers),
+    )
+    descendants = [record for record in descendants if record["descriptor"] != descriptor_id]
+
+    hierarchy_count = eutils_search_count(hierarchy_search.get("count"))
+    hierarchy_ids = hierarchy_search.get("ids", [])
+    returned_id_count = len(hierarchy_ids) if isinstance(hierarchy_ids, list) else 0
+    hierarchy_truncated = hierarchy_count > returned_id_count
+    descendants_truncated = hierarchy_truncated or len(descendants) > max_descendants
+    descendants = descendants[:max_descendants]
+
+    sibling_groups: list[dict[str, object]] = []
+    sibling_total = 0
+    for parent_tree in parent_trees:
+        siblings = eutils_tree_records(
+            records,
+            lambda value, parent_tree=parent_tree: value.startswith(f"{parent_tree}.")
+            and value.count(".") == parent_tree.count(".") + 1,
+        )
+        siblings = [record for record in siblings if record["descriptor"] != descriptor_id]
+        if not siblings:
+            continue
+        parent_records = eutils_tree_records(records, lambda value, parent_tree=parent_tree: value == parent_tree)
+        parent = parent_records[0] if parent_records else {
+            "descriptor": "",
+            "resource": "",
+            "label": "",
+            "tree_numbers": [parent_tree],
+        }
+        sibling_groups.append(
+            {
+                "broader_descriptor": {
+                    "descriptor": parent["descriptor"],
+                    "resource": parent["resource"],
+                    "label": parent["label"],
+                },
+                "siblings": siblings,
+            }
+        )
+        sibling_total += len(siblings)
+    siblings_truncated = hierarchy_truncated or sibling_total > max_siblings
+    remaining_siblings = max_siblings
+    bounded_groups: list[dict[str, object]] = []
+    for group in sibling_groups:
+        group_siblings = group["siblings"]
+        if not isinstance(group_siblings, list) or remaining_siblings <= 0:
+            continue
+        selected = group_siblings[:remaining_siblings]
+        remaining_siblings -= len(selected)
+        bounded_groups.append({**group, "siblings": selected})
+
+    mapping = {"status": "not_applicable"}
+    prompts = explosion_review_prompts(
+        descriptor_id,
+        preferred_label,
+        "Descriptor",
+        tree_numbers,
+        broader,
+        narrower,
+        descendants,
+        descendants_truncated,
+        bounded_groups,
+        siblings_truncated,
+        mapping,
+    )
+    prompts.insert(
+        0,
+        "This tree context was reconstructed from E-utilities tree-number searches and is reduced fidelity; "
+        "confirm hierarchy, annotations, and scope against MeSH RDF before finalizing an explosion decision.",
+    )
+    return {
+        "operation": "tree",
+        "descriptor": descriptor_id,
+        "resource": str(primary.get("resource") or mesh_resource(descriptor_id)),
+        "resource_type": "Descriptor",
+        "preferred_label": preferred_label,
+        "scope_note": str(primary.get("scope_note", "")) or None,
+        "annotation": None,
+        "history_note": None,
+        "public_mesh_note": None,
+        "entry_terms": term_entries({"terms": terms_data}, preferred=False),
+        "tree_numbers": tree_numbers,
+        "broader_descriptors": broader,
+        "narrower_descriptors": narrower,
+        "descendants": descendants,
+        "descendants_truncated": descendants_truncated,
+        "sibling_descriptors": bounded_groups,
+        "sibling_descriptors_truncated": siblings_truncated,
+        "scr_mapping": mapping,
+        "limits": {
+            "max_descendants": max_descendants,
+            "max_siblings": max_siblings,
+        },
+        "tree_search": {
+            "reported_count": hierarchy_count,
+            "returned_uids": returned_id_count,
+            "returned_records": len(hierarchy_records),
+            "truncated": hierarchy_truncated,
+            "wildcard_expansion_limit": EUTILS_WILDCARD_EXPANSION_LIMIT,
+        },
+        "explosion_review_prompts": prompts,
+        "provenance": provenance("eutils", "reduced", "eutils_tree_esearch_esummary", fallback_reason),
+    }
+
+
+def tree(
+    descriptor: str,
+    max_descendants: int,
+    max_siblings: int,
+    *,
+    backend: str | None = None,
+) -> dict[str, object]:
+    return use_backend(
+        "descriptor tree context",
+        lambda reason: rdf_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
+        lambda reason: eutils_tree(descriptor, max_descendants, max_siblings, fallback_reason=reason),
+        backend=backend,
+    )
 
 
 def normalized_label(value: object) -> str:
@@ -2028,6 +2440,9 @@ def build_sweep_result(
     detail_candidate_skipped: int,
     pending_detail_descriptors: list[str],
     transport_metrics: dict[str, int | float],
+    term_mapping_batch_size: int = DEFAULT_TERM_MAPPING_BATCH_SIZE,
+    term_mapping_batch_count: int = 0,
+    term_mapping_pending_count: int = 0,
 ) -> dict[str, object]:
     """Assemble the full sweep result dict, including the completeness/recall accounting. The same
     shape is used for on-disk checkpoints and the final returned result."""
@@ -2094,6 +2509,10 @@ def build_sweep_result(
             "max_term_descriptor_lookups": max_term_descriptor_lookups,
             "term_descriptor_lookups_used": term_descriptor_lookup_count,
             "term_descriptor_lookups_skipped": term_descriptor_lookup_skipped,
+            "term_mapping_batch_size": term_mapping_batch_size,
+            "term_mapping_batches": term_mapping_batch_count,
+            "term_mapping_pending": term_mapping_pending_count,
+            "estimated_term_mapping_requests_avoided": max(0, term_descriptor_lookup_count - term_mapping_batch_count),
             "max_detail_candidates": max_detail_candidates,
             "detail_candidates_used": detail_candidate_count,
             "detail_candidates_skipped": detail_candidate_skipped,
@@ -2118,6 +2537,7 @@ def sweep(
     max_seconds: float = 0.0,
     output_path: str | None = None,
     backend: str | None = None,
+    term_mapping_batch_size: int = DEFAULT_TERM_MAPPING_BATCH_SIZE,
 ) -> dict[str, object]:
     """Aggressively search MeSH descriptors and entry terms for a concept plus variants.
 
@@ -2143,6 +2563,9 @@ def sweep(
     term_descriptor_lookup_skipped = 0
     pending_term_descriptor_lookups: list[dict[str, str]] = []
     seen_term_resources: set[str] = set()
+    term_mapping_queue: dict[str, dict[str, object]] = {}
+    resolved_term_descriptor_hits: dict[str, list[dict[str, object]]] = {}
+    term_mapping_batch_count = 0
     errors: list[dict[str, object]] = []
     details_map: dict[str, object] = {}
     details_skipped_ids: set[str] = set()
@@ -2154,12 +2577,120 @@ def sweep(
     deadline = start + max_seconds if max_seconds and max_seconds > 0 else None
     time_budget_hit = False
     pending: list[dict[str, str]] = []
+    batch_size = max(1, term_mapping_batch_size)
 
     def elapsed() -> float:
         return time.monotonic() - start
 
     def budget_exceeded() -> bool:
         return deadline is not None and time.monotonic() >= deadline
+
+    def source_for(match: str, label: str, item: dict[str, object]) -> dict[str, str]:
+        return {
+            "match": match,
+            "label": label,
+            "term_label": str(item.get("label") or ""),
+        }
+
+    def queued_pending_items() -> list[dict[str, str]]:
+        values = list(pending_term_descriptor_lookups)
+        for resource, entry in sorted(term_mapping_queue.items()):
+            sources = entry.get("sources", [])
+            source = sources[0] if isinstance(sources, list) and sources else {}
+            item = {
+                "term_resource": resource,
+                "match": str(source.get("match", "")) if isinstance(source, dict) else "",
+                "label": str(source.get("label", "")) if isinstance(source, dict) else "",
+                "term_label": str(entry.get("term_label", "")),
+            }
+            if item not in values:
+                values.append(item)
+        return values
+
+    def add_descriptor_hits(
+        descriptor_hits: list[dict[str, object]],
+        sources: list[dict[str, object]],
+    ) -> None:
+        for descriptor_hit in descriptor_hits:
+            descriptor_id = str(descriptor_hit.get("descriptor", ""))
+            if not descriptor_id:
+                continue
+            candidate = candidates.setdefault(
+                descriptor_id,
+                {
+                    "descriptor": descriptor_id,
+                    "resource": str(descriptor_hit.get("resource", mesh_resource(descriptor_id))),
+                    "label": descriptor_hit.get("label", ""),
+                },
+            )
+            add_candidate_provenance(candidate, descriptor_hit.get("provenance"))
+            for source in sources:
+                candidate_sources[descriptor_id].append(
+                    f"term:{source.get('match', '')}:{source.get('label', '')}:{source.get('term_label', '')}"
+                )
+
+    def queue_term_mapping(term_resource: str, source: dict[str, str]) -> None:
+        entry = term_mapping_queue.setdefault(
+            term_resource,
+            {
+                "term_label": source["term_label"],
+                "sources": [],
+            },
+        )
+        sources = entry.setdefault("sources", [])
+        if isinstance(sources, list) and source not in sources:
+            sources.append(source)
+
+    def flush_term_mappings() -> None:
+        nonlocal circuit_interrupted, term_mapping_batch_count, time_budget_hit
+        resources = sorted(term_mapping_queue)
+        for start_index in range(0, len(resources), batch_size):
+            if budget_exceeded():
+                time_budget_hit = True
+                break
+            batch_resources = resources[start_index : start_index + batch_size]
+            labels_by_resource = {
+                resource: str(term_mapping_queue[resource].get("term_label", ""))
+                for resource in batch_resources
+                if resource in term_mapping_queue
+            }
+            if not labels_by_resource:
+                continue
+            try:
+                term_mapping_batch_count += 1
+                batch_hits = term_descriptor_candidates_batch(
+                    labels_by_resource,
+                    limit=10,
+                    backend=backend,
+                )
+            except CircuitOpenError as exc:
+                circuit_interrupted = True
+                errors.append(
+                    {
+                        "source": "transport",
+                        "code": "circuit_open",
+                        "term_resources": batch_resources,
+                        "message": str(exc),
+                    }
+                )
+                break
+            except MeshError as exc:
+                errors.append(
+                    {
+                        "source": "term_descriptor_batch",
+                        "term_resources": batch_resources,
+                        "message": str(exc),
+                    }
+                )
+                break
+            for resource in batch_resources:
+                entry = term_mapping_queue.pop(resource, None)
+                if not isinstance(entry, dict):
+                    continue
+                hits = batch_hits.get(resource, [])
+                resolved_term_descriptor_hits[resource] = hits
+                sources = entry.get("sources", [])
+                add_descriptor_hits(hits, sources if isinstance(sources, list) else [])
 
     def snapshot(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> dict[str, object]:
         return build_sweep_result(
@@ -2180,12 +2711,15 @@ def sweep(
             max_term_descriptor_lookups=max_term_descriptor_lookups,
             term_descriptor_lookup_count=term_descriptor_lookup_count,
             term_descriptor_lookup_skipped=term_descriptor_lookup_skipped,
-            pending_term_descriptor_lookups=pending_term_descriptor_lookups,
+            pending_term_descriptor_lookups=queued_pending_items(),
             max_detail_candidates=max_detail_candidates,
             detail_candidate_count=len(details_map),
             detail_candidate_skipped=len(details_skipped_ids),
             pending_detail_descriptors=pending_detail_descriptors,
             transport_metrics=metrics_delta(transport_metrics_start),
+            term_mapping_batch_size=batch_size,
+            term_mapping_batch_count=term_mapping_batch_count,
+            term_mapping_pending_count=len(term_mapping_queue),
         )
 
     def checkpoint(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> None:
@@ -2268,12 +2802,22 @@ def sweep(
                 term_resource = str(item.get("resource", ""))
                 if not term_resource:
                     continue
+                source = source_for(match, label, item)
+                if term_resource in resolved_term_descriptor_hits:
+                    add_descriptor_hits(resolved_term_descriptor_hits[term_resource], [source])
+                    continue
+                if term_resource in term_mapping_queue:
+                    queue_term_mapping(term_resource, source)
+                    continue
                 if term_resource in seen_term_resources:
-                    do_lookup = True
+                    # A prior batch failed and left the resource pending; preserve it rather than
+                    # issuing a duplicate one-term request.
+                    queue_term_mapping(term_resource, source)
+                    continue
                 elif term_descriptor_lookup_count < max_term_descriptor_lookups:
                     seen_term_resources.add(term_resource)
                     term_descriptor_lookup_count += 1
-                    do_lookup = True
+                    queue_term_mapping(term_resource, source)
                 else:
                     term_descriptor_lookup_skipped += 1
                     pending_item = {
@@ -2284,43 +2828,6 @@ def sweep(
                     }
                     if pending_item not in pending_term_descriptor_lookups:
                         pending_term_descriptor_lookups.append(pending_item)
-                    do_lookup = False
-                if not do_lookup:
-                    continue
-                try:
-                    descriptor_hits = term_descriptor_candidates(
-                        term_resource,
-                        limit=10,
-                        term_label=str(item.get("label") or ""),
-                        backend=backend,
-                    )
-                except CircuitOpenError:
-                    raise
-                except MeshError as exc:
-                    errors.append(
-                        {
-                            "source": "term_descriptor",
-                            "match": match,
-                            "label": label,
-                            "term_resource": term_resource,
-                            "message": str(exc),
-                        }
-                    )
-                    continue
-                for descriptor_hit in descriptor_hits:
-                    descriptor_id = descriptor_hit["descriptor"]
-                    candidate = candidates.setdefault(
-                        descriptor_id,
-                        {
-                            "descriptor": descriptor_id,
-                            "resource": descriptor_hit["resource"],
-                            "label": descriptor_hit["label"],
-                        },
-                    )
-                    add_candidate_provenance(candidate, descriptor_hit.get("provenance"))
-                    candidate_sources[descriptor_id].append(
-                        f"term:{match}:{label}:{item.get('label', '')}"
-                    )
         except CircuitOpenError as exc:
             circuit_interrupted = True
             pending = [{"match": m, "label": l} for (m, l) in units[index:]]
@@ -2333,6 +2840,13 @@ def sweep(
 
         checkpoint("partial", "in_progress", [{"match": m, "label": l} for (m, l) in units[index + 1 :]])
 
+    # Term-to-descriptor resolution is deliberately delayed until the search inputs are known.
+    # This preserves all lookup semantics while replacing up to 40 individual SPARQL requests
+    # with one bounded VALUES query.
+    if not circuit_interrupted and not time_budget_hit:
+        flush_term_mappings()
+        checkpoint("partial", "in_progress", pending)
+
     # Detail phase: enrich ranked candidates within the same wall-clock and count budgets.
     ordered_detail_ids = [
         descriptor_id
@@ -2344,7 +2858,7 @@ def sweep(
     eligible_detail_ids = ordered_detail_ids[:max_detail_candidates]
     if include_details:
         details_skipped_ids.update(ordered_detail_ids[max_detail_candidates:])
-        if circuit_interrupted or time_budget_hit:
+        if circuit_interrupted or time_budget_hit or term_mapping_queue:
             pending_detail_descriptors.extend(eligible_detail_ids)
         elif not time_budget_hit:
             for detail_index, descriptor_id in enumerate(eligible_detail_ids):
@@ -2387,6 +2901,8 @@ def sweep(
         reasons.append("request_errors")
     if pending_term_descriptor_lookups:
         reasons.append("term_descriptor_lookup_budget")
+    if term_mapping_queue:
+        reasons.append("term_descriptor_mapping_pending")
     stop_reason = "+".join(reasons) if reasons else None
     status = "partial" if (reasons or pending) else "complete"
 
@@ -2405,7 +2921,7 @@ def sparql(
 ) -> dict[str, object]:
     # Internal RDF helpers call this without a backend. CLI callers pass their resolved choice.
     if backend is not None and selected_backend(backend) == "eutils":
-        raise MeshError("The MeSH SPARQL command is RDF-only in Phase 2; use --backend rdf or auto.")
+        raise MeshError("The MeSH SPARQL command is RDF-only; use --backend rdf or auto.")
     data = request_json(
         SPARQL_URL,
         {
@@ -2585,7 +3101,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     tree_parser = subparsers.add_parser("tree", help="Fetch descriptor tree context, scope, entry terms, siblings, descendants, and SCR mapping.")
     add_cache_bypass_flag(tree_parser)
-    add_backend_flag(tree_parser, rdf_only=True)
+    add_backend_flag(tree_parser)
     tree_parser.add_argument("--descriptor", required=True)
     tree_parser.add_argument("--max-descendants", type=int, default=DEFAULT_MAX_TREE_DESCENDANTS)
     tree_parser.add_argument("--max-siblings", type=int, default=DEFAULT_MAX_TREE_SIBLINGS)
@@ -2602,7 +3118,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-term-descriptor-lookups",
         type=int,
         default=DEFAULT_MAX_TERM_DESCRIPTOR_LOOKUPS,
-        help="Maximum unique term-to-descriptor SPARQL lookups during sweep.",
+        help="Maximum unique entry-term resources to resolve to descriptors during sweep.",
+    )
+    sweep_parser.add_argument(
+        "--term-mapping-batch-size",
+        type=int,
+        default=DEFAULT_TERM_MAPPING_BATCH_SIZE,
+        help="Maximum entry-term resources to resolve in one batched term-to-descriptor request (default: 40).",
     )
     sweep_parser.add_argument(
         "--max-detail-candidates",
@@ -2681,6 +3203,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_seconds=max(0.0, args.max_seconds),
                 output_path=args.output,
                 backend=args.backend,
+                term_mapping_batch_size=max(1, args.term_mapping_batch_size),
             )
             emit_sweep(result, args)
         elif args.command == "sparql":

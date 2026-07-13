@@ -1,6 +1,4 @@
-import contextlib
 import importlib.util
-import io
 import os
 import tempfile
 import unittest
@@ -22,12 +20,11 @@ SUMMARY_XML = b"""<?xml version="1.0" encoding="UTF-8" ?>
   <DocumentSummarySet status="OK">
     <DocumentSummary uid="2023512">
       <DS_YearIntroduced>2023</DS_YearIntroduced>
-      <DS_ScopeNote>The use of immersive virtual environments.</DS_ScopeNote>
       <DS_MeshTerms><string>Virtual Reality</string><string>Virtual Environments</string></DS_MeshTerms>
       <DS_Subheading><string>methods</string></DS_Subheading>
       <DS_SeeRelated><string>Augmented Reality</string></DS_SeeRelated>
-      <DS_IdxLinks><LinksType><TreeNum>L01.224.230.110.500</TreeNum></LinksType></DS_IdxLinks>
-      <DS_RecordType>TopicalDescriptor</DS_RecordType>
+      <DS_IdxLinks><LinksType><TreeNum>L01.224.160.875</TreeNum><TreeNum>L01.296.555</TreeNum></LinksType></DS_IdxLinks>
+      <DS_RecordType>Descriptor</DS_RecordType>
       <DS_MeSHUI>D000076142</DS_MeSHUI>
     </DocumentSummary>
   </DocumentSummarySet>
@@ -41,12 +38,12 @@ def eutils_record():
         "label": "Virtual Reality",
         "terms": ["Virtual Reality", "Virtual Environments"],
         "qualifiers": ["methods"],
-        "tree_numbers": ["L01.224.230.110.500"],
-        "scope_note": "The use of immersive virtual environments.",
+        "tree_numbers": ["L01.224.160.875", "L01.296.555"],
+        "scope_note": "",
         "previous_indexing": [],
         "see_related": ["Augmented Reality"],
         "mapped_to": [],
-        "record_type": "TopicalDescriptor",
+        "record_type": "Descriptor",
         "year_introduced": "2023",
     }
 
@@ -80,7 +77,7 @@ class MeshEutilsTests(unittest.TestCase):
         self.assertEqual(records[0]["label"], "Virtual Reality")
         self.assertEqual(records[0]["terms"], ["Virtual Reality", "Virtual Environments"])
         self.assertEqual(records[0]["qualifiers"], ["methods"])
-        self.assertEqual(records[0]["tree_numbers"], ["L01.224.230.110.500"])
+        self.assertEqual(records[0]["tree_numbers"], ["L01.224.160.875", "L01.296.555"])
 
     def test_eutils_exact_lookup_verifies_the_preferred_heading(self):
         calls = []
@@ -236,15 +233,10 @@ class MeshEutilsTests(unittest.TestCase):
         self.assertEqual(result["backend_provenance"][0]["fidelity"], "reduced")
         self.assertIn("reduced-fidelity", result["review_required"][0])
 
-    def test_cli_exposes_backend_and_rejects_eutils_tree(self):
+    def test_cli_exposes_eutils_for_tree(self):
         parser = mesh_tool.build_parser()
         self.assertEqual(parser.parse_args(["lookup", "--label", "x", "--backend", "eutils"]).backend, "eutils")
-
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            exit_code = mesh_tool.main(["tree", "--descriptor", "D003668", "--backend", "eutils"])
-        self.assertEqual(exit_code, 1)
-        self.assertIn("RDF-only", output.getvalue())
+        self.assertEqual(parser.parse_args(["tree", "--descriptor", "D003668", "--backend", "eutils"]).backend, "eutils")
 
 
 if __name__ == "__main__":
