@@ -1,7 +1,7 @@
 {
   "id": "Donners_2021",
   "suite": "synergy",
-  "question": "In humans, what are the pharmacokinetics of emicizumab and their association with efficacy?",
+  "question": "In humans, what are the pharmacokinetics of emicizumab and their association with efficacy in haemophilia A?",
   "gold_relevant_pmids": [
     32656767,
     32297683,

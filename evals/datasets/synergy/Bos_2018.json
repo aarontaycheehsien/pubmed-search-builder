@@ -1,7 +1,7 @@
 {
   "id": "Bos_2018",
   "suite": "synergy",
-  "question": "In population-based cohorts, is cerebral small vessel disease associated with the risk of incident dementia?",
+  "question": "In population-based cohorts, is cerebral small vessel disease (and its MRI markers) associated with the risk of incident dementia and cognitive decline?",
   "gold_relevant_pmids": [
     23920020,
     22945686,
