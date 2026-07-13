@@ -43,7 +43,7 @@ class MeshTreeTests(unittest.TestCase):
         descendants = descendants or []
         mapping = mapping or []
 
-        def fake_details(requested_descriptor, include):
+        def fake_details(requested_descriptor, include, *, backend=None):
             self.assertEqual(requested_descriptor, descriptor)
             self.assertEqual(include, "terms,seealso,qualifiers")
             return {

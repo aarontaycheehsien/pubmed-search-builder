@@ -43,19 +43,19 @@ class MeshSweepTests(unittest.TestCase):
             setattr(mesh_tool, name, value)
 
     def install_fakes(self, *, failing_labels=()):
-        def fake_lookup(label, match, limit):
+        def fake_lookup(label, match, limit, *, backend=None):
             if label in failing_labels:
                 raise mesh_tool.MeshError(f"network down for {label!r}")
             results = [{"resource": PRESSURE_ULCER, "label": "Pressure Ulcer"}] if match == "exact" else []
             return {"operation": "lookup", "label": label, "match": match, "results": results}
 
-        def fake_terms(label, match, limit):
+        def fake_terms(label, match, limit, *, backend=None):
             return {"operation": "terms", "label": label, "match": match, "results": []}
 
-        def fake_term_descriptor_candidates(term_resource, limit):
+        def fake_term_descriptor_candidates(term_resource, limit, *, term_label="", backend=None):
             return []
 
-        def fake_details(descriptor, include):
+        def fake_details(descriptor, include, *, backend=None):
             return {
                 "operation": "details",
                 "descriptor": descriptor,
@@ -127,7 +127,7 @@ class MeshSweepTests(unittest.TestCase):
 
     def test_term_descriptor_lookup_budget_is_partial_and_lists_pending_lookup(self):
         self.install_fakes()
-        mesh_tool.terms = lambda label, match, limit: {
+        mesh_tool.terms = lambda label, match, limit, *, backend=None: {
             "operation": "terms", "label": label, "match": match,
             "results": [{"resource": "http://id.nlm.nih.gov/mesh/T1", "label": "bed sore"}] if match == "exact" else [],
         }

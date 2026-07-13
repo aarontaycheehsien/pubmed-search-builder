@@ -332,10 +332,10 @@ print(json.dumps({{'wait': wait, 'slept': waits}}))
         self.assertEqual(json.loads(output.getvalue())["operation"], "mesh-circuit-reset")
 
     def test_sweep_stops_once_on_open_circuit_and_preserves_pending_work(self):
-        mesh_tool.lookup = lambda *_args: (_ for _ in ()).throw(
+        mesh_tool.lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             mesh_tool.CircuitOpenError("id.nlm.nih.gov", 200.0)
         )
-        mesh_tool.terms = lambda *_args: self.fail("terms should not run after the circuit opens")
+        mesh_tool.terms = lambda *_args, **_kwargs: self.fail("terms should not run after the circuit opens")
 
         result = mesh_tool.sweep("pressure ulcer", ["bed sore"], 20, False, 40, 30, max_seconds=0.0)
         self.assertEqual(result["status"], "partial")
@@ -346,12 +346,12 @@ print(json.dumps({{'wait': wait, 'slept': waits}}))
 
     def test_sweep_preserves_pending_details_when_circuit_opens(self):
         descriptor = "http://id.nlm.nih.gov/mesh/D003668"
-        mesh_tool.lookup = lambda label, match, limit: {
+        mesh_tool.lookup = lambda label, match, limit, **_kwargs: {
             "operation": "lookup",
             "results": [{"resource": descriptor, "label": "Pressure Ulcer"}] if match == "exact" else [],
         }
-        mesh_tool.terms = lambda *_args: {"operation": "terms", "results": []}
-        mesh_tool.details = lambda *_args: (_ for _ in ()).throw(
+        mesh_tool.terms = lambda *_args, **_kwargs: {"operation": "terms", "results": []}
+        mesh_tool.details = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             mesh_tool.CircuitOpenError("id.nlm.nih.gov", 200.0)
         )
 
