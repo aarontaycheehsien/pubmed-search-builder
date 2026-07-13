@@ -14,8 +14,18 @@ from typing import Any
 import pubmed_tool
 
 
+FOCUSED_VARIANT_MIN_REDUCTION_PERCENT_DEFAULT = 10.0
+
+
 class StrategyAnalysisError(ValueError):
     pass
+
+
+def validate_percentage_threshold(value: float, *, name: str) -> float:
+    threshold = float(value)
+    if not 0 <= threshold <= 100:
+        raise StrategyAnalysisError(f"{name} must be between 0 and 100")
+    return threshold
 
 
 def read_json(path: str) -> Any:
@@ -227,7 +237,18 @@ def differential(
     return {**search, "records": fetched.get("records", [])}
 
 
-def recommend_block(block: dict[str, Any], development: dict[str, Any], holdout: dict[str, Any], workload_change: dict[str, Any]) -> dict[str, Any]:
+def recommend_block(
+    block: dict[str, Any],
+    development: dict[str, Any],
+    holdout: dict[str, Any],
+    workload_change: dict[str, Any],
+    *,
+    focused_variant_min_reduction_percent: float = FOCUSED_VARIANT_MIN_REDUCTION_PERCENT_DEFAULT,
+) -> dict[str, Any]:
+    focused_variant_min_reduction_percent = validate_percentage_threshold(
+        focused_variant_min_reduction_percent,
+        name="focused_variant_min_reduction_percent",
+    )
     role = str(block.get("role") or block.get("proposed_role") or "required").strip().casefold()
     fragility = str(block.get("fragility") or "stable").strip().casefold()
     parent = str(block.get("parent_block") or block.get("move_inside_or_block") or "").strip()
@@ -240,12 +261,19 @@ def recommend_block(block: dict[str, Any], development: dict[str, Any], holdout:
         disposition = "handle-at-screening"
         reason = f"Requiring this block loses {len(set(losses))} known relevant record(s); it is unsafe in the recall-first strand."
     elif role in {"optional", "focused", "reserve", "screening"} or fragility in {"fragile", "very-fragile", "very fragile"}:
-        if reduction >= 10:
+        if reduction >= focused_variant_min_reduction_percent:
             disposition = "focused-variant-only"
-            reason = f"The block is {fragility or role} and reduces estimated workload by {reduction:.2f}% without observed known-item loss."
+            reason = (
+                f"The block is {fragility or role} and reduces estimated workload by {reduction:.2f}% "
+                f"(at or above the {focused_variant_min_reduction_percent:.2f}% focused-variant threshold) "
+                "without observed known-item loss."
+            )
         else:
             disposition = "handle-at-screening"
-            reason = f"The block is not essential and changes estimated workload by only {reduction:.2f}%."
+            reason = (
+                f"The block is not essential and changes estimated workload by only {reduction:.2f}%, "
+                f"below the {focused_variant_min_reduction_percent:.2f}% focused-variant threshold."
+            )
     else:
         disposition = "keep-as-required"
         reason = "The block is marked essential/stable and caused no observed development or holdout loss."
@@ -264,7 +292,12 @@ def concept_ablation(
     holdout_pmids: list[str],
     scope_version: int,
     sample_size: int,
+    focused_variant_min_reduction_percent: float = FOCUSED_VARIANT_MIN_REDUCTION_PERCENT_DEFAULT,
 ) -> dict[str, Any]:
+    focused_variant_min_reduction_percent = validate_percentage_threshold(
+        focused_variant_min_reduction_percent,
+        name="focused_variant_min_reduction_percent",
+    )
     if len(blocks) < 2:
         raise StrategyAnalysisError("Concept ablation requires at least two proposed AND blocks")
     full_query = and_query([str(block["query"]) for block in blocks])
@@ -294,7 +327,13 @@ def concept_ablation(
             "holdout": {**holdout, "block_retrieved": block_holdout["full_retrieved"]},
             "differential_sample": differential(client, without_query, full_query, sample_size),
         }
-        analysis["recommendation"] = recommend_block(block, development, holdout, workload)
+        analysis["recommendation"] = recommend_block(
+            block,
+            development,
+            holdout,
+            workload,
+            focused_variant_min_reduction_percent=focused_variant_min_reduction_percent,
+        )
         analyses.append(analysis)
     return {
         "operation": "concept-ablation",
@@ -303,6 +342,9 @@ def concept_ablation(
         "full_strategy": full,
         "development_pmids": development_pmids,
         "holdout_pmids": holdout_pmids,
+        "decision_thresholds": {
+            "focused_variant_min_reduction_percent": focused_variant_min_reduction_percent,
+        },
         "analyses": analyses,
         "recommendation_values": [
             "keep-as-required",
@@ -621,6 +663,15 @@ def build_parser() -> argparse.ArgumentParser:
     ablation.add_argument("--protocol-file")
     ablation.add_argument("--block-registry")
     ablation.add_argument("--sample-size", type=int, default=10)
+    ablation.add_argument(
+        "--focused-min-reduction-percent",
+        type=float,
+        default=FOCUSED_VARIANT_MIN_REDUCTION_PERCENT_DEFAULT,
+        help=(
+            "Minimum workload reduction required to route an optional/fragile, loss-free block to "
+            f"focused-variant-only (default {FOCUSED_VARIANT_MIN_REDUCTION_PERCENT_DEFAULT:g})."
+        ),
+    )
     ablation.add_argument("--output", required=True)
     strands = sub.add_parser("two-strand")
     strands.add_argument("--main-strategy-file", required=True)
@@ -660,6 +711,10 @@ def main(argv: list[str] | None = None) -> int:
         pubmed_tool.assert_numeric_pmids(development, source="development PMID input")
         pubmed_tool.assert_numeric_pmids(holdout, source="holdout PMID input")
         if args.command == "concept-ablation":
+            focused_min_reduction = validate_percentage_threshold(
+                args.focused_min_reduction_percent,
+                name="--focused-min-reduction-percent",
+            )
             blocks = load_blocks(args.blocks_file)
             bind_blocks_to_registry(blocks, registry, set(policy.get("filter_limit_ids", [])) if policy else set())
             result = concept_ablation(
@@ -669,6 +724,7 @@ def main(argv: list[str] | None = None) -> int:
                 holdout_pmids=holdout,
                 scope_version=args.scope_version,
                 sample_size=max(1, args.sample_size),
+                focused_variant_min_reduction_percent=focused_min_reduction,
             )
         elif args.command == "two-strand":
             main_query = pubmed_tool.normalize_query(pubmed_tool.read_text_source(args.main_strategy_file))

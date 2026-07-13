@@ -21,6 +21,36 @@ class FakeClient:
 
 
 class StrategyAnalysisTests(unittest.TestCase):
+    def test_focused_variant_reduction_threshold_boundary_and_override(self):
+        block = {"label": "optional", "role": "optional", "fragility": "fragile"}
+        empty_known_items = {"lost_due_to_full": []}
+
+        below = strategy_analysis.recommend_block(
+            block, empty_known_items, empty_known_items, {"reduction_percent": 9.99}
+        )
+        at_default = strategy_analysis.recommend_block(
+            block, empty_known_items, empty_known_items, {"reduction_percent": 10.0}
+        )
+        at_override = strategy_analysis.recommend_block(
+            block,
+            empty_known_items,
+            empty_known_items,
+            {"reduction_percent": 5.0},
+            focused_variant_min_reduction_percent=5.0,
+        )
+
+        self.assertEqual(below["disposition"], "handle-at-screening")
+        self.assertEqual(at_default["disposition"], "focused-variant-only")
+        self.assertEqual(at_override["disposition"], "focused-variant-only")
+        with self.assertRaisesRegex(strategy_analysis.StrategyAnalysisError, "between 0 and 100"):
+            strategy_analysis.recommend_block(
+                block,
+                empty_known_items,
+                empty_known_items,
+                {"reduction_percent": 5.0},
+                focused_variant_min_reduction_percent=101,
+            )
+
     def test_protocol_policy_marks_only_declared_variant_adoptable(self):
         with tempfile.TemporaryDirectory() as tmp:
             protocol = Path(tmp) / "review_protocol_v1.json"
@@ -84,6 +114,7 @@ class StrategyAnalysisTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
+        self.assertEqual(result["decision_thresholds"]["focused_variant_min_reduction_percent"], 10.0)
         by_label = {row["label"]: row for row in result["analyses"]}
         self.assertEqual(by_label["optional A"]["recommendation"]["disposition"], "handle-at-screening")
         self.assertEqual(by_label["optional A"]["development"]["lost_due_to_full"], ["2"])

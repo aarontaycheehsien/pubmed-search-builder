@@ -252,6 +252,14 @@ def internal_convergence_diagnostic(
     flag. Neither result estimates the unseen population or completes a gate.
     The historical function name is retained for API compatibility.
     """
+    min_screened_in_for_estimate = max(1, int(min_screened_in_for_estimate))
+    min_screened_in_for_firm_verdict = max(1, int(min_screened_in_for_firm_verdict))
+    if not 0 <= undersaturated_completeness <= converged_completeness <= 1:
+        raise NoSeedDiscoveryError(
+            "Internal convergence thresholds must satisfy 0 <= undersaturated <="
+            " converged <= 1"
+        )
+
     prov_by_pmid = {
         str(item.get("pmid")): item
         for item in provenance.get("records", [])
@@ -312,9 +320,15 @@ def internal_convergence_diagnostic(
         "formal_population_estimate": None,
         "unique_family_yield": None if not s_obs else round(f1 / s_obs, 4),
         "convergence_score": None if not s_obs else round(1.0 - (f1 / s_obs), 4),
+        "decision_thresholds": {
+            "min_screened_in_for_estimate": min_screened_in_for_estimate,
+            "min_screened_in_for_firm_verdict": min_screened_in_for_firm_verdict,
+            "converged_convergence_score_at_or_above": converged_completeness,
+            "recall_risk_convergence_score_below": undersaturated_completeness,
+        },
     }
 
-    if s_obs < max(1, int(min_screened_in_for_estimate)):
+    if s_obs < min_screened_in_for_estimate:
         result.update(
             {
                 "verdict": "indeterminate",
@@ -343,7 +357,7 @@ def internal_convergence_diagnostic(
         return result
 
     convergence = result["convergence_score"]
-    firm = s_obs >= max(1, int(min_screened_in_for_firm_verdict))
+    firm = s_obs >= min_screened_in_for_firm_verdict
     if convergence is not None and convergence >= converged_completeness:
         verdict = "converged"
         interpretation = (
@@ -1176,6 +1190,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adjudicate_parser.add_argument("--sparse-volume-ceiling", type=int, default=SPARSE_VOLUME_CEILING_DEFAULT)
     adjudicate_parser.add_argument("--bottleneck-volume-floor", type=int, default=BOTTLENECK_VOLUME_FLOOR_DEFAULT)
+    adjudicate_parser.add_argument("--min-screened-in-for-estimate", type=int, default=RECAPTURE_MIN_SCREENED_IN_FOR_ESTIMATE)
+    adjudicate_parser.add_argument("--min-screened-in-for-firm-verdict", type=int, default=RECAPTURE_MIN_SCREENED_IN_FOR_FIRM_VERDICT)
+    adjudicate_parser.add_argument("--converged-completeness", type=float, default=RECAPTURE_CONVERGED_COMPLETENESS)
+    adjudicate_parser.add_argument("--undersaturated-completeness", type=float, default=RECAPTURE_UNDERSATURATED_COMPLETENESS)
     adjudicate_parser.add_argument("--state-output", required=True)
     adjudicate_parser.add_argument("--ledger-output", required=True)
     discriminate_parser = sub.add_parser("discriminate")
@@ -1399,6 +1417,10 @@ def main(argv: list[str] | None = None) -> int:
                 min_screened_in_for_saturation=args.min_screened_in_for_saturation,
                 sparse_volume_ceiling=max(0, args.sparse_volume_ceiling),
                 bottleneck_volume_floor=max(0, args.bottleneck_volume_floor),
+                recapture_min_screened_in_for_estimate=max(1, args.min_screened_in_for_estimate),
+                recapture_min_screened_in_for_firm_verdict=max(1, args.min_screened_in_for_firm_verdict),
+                recapture_converged_completeness=args.converged_completeness,
+                recapture_undersaturated_completeness=args.undersaturated_completeness,
             )
             if ledger is not None:
                 write_json(args.ledger_output, ledger)
