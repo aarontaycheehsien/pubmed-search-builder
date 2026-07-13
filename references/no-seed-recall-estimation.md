@@ -60,7 +60,7 @@ Discovery stops only after the required consecutive rounds add neither a screene
 
 Novelty saturation with **zero screened-in records** is ambiguous: it can mean the topic is genuinely sparse, or that the pilots are weak or an essential block is over-narrow and the search is broken. These look identical from the discovery signal alone, and the broken case is self-concealing — a search that misses the literature also finds nothing to screen in, so it cannot detect its own leak.
 
-The adjudicator therefore refuses to accept a zero-screened-in saturation until a broad-concept volume probe shows the topic really is small. Run `discriminate` with a **topic-core** probe (the essential concepts AND-ed together, with fragile/optional blocks stripped) — this is the high-confidence basis. Fall back to one or more **essential-concept** probes (each essential concept alone, no AND) only when a topic-core probe is impractical; a single-concept proxy can rule sparsity out but cannot confirm a bottleneck on its own.
+The adjudicator therefore refuses to accept a zero-screened-in saturation until a broad-concept volume probe shows the topic really is small. Run `discriminate` with a **topic-core** probe (the essential concepts AND-ed together, with fragile/optional blocks stripped) — this is the high-confidence basis. If you supply more than one topic-core probe (competing vocabulary renderings of the same essential-AND), the gate takes the **most generous (max)** volume across them, so a single narrow or broken rendering cannot force a false `genuinely-sparse` verdict. Fall back to one or more **essential-concept** probes (each essential concept alone, no AND) only when a topic-core probe is impractical; a single-concept proxy can rule sparsity out but cannot confirm a bottleneck on its own.
 
 ```bash
 # Measure broad topic volume (essentials only; no fragile/optional blocks).
@@ -78,8 +78,8 @@ python scripts/no_seed_discovery.py adjudicate \
 `volume_probes.json` is a JSON list of `{ "label", "role", "query" }` where `role` is `topic-core` or `essential-concept`. The gate maps the measured volume to a verdict against two heuristic (not validated) triggers, `--sparse-volume-ceiling` (default 500) and `--bottleneck-volume-floor` (default 1000):
 
 - **genuinely-sparse** (volume ≤ ceiling): the empty set is credible; saturation is accepted with no included candidates.
-- **discovery-bottleneck** (volume ≥ floor): substantial literature exists but discovery surfaced nothing. Saturation is **blocked**. Repair or broaden the pilots, or reconsider an over-narrow essential block, then run another round. Do not narrow scope — a low screened-in count is never evidence the topic is small.
-- **indeterminate** (between the two): add a topic-core probe, widen the pilots, or obtain a human decision before declaring saturation.
+- **discovery-bottleneck** (volume ≥ floor, topic-core basis only): substantial literature exists but discovery surfaced nothing. Saturation is **blocked**. Repair or broaden the pilots, or reconsider an over-narrow essential block, then run another round. Do not narrow scope — a low screened-in count is never evidence the topic is small.
+- **indeterminate** (between the two, or a single-concept proxy at/over the floor): add a topic-core probe, widen the pilots, or obtain a human decision before declaring saturation. A proxy volume is only an upper bound on the AND core, so it can rule sparsity out but is capped at `indeterminate` rather than reported as a bottleneck it cannot confirm.
 
 Without a discrimination artifact the empty-set verdict is `pending-discrimination` and saturation stays blocked, exactly like an unresolved safety cap. The gate applies only at or below `--min-screened-in-for-saturation` (default 1, i.e. only the empty set), so a single screened-in record still freezes a small non-independent (`both`-role) ledger as before.
 

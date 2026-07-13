@@ -149,6 +149,20 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
         self.assertIn("required_action", state["saturation_gate"])
         self.assertIsNone(ledger)
 
+    def test_gate_downgrades_proxy_bottleneck_to_indeterminate(self):
+        # The binding gate must respect basis too: a large single-concept proxy blocks
+        # saturation as indeterminate, not as an over-confident discovery-bottleneck.
+        screening, provenance, previous = _empty_saturating_round()
+        discrimination = {"scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "single-concept-proxy"}
+        state, ledger = no_seed.adjudicate(
+            screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
+            allocation_seed="test", discrimination=discrimination,
+        )
+        self.assertFalse(state["saturation_reached"])
+        self.assertEqual(state["saturation_gate"]["verdict"], "indeterminate")
+        self.assertEqual(state["saturation_gate"]["user_decision"]["verdict"], "indeterminate")
+        self.assertIsNone(ledger)
+
     def test_empty_saturation_with_sparse_verdict_is_accepted(self):
         screening, provenance, previous = _empty_saturating_round()
         discrimination = {"scope_version": 1, "discriminating_volume": 80, "discriminating_basis": "topic-core"}
@@ -267,6 +281,44 @@ class DiscriminateTests(unittest.TestCase):
         self.assertEqual(artifact["provisional_verdict"], "discovery-bottleneck")
         self.assertEqual(artifact["verdict_confidence"], "high")
 
+    def test_disagreeing_topic_core_renderings_take_the_generous_max(self):
+        # Two vocabulary renderings of the same essential-AND disagree: a narrow one
+        # returns 150, a broader one 2200. min() would read 150 -> genuinely-sparse
+        # and accept an empty screened-in set; max() reads 2200 -> discovery-bottleneck
+        # and blocks, so one narrow rendering cannot force the risky accept.
+        counts = {"narrow[tiab]": 150, "broad[tiab]": 2200}
+
+        def fake_search(client, query, retmax=0, retstart=0, sort=None):
+            return {"count": counts[query], "pmids": []}
+
+        probes = [
+            {"label": "narrow", "role": "topic-core", "query": "narrow[tiab]"},
+            {"label": "broad", "role": "topic-core", "query": "broad[tiab]"},
+        ]
+        with mock.patch.object(no_seed.pubmed_tool, "esearch", side_effect=fake_search):
+            artifact = no_seed.discriminate(FakeClient(), probes, scope_version=1, sparse_ceiling=500, bottleneck_floor=1000)
+        self.assertEqual(artifact["discriminating_volume"], 2200)
+        self.assertEqual(artifact["provisional_verdict"], "discovery-bottleneck")
+        self.assertEqual(artifact["topic_core_volume_range"], {"min": 150, "max": 2200})
+        self.assertEqual(artifact["verdict_confidence"], "high")
+
+    def test_all_small_topic_core_renderings_stay_genuinely_sparse(self):
+        # When even the most generous rendering is below the ceiling, the sparse
+        # verdict is still reachable -- the fix does not just always block.
+        counts = {"a[tiab]": 150, "b[tiab]": 300}
+
+        def fake_search(client, query, retmax=0, retstart=0, sort=None):
+            return {"count": counts[query], "pmids": []}
+
+        probes = [
+            {"label": "a", "role": "topic-core", "query": "a[tiab]"},
+            {"label": "b", "role": "topic-core", "query": "b[tiab]"},
+        ]
+        with mock.patch.object(no_seed.pubmed_tool, "esearch", side_effect=fake_search):
+            artifact = no_seed.discriminate(FakeClient(), probes, scope_version=1, sparse_ceiling=500, bottleneck_floor=1000)
+        self.assertEqual(artifact["discriminating_volume"], 300)
+        self.assertEqual(artifact["provisional_verdict"], "genuinely-sparse")
+
     def test_essential_only_probes_are_low_confidence_proxy(self):
         def fake_search(client, query, retmax=0, retstart=0, sort=None):
             return {"count": 40, "pmids": []}
@@ -277,6 +329,33 @@ class DiscriminateTests(unittest.TestCase):
         self.assertEqual(artifact["discriminating_basis"], "single-concept-proxy")
         self.assertEqual(artifact["provisional_verdict"], "genuinely-sparse")
         self.assertEqual(artifact["verdict_confidence"], "low")
+
+    def test_essential_proxy_above_floor_is_indeterminate_not_bottleneck(self):
+        # A single large essential concept is an upper bound on the AND core, which
+        # could still be tiny; the proxy must not confirm a bottleneck on its own.
+        def fake_search(client, query, retmax=0, retstart=0, sort=None):
+            return {"count": 50000, "pmids": []}
+
+        probes = [{"label": "c", "role": "essential-concept", "query": "c[tiab]"}]
+        with mock.patch.object(no_seed.pubmed_tool, "esearch", side_effect=fake_search):
+            artifact = no_seed.discriminate(FakeClient(), probes, scope_version=1, sparse_ceiling=500, bottleneck_floor=1000)
+        self.assertEqual(artifact["discriminating_basis"], "single-concept-proxy")
+        self.assertEqual(artifact["provisional_verdict"], "indeterminate")
+
+    def test_classify_discrimination_verdict_caps_proxy_bottleneck(self):
+        # topic-core keeps all three verdicts; proxy above the floor is capped.
+        self.assertEqual(
+            no_seed.classify_discrimination_verdict(5000, "topic-core", sparse_ceiling=500, bottleneck_floor=1000),
+            "discovery-bottleneck",
+        )
+        self.assertEqual(
+            no_seed.classify_discrimination_verdict(5000, "single-concept-proxy", sparse_ceiling=500, bottleneck_floor=1000),
+            "indeterminate",
+        )
+        self.assertEqual(
+            no_seed.classify_discrimination_verdict(80, "single-concept-proxy", sparse_ceiling=500, bottleneck_floor=1000),
+            "genuinely-sparse",
+        )
 
 
 FAMILY_POOL = sorted(no_seed.PILOT_TYPES)
@@ -379,6 +458,48 @@ class InternalConvergenceTests(unittest.TestCase):
         self.assertIn("internal_convergence_diagnostic", state)
         self.assertEqual(state["internal_convergence_diagnostic"]["verdict"], "recall-risk")
         self.assertTrue(state["recall_risk"]["critic_must_clear"])
+
+    def _adjudicate_round_one(self, spec):
+        """Adjudicate a single round that screens in every record in ``spec``."""
+        provenance, included = _provenance(spec)
+        screening_records, prov_records = [], []
+        for pmid in included:
+            cid = no_seed.blind_id(1, pmid)
+            screening_records.append({
+                "candidate_id": cid, "pmid": pmid, "title": "t", "abstract": "", "year": "2020",
+                "mesh_headings": [], "keywords": [], "decision": "include",
+                "title_abstract_reviewed": True, "eligibility_reason": "in scope",
+            })
+            fams = next(r["pilot_types"] for r in provenance["records"] if r["pmid"] == pmid)
+            prov_records.append({"candidate_id": cid, "pmid": pmid, "pilot_types": fams, "pilot_labels": fams})
+        screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 1,
+                     "provenance_blinded": True, "records": screening_records}
+        prov = {"scope_version": 1, "safety_cap_reached": False, "records": prov_records}
+        return no_seed.adjudicate(
+            screening, prov, previous_state=None, scope_version=1,
+            required_saturated_rounds=2, allocation_seed="test",
+        )
+
+    def test_convergence_diagnostic_survives_empty_saturation_round(self):
+        # Round 1 screens in 20 records (18 singletons, 2 doubletons -> recall-risk).
+        state1, _ = self._adjudicate_round_one([(18, 1), (2, 2)])
+        self.assertEqual(state1["internal_convergence_diagnostic"]["screened_in_observed"], 20)
+
+        # Round 2 discovers nothing new, so its provenance file is empty. Before the
+        # accumulated-provenance fix the diagnostic collapsed to zero observations
+        # here (the exact round whose state freezes the ledger). It must still see
+        # all 20 accumulated screened-in records and keep the recall-risk signal.
+        empty_screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 2,
+                           "provenance_blinded": True, "records": []}
+        empty_prov = {"scope_version": 1, "safety_cap_reached": False, "records": []}
+        state2, _ = no_seed.adjudicate(
+            empty_screening, empty_prov, previous_state=state1, scope_version=1,
+            required_saturated_rounds=2, allocation_seed="test",
+        )
+        diagnostic = state2["internal_convergence_diagnostic"]
+        self.assertEqual(diagnostic["screened_in_observed"], 20)
+        self.assertEqual(diagnostic["verdict"], "recall-risk")
+        self.assertTrue(state2["recall_risk"]["critic_must_clear"])
 
     def test_cli_recapture_round_trip(self):
         import json

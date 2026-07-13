@@ -112,6 +112,40 @@ class ImportMergeAndEvaluationTests(unittest.TestCase):
         self.assertEqual(result["unresolved_pubmed_misses"], ["67890"])
         self.assertEqual(result["ambiguous_link_count"], 1)
 
+    def test_ctgov_references_classified_by_type(self):
+        study = {
+            "protocolSection": {
+                "identificationModule": {"nctId": "NCT00000001", "briefTitle": "A"},
+                "statusModule": {"overallStatus": "COMPLETED"},
+                "referencesModule": {
+                    "references": [
+                        {"pmid": "11111", "type": "RESULT", "citation": "Trial report"},
+                        {"pmid": "22222", "type": "DERIVED", "citation": "Pooled analysis"},
+                        {"pmid": "33333", "type": "BACKGROUND", "citation": "Cited prior work"},
+                        {"pmid": "44444", "citation": "Untyped reference"},
+                    ]
+                },
+            }
+        }
+        record = registry.normalize_ctgov(study)
+        by_pmid = {pub["pmid"]: pub for pub in record["linked_publications"]}
+        self.assertEqual(by_pmid["11111"]["confidence"], "high")
+        self.assertEqual(by_pmid["22222"]["confidence"], "high")
+        self.assertEqual(by_pmid["33333"]["confidence"], "uncertain")
+        self.assertEqual(by_pmid["33333"]["link_method"], "registry-background-citation")
+        # An untyped reference is not assumed to be a trial report.
+        self.assertEqual(by_pmid["44444"]["confidence"], "uncertain")
+
+        # Only the result/derived references enter the relative-recall denominator;
+        # the background citation cannot register as a missed trial report.
+        record["eligibility_decision"] = "include"
+        record["eligibility_reason"] = "Eligible intervention trial"
+        result = registry.evaluate([record], {"11111", "22222"})
+        self.assertEqual(result["eligible_linked_pubmed_pmids"], 2)
+        self.assertEqual(result["relative_recall_percent"], 100.0)
+        self.assertEqual(result["missed_pmids"], [])
+        self.assertFalse(result["unresolved_pubmed_misses"])
+
     def test_non_pubmed_and_empty_registry_results_are_not_query_failures(self):
         record = trial("NCT00000001")
         record["linked_publications"] = [{"pmid": "", "citation": "Journal report"}]

@@ -47,6 +47,8 @@ Screen the trial-level ledger manually against the locked eligibility criteria. 
 
 Link publications using explicit registry PMIDs and manually verified links. A links file contains `links`, each with `registry_id` or `trial_id`, optional `pmid`, citation, `link_method`, `confidence`, and `pubmed_reachability`. Ambiguous links remain uncertain and do not enter the PubMed denominator.
 
+`clinicaltrials-search` seeds linked publications from the ClinicalTrials.gov `referencesModule`, classified by reference `type`: only `RESULT`/`DERIVED` references (publications *of* the trial) are seeded as high-confidence links. `BACKGROUND` references (literature the trial merely cites) and untyped references are seeded as `uncertain` (`link_method: registry-background-citation`) so a cited background paper the strategy legitimately does not retrieve cannot register as a missed trial report. Promote a background reference to a confident link only by manual verification.
+
 ```bash
 python scripts/registry_sentinel.py screen --ledger registry_ledger_adjudicated.json \
   --scope-version 1 --protocol-file review_protocol_v1.json --output registry_screened.json

@@ -117,18 +117,40 @@ def all_strings(value: Any) -> list[str]:
     return found
 
 
-def extract_pmids(value: Any) -> list[str]:
-    explicit: list[str] = []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key.lower() == "pmid":
-                explicit.extend(PMID_RE.findall(str(item)))
-            else:
-                explicit.extend(extract_pmids(item))
-    elif isinstance(value, list):
-        for item in value:
-            explicit.extend(extract_pmids(item))
-    return sorted(set(explicit), key=int)
+def ctgov_reference_links(study: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build linked-publication seeds from ClinicalTrials.gov references, by type.
+
+    ClinicalTrials.gov ``referencesModule`` mixes reference types: ``RESULT`` and
+    ``DERIVED`` references are publications *of* the trial, while ``BACKGROUND``
+    references are literature the trial merely *cites*. Only result/derived
+    references are trial reports (high confidence, eligible for the relative-recall
+    denominator). Background citations - and any untyped reference - are surfaced as
+    ``uncertain`` links for human review and stay out of the denominator, so a cited
+    background paper the strategy legitimately does not retrieve cannot masquerade as
+    a missed trial report and block handoff.
+    """
+    references = dig(study, "protocolSection", "referencesModule", "references", default=[]) or []
+    links: list[dict[str, Any]] = []
+    seen: set[tuple[str, bool]] = set()
+    for reference in references:
+        if not isinstance(reference, dict):
+            continue
+        ref_type = str(reference.get("type") or "").strip().upper()
+        is_result = ref_type in {"RESULT", "DERIVED"}
+        for pmid in PMID_RE.findall(str(reference.get("pmid") or "")):
+            key = (pmid, is_result)
+            if key in seen:
+                continue
+            seen.add(key)
+            links.append({
+                "pmid": pmid,
+                "citation": str(reference.get("citation") or ""),
+                "link_method": "registry-result-reference" if is_result else "registry-background-citation",
+                "confidence": "high" if is_result else "uncertain",
+                "reference_type": ref_type or "UNSPECIFIED",
+                "pubmed_reachability": "indexed",
+            })
+    return links
 
 
 def normalize_ctgov(study: dict[str, Any]) -> dict[str, Any]:
@@ -144,7 +166,6 @@ def normalize_ctgov(study: dict[str, Any]) -> dict[str, Any]:
     for item in dig(protocol, "armsInterventionsModule", "interventions", default=[]) or []:
         if isinstance(item, dict) and item.get("name"):
             interventions.append(str(item["name"]).strip())
-    pmids = extract_pmids(study)
     return {
         "registry_sources": ["clinicaltrials.gov"],
         "registry_ids": sorted(set([nct, *secondary]) - {""}),
@@ -156,10 +177,7 @@ def normalize_ctgov(study: dict[str, Any]) -> dict[str, Any]:
         "has_registry_results": bool(study.get("hasResults")),
         "eligibility_decision": "pending",
         "eligibility_reason": "",
-        "linked_publications": [
-            {"pmid": pmid, "citation": "", "link_method": "registry-explicit-pmid", "confidence": "high", "pubmed_reachability": "indexed"}
-            for pmid in pmids
-        ],
+        "linked_publications": ctgov_reference_links(study),
         "raw_record": study,
     }
 
