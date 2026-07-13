@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ SYSTEM_WALL_TIME = time.time
 LOOKUP_BASE = "https://id.nlm.nih.gov/mesh/lookup"
 MESH_BASE = "http://id.nlm.nih.gov/mesh/"
 SPARQL_URL = "https://id.nlm.nih.gov/mesh/sparql"
+EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_MAX_TERM_DESCRIPTOR_LOOKUPS = 40
 DEFAULT_MAX_DETAIL_CANDIDATES = 30
 DEFAULT_MAX_TREE_DESCENDANTS = 100
@@ -52,6 +54,9 @@ CACHE_SCHEMA_VERSION = 1
 RESILIENCE_STATE_VERSION = 1
 DEFAULT_CACHE_TTL_DAYS = 1.0
 DEFAULT_RATE_LIMIT = 2.0
+DEFAULT_EUTILS_RATE_WITHOUT_KEY = 3.0
+DEFAULT_EUTILS_RATE_WITH_KEY = 10.0
+DEFAULT_EUTILS_CANDIDATE_POOL = 100
 DEFAULT_THROTTLE_RETRIES = 1
 DEFAULT_TRANSIENT_RETRIES = 3
 DEFAULT_CIRCUIT_THRESHOLD = 3
@@ -67,6 +72,7 @@ NETWORK_METRICS: defaultdict[str, float] = defaultdict(float)
 FALLBACK_HOST_STATE: dict[str, dict[str, object]] = {}
 FALLBACK_STATE_LOCK = threading.Lock()
 CACHE_MISS = object()
+RDF_DEGRADED_FOR_RUN = False
 TRANSPORT_METRIC_NAMES = (
     "logical_requests",
     "logical_successes",
@@ -86,6 +92,7 @@ TRANSPORT_METRIC_NAMES = (
     "transient_events",
     "hard_events",
     "circuit_open_events",
+    "backend_fallback_events",
     "resilience_state_errors",
 )
 
@@ -94,8 +101,36 @@ class MeshError(Exception):
     pass
 
 
+class MeshRequestError(MeshError):
+    def __init__(self, message: str, *, classification: str, host: str, attempts: int):
+        self.classification = classification
+        self.host = host
+        self.attempts = attempts
+        super().__init__(message)
+
+
+class BackendFallbackError(MeshError):
+    """Both the primary RDF request and the eligible EUtils fallback failed."""
+
+    def __init__(self, operation: str, primary: MeshError, fallback: MeshError):
+        self.operation = operation
+        self.primary = primary
+        self.fallback = fallback
+        super().__init__(
+            f"{operation} could not use either MeSH backend: RDF failed ({primary}); "
+            f"E-utilities fallback failed ({fallback})."
+        )
+
+
 class CircuitOpenError(MeshError):
-    def __init__(self, host: str, cooldown_until: float, *, half_open_probe: bool = False):
+    def __init__(
+        self,
+        host: str,
+        cooldown_until: float,
+        *,
+        half_open_probe: bool = False,
+        service_name: str = "MeSH RDF",
+    ):
         self.host = host
         self.cooldown_until = cooldown_until
         self.half_open_probe = half_open_probe
@@ -106,7 +141,7 @@ class CircuitOpenError(MeshError):
             detail = ""
         reason = "another half-open probe is already running" if half_open_probe else "the host is cooling down"
         super().__init__(
-            f"MeSH RDF circuit is open for {host}{detail}: {reason}. Fresh cached responses remain "
+            f"{service_name} circuit is open for {host}{detail}: {reason}. Fresh cached responses remain "
             "available; retry after the cooldown or inspect `mesh_tool.py circuit status`."
         )
 
@@ -519,7 +554,7 @@ def current_host_state(host: str) -> dict[str, object]:
         return normalized_host_state(FALLBACK_HOST_STATE.get(host, {}))
 
 
-def circuit_before_request(host: str) -> bool:
+def circuit_before_request(host: str, *, service_name: str = "MeSH RDF") -> bool:
     now = wall_time()
     probe_window = max(10.0, REQUEST_TIMEOUT_SECONDS * 2.0)
 
@@ -544,6 +579,7 @@ def circuit_before_request(host: str) -> bool:
             host,
             float(result.get("cooldown_until") or 0.0),
             half_open_probe=bool(result.get("half_open_probe")),
+            service_name=service_name,
         )
     return bool(result.get("half_open_owner"))
 
@@ -624,8 +660,9 @@ def circuit_hard_failure(host: str, *, half_open_owner: bool) -> None:
     mutate_host_state(host, mutation)
 
 
-def reserve_request_slot(host: str) -> float:
-    requests_per_second = env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT)
+def reserve_request_slot(host: str, requests_per_second: float | None = None) -> float:
+    if requests_per_second is None:
+        requests_per_second = env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT)
     if requests_per_second <= 0:
         return 0.0
     now = wall_time()
@@ -643,6 +680,21 @@ def reserve_request_slot(host: str) -> float:
         metric_add("pacing_wait_seconds", wait)
         sleep_seconds(wait)
     return wait
+
+
+def eutils_rate_limit() -> float:
+    return DEFAULT_EUTILS_RATE_WITH_KEY if read_env("NCBI_API_KEY", "") else DEFAULT_EUTILS_RATE_WITHOUT_KEY
+
+
+def eutils_common_params() -> dict[str, str]:
+    params = {"tool": read_env("NCBI_TOOL", DEFAULT_TOOL)}
+    email = read_env("NCBI_EMAIL", DEFAULT_EMAIL)
+    api_key = read_env("NCBI_API_KEY", "")
+    if email:
+        params["email"] = email
+    if api_key:
+        params["api_key"] = api_key
+    return params
 
 
 def circuit_status(host: str = "id.nlm.nih.gov") -> dict[str, object]:
@@ -742,7 +794,41 @@ def close_request_error(exc: Exception) -> None:
         exc.reason.close()
 
 
-def request_json(url: str, params: dict[str, str]) -> object:
+def transport_settings(backend: str, url: str) -> tuple[str, str, float, dict[str, str]]:
+    host = urllib.parse.urlparse(url).hostname or "id.nlm.nih.gov"
+    if backend == "rdf":
+        return host, "MeSH RDF", env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT), {}
+    if backend == "eutils":
+        return host, "MeSH E-utilities", eutils_rate_limit(), eutils_common_params()
+    raise MeshError(f"Unsupported MeSH backend transport: {backend}")
+
+
+def parse_json_response(raw: bytes) -> object:
+    if not raw:
+        raise TransientResponseError("empty JSON response body")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise TransientResponseError(f"invalid JSON response: {exc}") from exc
+
+
+def parse_text_response(raw: bytes) -> str:
+    if not raw:
+        raise TransientResponseError("empty response body")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TransientResponseError(f"invalid UTF-8 response: {exc}") from exc
+
+
+def request_payload(
+    url: str,
+    params: dict[str, str],
+    *,
+    backend: str,
+    accept: str,
+    parser,
+) -> object:
     memory_key = (url, tuple(sorted(params.items())))
     use_cache = cache_enabled()
     if use_cache and memory_key in REQUEST_CACHE:
@@ -756,11 +842,12 @@ def request_json(url: str, params: dict[str, str]) -> object:
     metric_add("cache_misses")
     metric_add("logical_requests")
 
-    encoded = urllib.parse.urlencode(params)
+    host, service_name, requests_per_second, additional_params = transport_settings(backend, url)
+    request_params = {**params, **additional_params}
+    encoded = urllib.parse.urlencode(request_params)
     req = urllib.request.Request(f"{url}?{encoded}", method="GET")
-    req.add_header("Accept", "application/json")
+    req.add_header("Accept", accept)
     req.add_header("User-Agent", mesh_user_agent())
-    host = urllib.parse.urlparse(url).hostname or "id.nlm.nih.gov"
     retries = {ERROR_RATE_LIMIT_LIKE: 0, ERROR_TRANSIENT: 0}
     limits = {
         ERROR_RATE_LIMIT_LIKE: env_int("MESH_THROTTLE_RETRIES", DEFAULT_THROTTLE_RETRIES),
@@ -771,21 +858,16 @@ def request_json(url: str, params: dict[str, str]) -> object:
 
     while True:
         if attempts == 0:
-            half_open_owner = circuit_before_request(host)
+            half_open_owner = circuit_before_request(host, service_name=service_name)
         elif not half_open_owner:
-            circuit_before_request(host)
-        reserve_request_slot(host)
+            circuit_before_request(host, service_name=service_name)
+        reserve_request_slot(host, requests_per_second)
         attempts += 1
         metric_add("network_requests")
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 raw = response.read()
-            if not raw:
-                raise TransientResponseError("empty JSON response body")
-            try:
-                data = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise TransientResponseError(f"invalid JSON response: {exc}") from exc
+            data = parser(raw)
         except CircuitOpenError:
             raise
         except Exception as exc:
@@ -801,14 +883,23 @@ def request_json(url: str, params: dict[str, str]) -> object:
                     if circuit_result.get("opened"):
                         metric_add("circuit_open_events")
                         close_request_error(exc)
-                        raise CircuitOpenError(host, float(circuit_result.get("cooldown_until") or 0.0)) from exc
+                        raise CircuitOpenError(
+                            host,
+                            float(circuit_result.get("cooldown_until") or 0.0),
+                            service_name=service_name,
+                        ) from exc
                 elif classification == ERROR_TRANSIENT:
                     circuit_transient_failure(host, half_open_owner=half_open_owner)
                 else:
                     circuit_hard_failure(host, half_open_owner=half_open_owner)
                 detail = error_detail(exc)
                 close_request_error(exc)
-                raise MeshError(f"MeSH request failed ({classification}) after {attempts} attempt(s): {detail}") from exc
+                raise MeshRequestError(
+                    f"{service_name} request failed ({classification}) after {attempts} attempt(s): {detail}",
+                    classification=classification,
+                    host=host,
+                    attempts=attempts,
+                ) from exc
             retries[classification] = retry_count + 1
             delay = retry_delay(retry_count, retry_after)
             close_request_error(exc)
@@ -823,6 +914,27 @@ def request_json(url: str, params: dict[str, str]) -> object:
             REQUEST_CACHE[memory_key] = data
             persistent_cache_put(url, params, data)
         return data
+
+
+def request_json(url: str, params: dict[str, str], *, backend: str = "rdf") -> object:
+    return request_payload(
+        url,
+        params,
+        backend=backend,
+        accept="application/json",
+        parser=parse_json_response,
+    )
+
+
+def request_text(url: str, params: dict[str, str], *, backend: str = "eutils") -> str:
+    value = request_payload(
+        url,
+        params,
+        backend=backend,
+        accept="application/xml,text/xml",
+        parser=parse_text_response,
+    )
+    return str(value)
 
 
 def read_lines(path: str) -> list[str]:
@@ -881,7 +993,217 @@ def sparql_bindings(data: object) -> list[dict[str, object]]:
     return bindings if isinstance(bindings, list) else []
 
 
-def term_descriptor_candidates(term_resource: str, limit: int) -> list[dict[str, str]]:
+BACKEND_NAMES = {"auto", "rdf", "eutils"}
+
+
+def selected_backend(backend: str | None = None) -> str:
+    """Return the requested backend, defaulting to the process environment.
+
+    ``auto`` deliberately keeps RDF first because the RDF lookup API has the best match
+    semantics and exposes the term-to-concept graph needed for a complete sweep.
+    """
+    value = (backend or read_env("MESH_BACKEND", "auto")).strip().casefold()
+    if value not in BACKEND_NAMES:
+        choices = ", ".join(sorted(BACKEND_NAMES))
+        raise MeshError(f"Invalid MeSH backend {value!r}; choose one of: {choices}.")
+    return value
+
+
+def reset_runtime_backend_state() -> None:
+    """Reset the process-local auto-backend degradation latch (mainly useful to tests)."""
+    global RDF_DEGRADED_FOR_RUN
+    RDF_DEGRADED_FOR_RUN = False
+
+
+def provenance(
+    backend: str,
+    fidelity: str,
+    method: str,
+    fallback_reason: str | None = None,
+) -> dict[str, str]:
+    value = {"backend": backend, "fidelity": fidelity, "method": method}
+    if fallback_reason:
+        value["fallback_reason"] = fallback_reason
+    return value
+
+
+def annotate_records(
+    records: list[dict[str, object]],
+    *,
+    backend: str,
+    fidelity: str,
+    method: str,
+    fallback_reason: str | None = None,
+) -> list[dict[str, object]]:
+    marker = provenance(backend, fidelity, method, fallback_reason)
+    annotated: list[dict[str, object]] = []
+    for record in records:
+        value = dict(record)
+        value.update(
+            {
+                "source_backend": backend,
+                "fidelity": fidelity,
+                "provenance": marker,
+            }
+        )
+        annotated.append(value)
+    return annotated
+
+
+def fallback_reason_for(exc: MeshError) -> str | None:
+    if isinstance(exc, CircuitOpenError):
+        return "rdf_circuit_open"
+    if isinstance(exc, MeshRequestError) and exc.classification in {
+        ERROR_RATE_LIMIT_LIKE,
+        ERROR_TRANSIENT,
+    }:
+        return f"rdf_{exc.classification}"
+    return None
+
+
+def use_backend(
+    operation: str,
+    rdf_call,
+    eutils_call,
+    *,
+    backend: str | None = None,
+):
+    """Run an operation with RDF-first auto failover for availability failures only."""
+    global RDF_DEGRADED_FOR_RUN
+    choice = selected_backend(backend)
+    if choice == "rdf":
+        return rdf_call(None)
+    if choice == "eutils":
+        return eutils_call(None)
+    if RDF_DEGRADED_FOR_RUN:
+        return eutils_call("rdf_degraded_for_run")
+    try:
+        return rdf_call(None)
+    except MeshError as primary:
+        reason = fallback_reason_for(primary)
+        if not reason:
+            raise
+        RDF_DEGRADED_FOR_RUN = True
+        metric_add("backend_fallback_events")
+        try:
+            return eutils_call(reason)
+        except MeshError as fallback:
+            raise BackendFallbackError(operation, primary, fallback) from fallback
+
+
+def match_text(value: object, label: str, match: str) -> bool:
+    candidate = normalized_label(value)
+    target = normalized_label(label)
+    if match == "exact":
+        return candidate == target
+    if match == "startswith":
+        return candidate.startswith(target)
+    if match == "contains":
+        return target in candidate
+    raise MeshError(f"Unsupported MeSH match mode: {match}")
+
+
+def eutils_search_term(label: str, match: str) -> str:
+    cleaned = " ".join(label.split())
+    if match == "exact":
+        return f'"{cleaned}"'
+    if match == "startswith":
+        return f"{cleaned}*"
+    if match == "contains":
+        return cleaned
+    raise MeshError(f"Unsupported MeSH match mode: {match}")
+
+
+def eutils_search_uids(label: str, match: str, limit: int, *, field: str) -> list[str]:
+    data = request_json(
+        f"{EUTILS_BASE}/esearch.fcgi",
+        {
+            "db": "mesh",
+            "term": eutils_search_term(label, match),
+            "field": field,
+            "retmode": "json",
+            "retmax": str(max(1, min(DEFAULT_EUTILS_CANDIDATE_POOL, limit))),
+        },
+        backend="eutils",
+    )
+    if not isinstance(data, dict):
+        raise TransientResponseError("unexpected ESearch response shape")
+    result = data.get("esearchresult", {})
+    if not isinstance(result, dict):
+        raise TransientResponseError("EUtils ESearch response has no esearchresult")
+    ids = result.get("idlist", [])
+    return [str(value) for value in ids] if isinstance(ids, list) else []
+
+
+def xml_text(element: ET.Element | None, path: str) -> str:
+    if element is None:
+        return ""
+    value = element.findtext(path)
+    return " ".join(value.split()) if value else ""
+
+
+def xml_texts(element: ET.Element, path: str) -> list[str]:
+    values = []
+    for node in element.findall(path):
+        if node.text:
+            value = " ".join(node.text.split())
+            if value:
+                values.append(value)
+    return unique_strings(values)
+
+
+def parse_eutils_summary(raw: bytes) -> list[dict[str, object]]:
+    if not raw:
+        raise TransientResponseError("empty EUtils ESummary response")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise TransientResponseError(f"invalid EUtils ESummary XML: {exc}") from exc
+    records: list[dict[str, object]] = []
+    for summary in root.findall(".//DocumentSummary"):
+        descriptor = xml_text(summary, "DS_MeSHUI")
+        label = xml_text(summary, "DS_MeshTerms/string")
+        if not descriptor or not label:
+            continue
+        records.append(
+            {
+                "descriptor": descriptor,
+                "resource": mesh_resource(descriptor),
+                "label": label,
+                "terms": xml_texts(summary, "DS_MeshTerms/string"),
+                "qualifiers": xml_texts(summary, "DS_Subheading/string"),
+                "tree_numbers": xml_texts(summary, "DS_IdxLinks/LinksType/TreeNum"),
+                "scope_note": xml_text(summary, "DS_ScopeNote"),
+                "previous_indexing": xml_texts(summary, "DS_PreviousIndexing/string"),
+                "see_related": xml_texts(summary, "DS_SeeRelated/string"),
+                "mapped_to": xml_texts(summary, "DS_HeadingMappedToList/string"),
+                "record_type": xml_text(summary, "DS_RecordType"),
+                "year_introduced": xml_text(summary, "DS_YearIntroduced"),
+            }
+        )
+    return records
+
+
+def eutils_summary_records(uids: list[str]) -> list[dict[str, object]]:
+    if not uids:
+        return []
+    value = request_payload(
+        f"{EUTILS_BASE}/esummary.fcgi",
+        {"db": "mesh", "id": ",".join(uids), "version": "2.0", "retmode": "xml"},
+        backend="eutils",
+        accept="application/xml,text/xml",
+        parser=parse_eutils_summary,
+    )
+    return value if isinstance(value, list) else []
+
+
+def eutils_records_for_label(label: str, match: str, limit: int, *, field: str) -> list[dict[str, object]]:
+    candidate_pool = max(limit * 5, 25)
+    uids = eutils_search_uids(label, match, candidate_pool, field=field)
+    return [record for record in eutils_summary_records(uids) if match_text(record.get("label", ""), label, match)][:limit]
+
+
+def rdf_term_descriptor_candidates(term_resource: str, limit: int) -> list[dict[str, object]]:
     query = f"""
 PREFIX meshv: <http://id.nlm.nih.gov/mesh/vocab#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -900,7 +1222,7 @@ SELECT ?descriptor ?descriptorLabel ?concept ?conceptLabel WHERE {{
 LIMIT {limit}
 """.strip()
     result = sparql(query, limit=limit, offset=0, inference=False)
-    candidates = []
+    candidates: list[dict[str, object]] = []
     for binding in sparql_bindings(result.get("results", {})):
         descriptor = binding.get("descriptor", {})
         descriptor_label = binding.get("descriptorLabel", {})
@@ -920,31 +1242,196 @@ LIMIT {limit}
                 "concept_label": str(concept_label.get("value", "")) if isinstance(concept_label, dict) else "",
             }
         )
+    return annotate_records(candidates, backend="rdf", fidelity="full", method="rdf_term_to_concept")
+
+
+def eutils_term_descriptor_candidates(term_label: str, limit: int, fallback_reason: str | None) -> list[dict[str, object]]:
+    if not term_label:
+        return []
+    term_result = eutils_terms(term_label, "exact", limit, fallback_reason=fallback_reason)
+    candidates = []
+    for item in term_result["results"]:
+        if not isinstance(item, dict):
+            continue
+        descriptor = str(item.get("descriptor", ""))
+        if descriptor:
+            candidates.append(
+                {
+                    "descriptor": descriptor,
+                    "resource": str(item.get("descriptor_resource", mesh_resource(descriptor))),
+                    "label": str(item.get("descriptor_label", "")),
+                    "concept": "",
+                    "concept_label": "",
+                    "source_backend": "eutils",
+                    "fidelity": "reduced",
+                    "provenance": item.get("provenance"),
+                }
+            )
     return candidates
 
 
-def lookup(label: str, match: str, limit: int) -> dict[str, object]:
+def term_descriptor_candidates(
+    term_resource: str,
+    limit: int,
+    *,
+    term_label: str = "",
+    backend: str | None = None,
+) -> list[dict[str, object]]:
+    return use_backend(
+        "term-to-descriptor resolution",
+        lambda _reason: rdf_term_descriptor_candidates(term_resource, limit),
+        lambda reason: eutils_term_descriptor_candidates(term_label, limit, reason),
+        backend=backend,
+    )
+
+
+def rdf_lookup(label: str, match: str, limit: int, fallback_reason: str | None = None) -> dict[str, object]:
     data = request_json(
         f"{LOOKUP_BASE}/descriptor",
         {"label": label, "match": match, "limit": str(limit)},
+        backend="rdf",
     )
-    return {"operation": "lookup", "label": label, "match": match, "results": data}
+    records = data if isinstance(data, list) else []
+    return {
+        "operation": "lookup",
+        "label": label,
+        "match": match,
+        "results": annotate_records(records, backend="rdf", fidelity="full", method="rdf_lookup", fallback_reason=fallback_reason),
+        "provenance": provenance("rdf", "full", "rdf_lookup", fallback_reason),
+    }
 
 
-def terms(label: str, match: str, limit: int) -> dict[str, object]:
+def eutils_lookup(label: str, match: str, limit: int, fallback_reason: str | None = None) -> dict[str, object]:
+    field = "WORD" if match == "contains" else "MESH"
+    records = eutils_records_for_label(label, match, limit, field=field)
+    results = [{"resource": item["resource"], "label": item["label"]} for item in records]
+    fidelity = "full" if match == "exact" else "reduced"
+    return {
+        "operation": "lookup",
+        "label": label,
+        "match": match,
+        "results": annotate_records(results, backend="eutils", fidelity=fidelity, method="eutils_esearch_esummary", fallback_reason=fallback_reason),
+        "provenance": provenance("eutils", fidelity, "eutils_esearch_esummary", fallback_reason),
+    }
+
+
+def lookup(label: str, match: str, limit: int, *, backend: str | None = None) -> dict[str, object]:
+    return use_backend(
+        "descriptor lookup",
+        lambda reason: rdf_lookup(label, match, limit, reason),
+        lambda reason: eutils_lookup(label, match, limit, reason),
+        backend=backend,
+    )
+
+
+def rdf_terms(label: str, match: str, limit: int, fallback_reason: str | None = None) -> dict[str, object]:
     data = request_json(
         f"{LOOKUP_BASE}/term",
         {"label": label, "match": match, "limit": str(limit)},
+        backend="rdf",
     )
-    return {"operation": "terms", "label": label, "match": match, "results": data}
+    records = data if isinstance(data, list) else []
+    return {
+        "operation": "terms",
+        "label": label,
+        "match": match,
+        "results": annotate_records(records, backend="rdf", fidelity="full", method="rdf_term_lookup", fallback_reason=fallback_reason),
+        "provenance": provenance("rdf", "full", "rdf_term_lookup", fallback_reason),
+    }
 
 
-def details(descriptor: str, include: str) -> dict[str, object]:
+def eutils_terms(label: str, match: str, limit: int, fallback_reason: str | None = None) -> dict[str, object]:
+    records = eutils_records_for_label(label, match, limit, field="WORD")
+    results = []
+    for record in records:
+        for term in record.get("terms", []):
+            if match_text(term, label, match):
+                results.append(
+                    {
+                        "resource": "",
+                        "label": term,
+                        "descriptor": record["descriptor"],
+                        "descriptor_resource": record["resource"],
+                        "descriptor_label": record["label"],
+                    }
+                )
+    results.sort(key=lambda item: (normalized_label(item["label"]), str(item["descriptor"])))
+    return {
+        "operation": "terms",
+        "label": label,
+        "match": match,
+        "results": annotate_records(results[:limit], backend="eutils", fidelity="reduced", method="eutils_esearch_esummary", fallback_reason=fallback_reason),
+        "provenance": provenance("eutils", "reduced", "eutils_esearch_esummary", fallback_reason),
+    }
+
+
+def terms(label: str, match: str, limit: int, *, backend: str | None = None) -> dict[str, object]:
+    return use_backend(
+        "entry-term lookup",
+        lambda reason: rdf_terms(label, match, limit, reason),
+        lambda reason: eutils_terms(label, match, limit, reason),
+        backend=backend,
+    )
+
+
+def rdf_details(descriptor: str, include: str, fallback_reason: str | None = None) -> dict[str, object]:
     data = request_json(
         f"{LOOKUP_BASE}/details",
         {"descriptor": descriptor, "includes": include},
+        backend="rdf",
     )
-    return {"operation": "details", "descriptor": descriptor, "include": include, "details": data}
+    return {
+        "operation": "details",
+        "descriptor": descriptor,
+        "include": include,
+        "details": data,
+        "provenance": provenance("rdf", "full", "rdf_details", fallback_reason),
+    }
+
+
+def eutils_details(descriptor: str, include: str, fallback_reason: str | None = None) -> dict[str, object]:
+    uids = eutils_search_uids(resource_id(descriptor), "exact", 5, field="MHUI")
+    records = eutils_summary_records(uids)
+    record = next((item for item in records if item.get("descriptor") == resource_id(descriptor)), None)
+    if record is None:
+        return {
+            "operation": "details",
+            "descriptor": resource_id(descriptor),
+            "include": include,
+            "details": {},
+            "provenance": provenance("eutils", "reduced", "eutils_esearch_esummary", fallback_reason),
+        }
+    detail = {
+        "descriptor": record["resource"],
+        "terms": [
+            {"resource": "", "label": term, "preferred": index == 0}
+            for index, term in enumerate(record.get("terms", []))
+        ],
+        "scope_notes": [record["scope_note"]] if record.get("scope_note") else [],
+        "qualifiers": [{"resource": "", "label": item} for item in record.get("qualifiers", [])],
+        "tree_numbers": record.get("tree_numbers", []),
+        "previous_indexing": record.get("previous_indexing", []),
+        "seealso": [{"resource": "", "label": item} for item in record.get("see_related", [])],
+        "mapped_to": record.get("mapped_to", []),
+        "record_type": record.get("record_type", ""),
+        "year_introduced": record.get("year_introduced", ""),
+    }
+    return {
+        "operation": "details",
+        "descriptor": resource_id(descriptor),
+        "include": include,
+        "details": detail,
+        "provenance": provenance("eutils", "reduced", "eutils_esearch_esummary", fallback_reason),
+    }
+
+
+def details(descriptor: str, include: str, *, backend: str | None = None) -> dict[str, object]:
+    return use_backend(
+        "descriptor details",
+        lambda reason: rdf_details(descriptor, include, reason),
+        lambda reason: eutils_details(descriptor, include, reason),
+        backend=backend,
+    )
 
 
 def first_value(values: list[str]) -> str:
@@ -1370,9 +1857,17 @@ def explosion_review_prompts(
     return prompts
 
 
-def tree(descriptor: str, max_descendants: int, max_siblings: int) -> dict[str, object]:
+def tree(
+    descriptor: str,
+    max_descendants: int,
+    max_siblings: int,
+    *,
+    backend: str | None = None,
+) -> dict[str, object]:
+    if selected_backend(backend) == "eutils":
+        raise MeshError("The MeSH tree command is RDF-only in Phase 2; use --backend rdf or auto.")
     descriptor_id = resource_id(descriptor)
-    detail_data = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
+    detail_data = details(descriptor_id, "terms,seealso,qualifiers", backend="rdf").get("details", {})
     if not isinstance(detail_data, dict):
         detail_data = {}
 
@@ -1499,6 +1994,17 @@ def assemble_candidates(
     return candidate_list
 
 
+def add_candidate_provenance(candidate: dict[str, object], marker: object) -> None:
+    if not isinstance(marker, dict):
+        return
+    values = candidate.setdefault("provenance", [])
+    if not isinstance(values, list):
+        return
+    copied = dict(marker)
+    if copied not in values:
+        values.append(copied)
+
+
 def build_sweep_result(
     *,
     concept: str,
@@ -1544,6 +2050,20 @@ def build_sweep_result(
             "Document rejected descriptors with reason: too broad, too narrow, wrong sense, obsolete, duplicate, or noisy.",
         ]
     )
+    backend_provenance: list[dict[str, object]] = []
+    for candidate in candidate_list:
+        values = candidate.get("provenance", [])
+        if not isinstance(values, list):
+            continue
+        for marker in values:
+            if isinstance(marker, dict) and marker not in backend_provenance:
+                backend_provenance.append(dict(marker))
+    if any(item.get("fidelity") == "reduced" for item in backend_provenance):
+        review_required.insert(
+            0,
+            "Some candidates use reduced-fidelity E-utilities metadata. Confirm preferred headings, entry terms, "
+            "qualifiers, and tree context against MeSH RDF before accepting or rejecting them."
+        )
     return {
         "operation": "sweep",
         "concept": concept,
@@ -1567,6 +2087,7 @@ def build_sweep_result(
         "candidate_ranking": "Sorted by match specificity, direct descriptor hits before term-derived hits, MeSH descriptors before supplementary concepts, then query-label order and label.",
         "candidate_count": len(candidate_list),
         "candidates": candidate_list,
+        "backend_provenance": backend_provenance,
         "raw_searches": raw_searches,
         "network_budget": {
             "request_cache_entries": len(REQUEST_CACHE),
@@ -1580,6 +2101,7 @@ def build_sweep_result(
             "persistent_cache_enabled": cache_enabled(),
             "persistent_cache_dir": str(mesh_cache_dir()),
             "rate_limit_requests_per_second": env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT),
+            "eutils_rate_limit_requests_per_second": eutils_rate_limit(),
             "circuit": circuit_status(),
         },
         "review_required": review_required,
@@ -1595,6 +2117,7 @@ def sweep(
     max_detail_candidates: int,
     max_seconds: float = 0.0,
     output_path: str | None = None,
+    backend: str | None = None,
 ) -> dict[str, object]:
     """Aggressively search MeSH descriptors and entry terms for a concept plus variants.
 
@@ -1678,7 +2201,7 @@ def sweep(
             break
 
         try:
-            descriptor_result = lookup(label, match, limit)
+            descriptor_result = lookup(label, match, limit, backend=backend)
             raw_searches.append(
                 {
                     "source": "descriptor",
@@ -1694,7 +2217,7 @@ def sweep(
                 if not resource:
                     continue
                 descriptor_id = resource_id(resource)
-                candidates.setdefault(
+                candidate = candidates.setdefault(
                     descriptor_id,
                     {
                         "descriptor": descriptor_id,
@@ -1702,6 +2225,7 @@ def sweep(
                         "label": item.get("label", ""),
                     },
                 )
+                add_candidate_provenance(candidate, item.get("provenance"))
                 candidate_sources[descriptor_id].append(f"descriptor:{match}:{label}")
         except CircuitOpenError as exc:
             circuit_interrupted = True
@@ -1714,7 +2238,7 @@ def sweep(
             errors.append({"source": "descriptor", "match": match, "label": label, "message": str(exc)})
 
         try:
-            term_result = terms(label, match, limit)
+            term_result = terms(label, match, limit, backend=backend)
             raw_searches.append(
                 {
                     "source": "term",
@@ -1725,6 +2249,21 @@ def sweep(
             )
             for item in term_result.get("results", []):
                 if not isinstance(item, dict):
+                    continue
+                direct_descriptor = str(item.get("descriptor", ""))
+                if direct_descriptor:
+                    candidate = candidates.setdefault(
+                        direct_descriptor,
+                        {
+                            "descriptor": direct_descriptor,
+                            "resource": str(item.get("descriptor_resource", mesh_resource(direct_descriptor))),
+                            "label": item.get("descriptor_label", ""),
+                        },
+                    )
+                    add_candidate_provenance(candidate, item.get("provenance"))
+                    candidate_sources[direct_descriptor].append(
+                        f"term:{match}:{label}:{item.get('label', '')}"
+                    )
                     continue
                 term_resource = str(item.get("resource", ""))
                 if not term_resource:
@@ -1749,7 +2288,12 @@ def sweep(
                 if not do_lookup:
                     continue
                 try:
-                    descriptor_hits = term_descriptor_candidates(term_resource, limit=10)
+                    descriptor_hits = term_descriptor_candidates(
+                        term_resource,
+                        limit=10,
+                        term_label=str(item.get("label") or ""),
+                        backend=backend,
+                    )
                 except CircuitOpenError:
                     raise
                 except MeshError as exc:
@@ -1765,7 +2309,7 @@ def sweep(
                     continue
                 for descriptor_hit in descriptor_hits:
                     descriptor_id = descriptor_hit["descriptor"]
-                    candidates.setdefault(
+                    candidate = candidates.setdefault(
                         descriptor_id,
                         {
                             "descriptor": descriptor_id,
@@ -1773,6 +2317,7 @@ def sweep(
                             "label": descriptor_hit["label"],
                         },
                     )
+                    add_candidate_provenance(candidate, descriptor_hit.get("provenance"))
                     candidate_sources[descriptor_id].append(
                         f"term:{match}:{label}:{item.get('label', '')}"
                     )
@@ -1808,7 +2353,15 @@ def sweep(
                     pending_detail_descriptors.extend(eligible_detail_ids[detail_index:])
                     break
                 try:
-                    details_map[descriptor_id] = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
+                    detail_result = details(
+                        descriptor_id,
+                        "terms,seealso,qualifiers",
+                        backend=backend,
+                    )
+                    details_map[descriptor_id] = detail_result.get("details", {})
+                    candidate = candidates.get(descriptor_id)
+                    if candidate is not None:
+                        add_candidate_provenance(candidate, detail_result.get("provenance"))
                 except CircuitOpenError as exc:
                     circuit_interrupted = True
                     pending_detail_descriptors.extend(eligible_detail_ids[detail_index:])
@@ -1842,7 +2395,17 @@ def sweep(
     return result
 
 
-def sparql(query: str, limit: int, offset: int, inference: bool) -> dict[str, object]:
+def sparql(
+    query: str,
+    limit: int,
+    offset: int,
+    inference: bool,
+    *,
+    backend: str | None = None,
+) -> dict[str, object]:
+    # Internal RDF helpers call this without a backend. CLI callers pass their resolved choice.
+    if backend is not None and selected_backend(backend) == "eutils":
+        raise MeshError("The MeSH SPARQL command is RDF-only in Phase 2; use --backend rdf or auto.")
     data = request_json(
         SPARQL_URL,
         {
@@ -1986,31 +2549,50 @@ def build_parser() -> argparse.ArgumentParser:
             help="Bypass both memory and persistent MeSH response caches for this command.",
         )
 
+    def add_backend_flag(command_parser: argparse.ArgumentParser, *, rdf_only: bool = False) -> None:
+        command_parser.add_argument(
+            "--backend",
+            choices=sorted(BACKEND_NAMES),
+            help=(
+                "MeSH metadata backend (default: MESH_BACKEND or auto). "
+                + (
+                    "This command remains RDF-only; eutils is rejected."
+                    if rdf_only
+                    else "Auto uses RDF first, then E-utilities only after eligible availability failures."
+                )
+            ),
+        )
+
     lookup_parser = subparsers.add_parser("lookup", help="Search MeSH descriptors by label.")
     add_cache_bypass_flag(lookup_parser)
+    add_backend_flag(lookup_parser)
     lookup_parser.add_argument("--label", required=True)
     lookup_parser.add_argument("--match", choices=["exact", "contains", "startswith"], default="contains")
     lookup_parser.add_argument("--limit", type=int, default=10)
 
     details_parser = subparsers.add_parser("details", help="Fetch descriptor details.")
     add_cache_bypass_flag(details_parser)
+    add_backend_flag(details_parser)
     details_parser.add_argument("--descriptor", required=True)
     details_parser.add_argument("--include", default="terms,seealso,qualifiers")
 
     terms_parser = subparsers.add_parser("terms", help="Search MeSH entry terms.")
     add_cache_bypass_flag(terms_parser)
+    add_backend_flag(terms_parser)
     terms_parser.add_argument("--label", required=True)
     terms_parser.add_argument("--match", choices=["exact", "contains", "startswith"], default="contains")
     terms_parser.add_argument("--limit", type=int, default=10)
 
     tree_parser = subparsers.add_parser("tree", help="Fetch descriptor tree context, scope, entry terms, siblings, descendants, and SCR mapping.")
     add_cache_bypass_flag(tree_parser)
+    add_backend_flag(tree_parser, rdf_only=True)
     tree_parser.add_argument("--descriptor", required=True)
     tree_parser.add_argument("--max-descendants", type=int, default=DEFAULT_MAX_TREE_DESCENDANTS)
     tree_parser.add_argument("--max-siblings", type=int, default=DEFAULT_MAX_TREE_SIBLINGS)
 
     sweep_parser = subparsers.add_parser("sweep", help="Aggressively search MeSH descriptors and entry terms for a concept plus variants.")
     add_cache_bypass_flag(sweep_parser)
+    add_backend_flag(sweep_parser)
     sweep_parser.add_argument("--concept", required=True)
     sweep_parser.add_argument("--variant", action="append", default=[], help="Additional synonym/acronym/spelling/seed term. Repeat as needed.")
     sweep_parser.add_argument("--variants-file", help="Optional newline-delimited variants file. Use '-' for stdin.")
@@ -2054,6 +2636,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sparql_parser = subparsers.add_parser("sparql", help="Run a MeSH RDF SPARQL query.")
     add_cache_bypass_flag(sparql_parser)
+    add_backend_flag(sparql_parser, rdf_only=True)
     sparql_parser.add_argument("query")
     sparql_parser.add_argument("--limit", type=int, default=100)
     sparql_parser.add_argument("--offset", type=int, default=0)
@@ -2077,13 +2660,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "lookup":
-            write_json(lookup(args.label, args.match, args.limit))
+            write_json(lookup(args.label, args.match, args.limit, backend=args.backend))
         elif args.command == "details":
-            write_json(details(args.descriptor, args.include))
+            write_json(details(args.descriptor, args.include, backend=args.backend))
         elif args.command == "terms":
-            write_json(terms(args.label, args.match, args.limit))
+            write_json(terms(args.label, args.match, args.limit, backend=args.backend))
         elif args.command == "tree":
-            write_json(tree(args.descriptor, max(0, args.max_descendants), max(0, args.max_siblings)))
+            write_json(tree(args.descriptor, max(0, args.max_descendants), max(0, args.max_siblings), backend=args.backend))
         elif args.command == "sweep":
             variants = list(args.variant)
             if args.variants_file:
@@ -2097,10 +2680,19 @@ def main(argv: list[str] | None = None) -> int:
                 max(0, args.max_detail_candidates),
                 max_seconds=max(0.0, args.max_seconds),
                 output_path=args.output,
+                backend=args.backend,
             )
             emit_sweep(result, args)
         elif args.command == "sparql":
-            write_json(sparql(args.query, args.limit, args.offset, args.inference))
+            write_json(
+                sparql(
+                    args.query,
+                    args.limit,
+                    args.offset,
+                    args.inference,
+                    backend=selected_backend(args.backend),
+                )
+            )
         elif args.command == "cache":
             write_json(cache_stats() if args.action == "stats" else clear_cache())
         elif args.command == "circuit":
