@@ -63,4 +63,4 @@ Run these lightweight behavioral checks after goal-tracking documentation change
 
 1. `/goal` with no plain-language research question: ask only for the research/review question; do not call `create_goal`; do not ask for seeds in the same response.
 2. `/goal` with a confirmed research question and no seed status: ask only whether the user has known relevant seed PMIDs; do not call `create_goal`; do not bundle the concept-gate, filter, or variant-selection question.
-3. `/goal` with seeds and a dangerous optional concept: do not ask for seeds again; treat seed status as resolved; limited seed fetch/mining may inform the concept-gate or filter decision before goal creation; call `create_goal` only after seed, concept-gate, and required filter/limit decisions are resolved.
+3. `/goal` with seeds and a dangerous optional concept: do not ask for seeds again; treat seed status as resolved, but only normalize and deduplicate the supplied identifiers before scope lock. Resolve the concept-gate and required filter/limit decisions from the plain-language question or protocol, create the goal, lock scope, and only then fetch or mine seed records.

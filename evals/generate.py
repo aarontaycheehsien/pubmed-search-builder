@@ -91,29 +91,62 @@ def completion_gate(skill_dir: Path, run_dir: Path) -> tuple[bool, dict]:
 
 def candidate_evidence_pmids(run_dir: Path) -> tuple[set[str], set[str]]:
     """Return (reviewed, mined) PMIDs from the generated candidate ledger, if present."""
-    candidates = sorted(run_dir.rglob("candidate_ledger*.json"))
+    selected_path: Path | None = None
+    manifest_paths = [run_dir / "run_manifest.json"]
+    manifest_paths.extend(path for path in run_dir.rglob("run_manifest.json") if path != manifest_paths[0])
+    for manifest_path in manifest_paths:
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        state = manifest.get("build_state") if isinstance(manifest, dict) else None
+        screening = state.get("candidate_screening") if isinstance(state, dict) else None
+        artifact = screening.get("artifact") if isinstance(screening, dict) else None
+        if artifact:
+            candidate = Path(str(artifact))
+            selected_path = candidate if candidate.is_absolute() else manifest_path.parent / candidate
+            break
+    candidates = [selected_path] if selected_path is not None else sorted(run_dir.rglob("candidate_ledger*.json"))
+    parsed_candidates: list[tuple[int, Path, dict]] = []
     for path in candidates:
+        if path is None:
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
+        if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
+            continue
         records = data.get("records") if isinstance(data, dict) else None
         if not isinstance(records, list):
             continue
-        reviewed: set[str] = set()
-        mined: set[str] = set()
-        for item in records:
-            if not isinstance(item, dict):
-                continue
-            pmid = str(item.get("pmid") or "").strip()
-            if not pmid:
-                continue
-            if item.get("title_abstract_reviewed") is True:
-                reviewed.add(pmid)
-            if item.get("decision") == "include" and item.get("use") in {"discovery", "both"}:
-                mined.add(pmid)
-        return reviewed, mined
-    return set(), set()
+        parsed_candidates.append((int(data.get("scope_version") or 0), path, data))
+    if not parsed_candidates:
+        return set(), set()
+    if selected_path is None:
+        highest = max(item[0] for item in parsed_candidates)
+        current = [item for item in parsed_candidates if item[0] == highest]
+        if len(current) != 1:
+            raise ValueError("Multiple current candidate ledgers are present; record the authoritative ledger in run_manifest.json")
+        _scope, _path, data = current[0]
+    else:
+        _scope, _path, data = parsed_candidates[0]
+    records = data["records"]
+    reviewed: set[str] = set()
+    mined: set[str] = set()
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        pmid = str(item.get("pmid") or "").strip()
+        if not pmid:
+            continue
+        if item.get("title_abstract_reviewed") is True:
+            reviewed.add(pmid)
+        if item.get("decision") == "include" and item.get("use") in {"discovery", "both"}:
+            mined.add(pmid)
+    return reviewed, mined
 
 
 def first_critic_strategy(run_dir: Path) -> Path | None:
@@ -393,11 +426,11 @@ def main(argv: list[str] | None = None) -> int:
             "available": True,
             "before_strategy": str(pre_critic),
             "after_strategy": str(strategy_file),
-            "before_unseen_recall": before_unseen.get("recall"),
-            "after_unseen_recall": after_unseen.get("recall"),
-            "unseen_recall_delta": round(float(after_unseen.get("recall") or 0) - float(before_unseen.get("recall") or 0), 4),
-            "before_total_hits": before.get("strategy", {}).get("total_hits"),
-            "after_total_hits": card.get("strategy", {}).get("total_hits"),
+            "before_unseen_recall": before_unseen.get("recall_percent"),
+            "after_unseen_recall": after_unseen.get("recall_percent"),
+            "unseen_recall_delta": round(float(after_unseen.get("recall_percent") or 0) - float(before_unseen.get("recall_percent") or 0), 4),
+            "before_total_hits": before.get("strategy_total_hits"),
+            "after_total_hits": card.get("strategy_total_hits"),
         }
     else:
         card["critic_ablation"] = {

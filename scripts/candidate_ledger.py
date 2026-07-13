@@ -356,9 +356,12 @@ def main(argv: list[str] | None = None) -> int:
         issues, summary = validate_template(data) if args.validate_template else validate_ledger(data)
     except CandidateLedgerError as exc:
         issues, summary = [str(exc)], {}
+    validated_path = Path(args.ledger_output if allocation is not None else args.ledger).resolve()
     receipt = {
         "operation": "candidate-ledger-validate",
         "ledger": args.ledger,
+        "artifact_path": str(validated_path),
+        "artifact_sha256": sha256_file(validated_path) if validated_path.is_file() else "",
         "ok": not issues,
         "issues": issues,
         "summary": summary,

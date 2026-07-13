@@ -1059,11 +1059,12 @@ def normalize_for_match(value: str) -> str:
 def in_strategy(term: str, strategy_text: str) -> bool:
     if not strategy_text:
         return False
-    raw = term.lower()
-    normalized = normalize_for_match(term)
-    strategy_lower = strategy_text.lower()
-    strategy_normalized = normalize_for_match(strategy_text)
-    return raw in strategy_lower or bool(normalized and normalized in strategy_normalized)
+    term_tokens = normalize_for_match(term).split()
+    strategy_tokens = normalize_for_match(strategy_text).split()
+    if not term_tokens or len(term_tokens) > len(strategy_tokens):
+        return False
+    width = len(term_tokens)
+    return any(strategy_tokens[index : index + width] == term_tokens for index in range(len(strategy_tokens) - width + 1))
 
 
 def record_search_text(record: dict[str, object]) -> str:
@@ -2315,7 +2316,14 @@ def load_json_file(path: str) -> dict[str, object]:
     return data
 
 
-def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str, object]]:
+def candidate_ledger_pmids(
+    path: str,
+    purpose: str,
+    *,
+    expected_scope_version: int | None = None,
+    expected_protocol_id: str | None = None,
+    expected_protocol_sha256: str | None = None,
+) -> tuple[list[str], dict[str, object]]:
     """Resolve role-safe PMIDs from a validated candidate ledger.
 
     Discovery consumers receive only screened-in ``discovery``/``both`` records. Validation
@@ -2335,16 +2343,40 @@ def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str
     records = data.get("records")
     if not isinstance(records, list) or not records:
         raise PubMedError(f"Candidate ledger has no records: {path}")
+    if expected_scope_version is not None and data.get("scope_version") != expected_scope_version:
+        raise PubMedError(f"Candidate ledger scope_version does not match {expected_scope_version}: {path}")
+    if expected_protocol_id is not None and data.get("protocol_id") != expected_protocol_id:
+        raise PubMedError(f"Candidate ledger protocol_id does not match the current protocol: {path}")
+    actual_protocol_sha = generated.get("sha256") if isinstance(generated, dict) else None
+    if expected_protocol_sha256 is not None and actual_protocol_sha != expected_protocol_sha256:
+        raise PubMedError(f"Candidate ledger protocol hash does not match the current protocol: {path}")
     eligible: dict[str, list[str]] = {"discovery": [], "holdout": [], "both": []}
+    seen_pmids: set[str] = set()
+    valid_provenance = {"user-seed", "pilot-anchor", "similar", "citedin", "reference", "prior-review", "other"}
+    valid_uses = {"discovery", "holdout", "both", "heuristic", "neither"}
     for index, item in enumerate(records, start=1):
         if not isinstance(item, dict):
             raise PubMedError(f"Candidate ledger record {index} is not an object: {path}")
         pmid = str(item.get("pmid") or "").strip()
         use = str(item.get("use") or "").strip()
-        if use not in eligible:
-            continue
         if not pmid.isdigit():
             raise PubMedError(f"Candidate ledger record {index} has an invalid PMID: {path}")
+        if pmid in seen_pmids:
+            raise PubMedError(f"Candidate ledger record {index} duplicates PMID {pmid}: {path}")
+        seen_pmids.add(pmid)
+        if str(item.get("provenance") or "").strip() not in valid_provenance:
+            raise PubMedError(f"Candidate ledger record {index} has invalid provenance: {path}")
+        decision = str(item.get("decision") or "").strip()
+        if decision not in {"include", "exclude", "uncertain"}:
+            raise PubMedError(f"Candidate ledger record {index} has an unresolved/invalid decision: {path}")
+        if use not in valid_uses:
+            raise PubMedError(f"Candidate ledger record {index} has invalid use: {path}")
+        if decision == "exclude" and use != "neither":
+            raise PubMedError(f"Candidate ledger record {index} is excluded but not assigned neither: {path}")
+        if decision == "uncertain" and use not in {"heuristic", "neither"}:
+            raise PubMedError(f"Candidate ledger record {index} has an unsafe uncertain role: {path}")
+        if use not in eligible:
+            continue
         if item.get("decision") != "include" or item.get("title_abstract_reviewed") is not True:
             raise PubMedError(
                 f"Candidate ledger record {index} uses {use} without screened include/title-abstract review"
@@ -2373,7 +2405,7 @@ def candidate_ledger_pmids(path: str, purpose: str) -> tuple[list[str], dict[str
         "candidate_ledger": path,
         "scope_version": data.get("scope_version"),
         "protocol_id": data.get("protocol_id"),
-        "protocol_sha256": generated.get("sha256") if isinstance(generated, dict) else None,
+        "protocol_sha256": actual_protocol_sha,
         "purpose": purpose,
         "uses": uses,
         "independent": independent,

@@ -55,6 +55,7 @@ def sample_data():
         "reporting_notes": {
             "database": "PubMed",
             "limits_filters_validated_filters_used": "none",
+            "restrictions_and_justifications": "No limits or restrictions were applied; protocol decision recorded.",
             "remaining_caveats": "not peer reviewed",
         },
     }
@@ -132,6 +133,13 @@ class AuditMarkdownTests(unittest.TestCase):
             self.assertIn("## Decision ledger", text)
             self.assertIn(f"**Audit Markdown file:** {output}", text)
             self.assertNotIn("## Stage Trace", text)
+
+    def test_empty_audit_cannot_render_as_complete(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(audit_markdown.AuditMarkdownError, "final PubMed strategy"):
+                audit_markdown.write_audit_markdown(
+                    data={}, output=str(Path(tmpdir) / "audit.md"), if_exists="fail", allow_placeholders=False
+                )
 
     def test_overlay_json_deep_merges_before_render(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -533,7 +541,7 @@ class LineSetAndAppendixTests(unittest.TestCase):
             "Total records and deduplication (Items 15-16)",
         ]:
             self.assertIn(marker, markdown)
-        self.assertIn("No methodological search filter was applied.", markdown)
+        self.assertIn("- **Search filters (Item 10):** not performed", markdown)
         self.assertEqual(audit_markdown.unresolved_placeholders(markdown), [])
 
     def test_emit_appendix_writes_standalone_file(self):

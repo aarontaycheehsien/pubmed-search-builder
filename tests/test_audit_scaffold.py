@@ -300,6 +300,8 @@ class ScaffoldCliTests(unittest.TestCase):
         a["rationale"] = {k: "authored" for k in a["rationale"]}
         a["peer_review_attention_points"] = ["confirm scope"]
         a["reporting_notes"]["remaining_caveats"] = "single-database PubMed only"
+        a["reporting_notes"]["limits_filters_validated_filters_used"] = "No limits or filters were used."
+        a["reporting_notes"]["restrictions_and_justifications"] = "No language, date, age, or species restrictions were applied."
         a["tiab_expansion"] = {"zero_hit_terms_removed": "none", "zero_hit_terms_kept": "none"}
         ap.write_text(json.dumps(a), encoding="utf-8")
         self.assertEqual(self.render(ap, self.dir / "ok.md"), 0)

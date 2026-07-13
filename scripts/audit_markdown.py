@@ -9,6 +9,7 @@ the Markdown itself is needed in the terminal.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -564,7 +565,7 @@ def render_record_content_evidence(data: dict[str, Any]) -> list[str]:
 
 def render_final_strategy(data: dict[str, Any]) -> list[str]:
     strategy = compact_text(first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"]))
-    date_searched = compact_text(first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat()))
+    date_searched = compact_text(first_value(data, ["date_searched", "reporting_notes.date_searched"]))
     count = compact_text(first_value(data, ["result_count", "final_count", "pubmed_cli_checks.final_combined_topic_only_strategy"]))
     filter_count = compact_text(first_value(data, ["topic_plus_filter_count", "filter_count"], "not applicable"))
     focused_count = compact_text(first_value(data, ["focused_variant_count", "precision_variant_count"], "not performed"))
@@ -1063,7 +1064,7 @@ def render_reporting_notes(data: dict[str, Any], output_path: Path | None = None
     output_text = str(output_path) if output_path else compact_text(notes.get("audit_markdown_file") or notes.get("audit_markdown_path"))
     fields = [
         ("Database", notes.get("database") or "PubMed"),
-        ("Date searched", notes.get("date_searched") or data.get("date_searched") or date.today().isoformat()),
+        ("Date searched", notes.get("date_searched") or data.get("date_searched")),
         ("Limits, filters, validated filters used", notes.get("limits_filters_validated_filters_used")),
         ("Restrictions and justifications", notes.get("restrictions_and_justifications")),
         ("Audit Markdown file", output_text),
@@ -1141,7 +1142,7 @@ def render_line_set(data: dict[str, Any]) -> list[str]:
     if not rows:
         return []
     date_searched = compact_text(
-        first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat())
+        first_value(data, ["date_searched", "reporting_notes.date_searched"])
     )
     lines = [
         "## Search strategy (numbered line set)",
@@ -1162,7 +1163,7 @@ def render_prisma_s_appendix(data: dict[str, Any]) -> list[str]:
     notes = as_dict(data.get("reporting_notes"))
     filt = as_dict(data.get("methodological_filter"))
     date_searched = compact_text(
-        first_value(data, ["date_searched", "reporting_notes.date_searched"], date.today().isoformat())
+        first_value(data, ["date_searched", "reporting_notes.date_searched"])
     )
     final_strategy = compact_text(first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"]))
     if filt.get("query") or filt.get("source"):
@@ -1172,14 +1173,14 @@ def render_prisma_s_appendix(data: dict[str, Any]) -> list[str]:
             f"adapted: {compact_text(filt.get('adapted'), 'no')}."
         )
     else:
-        filter_text = "No methodological search filter was applied."
+        filter_text = DEFAULT_STATUS
     multi_db = compact_text(
         notes.get("multi_database") or notes.get("other_databases"),
         "Out of scope for this strategy; the protocol should specify additional databases, each needing a translated strategy.",
     )
     limits = compact_text(
         notes.get("restrictions_and_justifications") or notes.get("limits"),
-        "No limits or restrictions were applied.",
+        DEFAULT_STATUS,
     )
     prior_work = compact_text(notes.get("prior_work"), "not applicable")
     updates = compact_text(notes.get("updates"), "No updates planned.")
@@ -1279,12 +1280,28 @@ def write_audit_markdown(
     if_exists: str,
     allow_placeholders: bool,
 ) -> dict[str, Any]:
-    initial_path = output_path_from_data(data, output)
-    path = resolve_existing_path(initial_path, if_exists)
     record_issues = record_content_evidence_issues(data)
     if record_issues:
         preview = "; ".join(record_issues[:5])
         raise AuditMarkdownError(f"Record-content evidence validation failed: {preview}")
+    strategy_value = first_value(data, ["final_strategy", "strategy", "final_pubmed_strategy"])
+    strategy = str(strategy_value or "").strip()
+    if not strategy or strategy.casefold() == DEFAULT_STATUS:
+        raise AuditMarkdownError("A non-empty final PubMed strategy is required")
+    count = first_value(data, ["result_count", "final_count", "pubmed_cli_checks.final_combined_topic_only_strategy"])
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise AuditMarkdownError("A non-negative final result count is required")
+    date_value = str(first_value(data, ["date_searched", "reporting_notes.date_searched"]) or "").strip()
+    try:
+        date.fromisoformat(date_value)
+    except ValueError as exc:
+        raise AuditMarkdownError("An explicit ISO date_searched is required") from exc
+    notes = as_dict(data.get("reporting_notes"))
+    for key in ("limits_filters_validated_filters_used", "restrictions_and_justifications"):
+        if not str(notes.get(key) or "").strip():
+            raise AuditMarkdownError(f"reporting_notes.{key} requires an explicit decision")
+    initial_path = output_path_from_data(data, output)
+    path = resolve_existing_path(initial_path, if_exists)
     markdown = render_audit_markdown(data, path)
     placeholders = unresolved_placeholders(markdown)
     if placeholders and not allow_placeholders:
@@ -1299,6 +1316,10 @@ def write_audit_markdown(
         "bytes": path.stat().st_size,
         "placeholder_count": len(placeholders),
         "section_count": markdown.count("\n## "),
+        "scope_version": data.get("scope_version"),
+        "protocol_id": data.get("protocol_id"),
+        "protocol_sha256": data.get("protocol_sha256"),
+        "strategy_sha256": hashlib.sha256(strategy.encode("utf-8")).hexdigest(),
     }
 
 
@@ -1348,6 +1369,14 @@ def main(argv: list[str] | None = None) -> int:
             if_exists=args.if_exists,
             allow_placeholders=args.allow_placeholders,
         )
+        if args.audit_json != "-":
+            audit_path = Path(args.audit_json).resolve()
+            summary["audit_json"] = str(audit_path)
+            summary["audit_json_sha256"] = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+        if args.overlay_json:
+            overlay_path = Path(args.overlay_json).resolve()
+            summary["overlay_json"] = str(overlay_path)
+            summary["overlay_json_sha256"] = hashlib.sha256(overlay_path.read_bytes()).hexdigest()
         if args.emit_appendix:
             appendix_markdown = render_appendix_document(data)
             appendix_placeholders = unresolved_placeholders(appendix_markdown)

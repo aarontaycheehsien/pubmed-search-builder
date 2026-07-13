@@ -42,7 +42,7 @@ class ManifestCompleteLoopTests(unittest.TestCase):
     def state(self, action, *args):
         return self.run_cli(["state", action, "--manifest", str(self.manifest), *map(str, args)])
 
-    def add(self, kind, command, *, output=None, count=None, label=None, block=None):
+    def add(self, kind, command, *, output=None, count=None, label=None, block=None, inputs=None, scope_version=None):
         args = ["add", "--manifest", str(self.manifest), "--kind", kind, "--command", command]
         if output is not None:
             args += ["--output", str(output)]
@@ -52,6 +52,10 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             args += ["--label", label]
         if block is not None:
             args += ["--block", block]
+        if scope_version is not None:
+            args += ["--scope-version", str(scope_version)]
+        for input_path in inputs or []:
+            args += ["--input", str(input_path)]
         return self.run_cli(args)
 
     def write_json(self, name, payload):
@@ -141,8 +145,12 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         )
         self.add("artifact", "python scripts/no_seed_discovery.py adjudicate", output=orthogonal)
         self.state("register-block", "condition")
-        self.add("mesh", "python scripts/mesh_tool.py sweep --concept condition --output mesh.json", block="condition")
-        self.add("search", "python scripts/pubmed_tool.py search --query-file condition.txt --retmax 0", count=2000, block="condition")
+        mesh_output = self.write_json("mesh.json", {"operation": "sweep", "status": "complete", "ok": True})
+        condition_query = self.dir / "condition.txt"
+        condition_query.write_text("condition[tiab]", encoding="utf-8")
+        condition_count = self.write_json("condition_count.json", {"operation": "search", "ok": True, "count": 2000})
+        self.add("mesh", "python scripts/mesh_tool.py sweep --concept condition --output mesh.json", output=mesh_output, block="condition", scope_version=1)
+        self.add("search", "python scripts/pubmed_tool.py search --query-file condition.txt --retmax 0", output=condition_count, inputs=[condition_query], count=2000, block="condition", scope_version=1)
         self.state("waive-requirement", "condition", "bramer_gap", "Stable concept with explained layer coverage")
 
     def test_complete_gate_requires_revision_between_revise_and_pass_rounds(self):
@@ -242,12 +250,28 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             output=final_search,
             count=1000,
             label="final topic-only strategy",
+            inputs=[strategy_v2],
+            scope_version=1,
         )
-        final_qa = self.write_json("final_qa.json", {"hook": "pre_final_strategy_qa", "ok": True})
-        self.add("qa", "python scripts/hooks_tool.py final-qa --strategy-file strategy_v2.txt", output=final_qa)
+        final_qa = self.write_json("final_qa.json", {
+            "hook": "pre_final_strategy_qa", "ok": True,
+            "unresolved_warning_codes": [],
+            "strategy_sha256": manifest_tool.sha256_file(strategy_v2),
+        })
+        self.add("qa", "python scripts/hooks_tool.py final-qa --strategy-file strategy_v2.txt", output=final_qa, inputs=[strategy_v2], scope_version=1)
+        audit_json = self.write_json("audit.json", {
+            "final_strategy": strategy_v2.read_text(encoding="utf-8").strip(),
+            "result_count": 1000,
+            "date_searched": "2026-07-13",
+            "reporting_notes": {
+                "limits_filters_validated_filters_used": "none",
+                "restrictions_and_justifications": "none",
+                "remaining_caveats": "not peer reviewed",
+            },
+        })
         audit = self.dir / "audit_demo.md"
-        audit.write_text("# Audit", encoding="utf-8")
-        self.add("artifact", "python scripts/audit_markdown.py audit.json --output audit_demo.md", output=audit)
+        audit.write_text("# Audit\n\n## Final PubMed strategy\n\n## Reporting notes\n\n## PRISMA-S appendix\n", encoding="utf-8")
+        self.add("artifact", "python scripts/audit_markdown.py audit.json --output audit_demo.md", output=audit, inputs=[audit_json], scope_version=1)
 
         rc, receipt = self.run_cli(
             [
@@ -418,6 +442,7 @@ class ManifestCompleteLoopTests(unittest.TestCase):
                     "burden_used_for_selection": True,
                     "eligible_variant_labels": ["main", "focused"],
                     "recommended_variant_label": "focused",
+                    "main_remains_authoritative": True,
                 },
             },
         )

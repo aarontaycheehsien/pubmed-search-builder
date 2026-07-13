@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pubmed_tool
+import candidate_ledger as candidate_ledger_tool
 import revision_guard
 
 
@@ -67,13 +68,27 @@ def load_scope_labels(path: str, expected_version: int) -> tuple[dict[str, Any],
     return scope, labels
 
 
-def load_ledger(path: str, expected_version: int) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
+def load_ledger(
+    path: str,
+    expected_version: int,
+    *,
+    expected_protocol_id: str | None = None,
+    expected_protocol_sha256: str | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
     raw = read_json(path)
     if not isinstance(raw, dict) or raw.get("scope_version") != expected_version:
         raise VocabularyLearningError("Candidate ledger is not an object or its scope_version does not match")
     records = raw.get("records")
     if not isinstance(records, list):
         raise VocabularyLearningError("Candidate ledger lacks records")
+    issues, _summary = candidate_ledger_tool.validate_ledger(raw)
+    if issues:
+        raise VocabularyLearningError("Candidate ledger is invalid: " + "; ".join(issues))
+    generated = raw.get("generated_from") if isinstance(raw.get("generated_from"), dict) else {}
+    if expected_protocol_id is not None and raw.get("protocol_id") != expected_protocol_id:
+        raise VocabularyLearningError("Candidate ledger protocol_id does not match the review protocol")
+    if expected_protocol_sha256 is not None and generated.get("sha256") != expected_protocol_sha256:
+        raise VocabularyLearningError("Candidate ledger protocol binding does not match the review protocol")
     by_pmid = {str(item.get("pmid")): item for item in records if isinstance(item, dict) and str(item.get("pmid") or "").isdigit()}
     discovery = [pmid for pmid, item in by_pmid.items() if item.get("decision") == "include" and item.get("use") in {"discovery", "both"}]
     holdout = [pmid for pmid, item in by_pmid.items() if item.get("decision") == "include" and item.get("use") == "holdout"]
@@ -186,10 +201,32 @@ def extract_learning(
     previous_learning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scope, scope_labels = load_scope_labels(scope_file, scope_version)
-    ledger, discovery_pmids, holdout_pmids = load_ledger(ledger_file, scope_version)
+    protocol_sha = (
+        hashlib.sha256(
+            json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        if scope.get("dsl_version") == 1
+        else None
+    )
+    ledger, discovery_pmids, holdout_pmids = load_ledger(
+        ledger_file,
+        scope_version,
+        expected_protocol_id=str(scope.get("protocol_id") or "") if protocol_sha else None,
+        expected_protocol_sha256=protocol_sha,
+    )
     records = records_from_file(records_file)
     records_by_pmid = {str(item.get("pmid")): item for item in records}
     assignments, existing, challenges = load_config(config_file, scope_labels, scope_version)
+    if previous_learning is not None:
+        if previous_learning.get("operation") != "vocabulary-learning-extract":
+            raise VocabularyLearningError("Previous learning artifact has the wrong operation")
+        if previous_learning.get("scope_version") != scope_version:
+            raise VocabularyLearningError("Previous learning artifact has the wrong scope_version")
+        if protocol_sha and (
+            previous_learning.get("protocol_id") != scope.get("protocol_id")
+            or previous_learning.get("protocol_sha256") != protocol_sha
+        ):
+            raise VocabularyLearningError("Previous learning artifact does not match the review protocol")
     previous_processed = {str(value) for value in (previous_learning or {}).get("processed_included_pmids", [])}
     previous_terms = {
         (str(item.get("concept")), pubmed_tool.normalize_for_match(str(item.get("term") or "")))
@@ -200,6 +237,7 @@ def extract_learning(
     proposals: dict[tuple[str, str, str], dict[str, Any]] = {}
     unassigned = []
     processing_blockers: list[dict[str, Any]] = []
+    processed_this_round: set[str] = set()
     for pmid in newly_included:
         record = records_by_pmid.get(pmid)
         if not record:
@@ -238,6 +276,7 @@ def extract_learning(
                     proposal["sources"].append(source)
                 if pmid not in proposal["supporting_pmids"]:
                     proposal["supporting_pmids"].append(pmid)
+        processed_this_round.add(pmid)
     for pmid, item in ledger.items():
         if item.get("scope_challenge") or item.get("eligibility_interpretation_change"):
             challenges.append(
@@ -254,7 +293,7 @@ def extract_learning(
         "scope_version": scope_version,
         "locked_concepts": sorted(set(scope_labels.values())),
         "newly_included_pmids": newly_included,
-        "processed_included_pmids": sorted(previous_processed | set(newly_included), key=int),
+        "processed_included_pmids": sorted(previous_processed | processed_this_round, key=int),
         "holdout_pmids_frozen": holdout_pmids,
         "proposals": list(proposals.values()),
         "unassigned_included_records": unassigned,
@@ -266,12 +305,6 @@ def extract_learning(
         "note": "Only terms assigned to already locked concepts are proposed. Excluded-record terminology is diagnostic only.",
     }
     if scope.get("dsl_version") == 1:
-        protocol_sha = hashlib.sha256(
-            json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
-        ledger_generated = ledger_file and read_json(ledger_file).get("generated_from")
-        if isinstance(ledger_generated, dict) and ledger_generated.get("sha256") not in {None, "", protocol_sha}:
-            raise VocabularyLearningError("Candidate ledger protocol binding does not match the review protocol")
         result.update({
             "dsl_version": 1,
             "protocol_id": scope.get("protocol_id"),
@@ -379,9 +412,27 @@ def retest_learning(
         }
         workload["absolute_change"] = workload["revised_count"] - workload["baseline_count"]
         workload["percent_change"] = round((workload["absolute_change"] / workload["baseline_count"]) * 100, 2) if workload["baseline_count"] else None
-        defect_fixed = bool(holdout_test.get("rescued_pmids") or int(search.get("count", 0) or 0) > 0)
+        reviewed_relevant = [
+            str(value) for value in proposal.get("reviewed_relevant_differential_pmids", [])
+        ]
+        if any(not value.isdigit() or value not in pmids for value in reviewed_relevant):
+            raise VocabularyLearningError(
+                f"Accepted proposal {proposal.get('proposal_id')} has reviewed differential PMIDs outside the saved differential sample"
+            )
+        reviewed_relevant = pubmed_tool.dedup_preserving_order(reviewed_relevant)
+        defect_fixed = bool(holdout_test.get("rescued_pmids") or reviewed_relevant)
         checks = [
-            revision_guard.check("named-defect-fixed", defect_fixed, {"proposal_id": proposal.get("proposal_id"), "rescued_pmids": holdout_test.get("rescued_pmids", []), "differential_count": int(search.get("count", 0) or 0)}, "accepted term adds no observed retrieval and does not fix the named vocabulary gap"),
+            revision_guard.check(
+                "named-defect-fixed",
+                defect_fixed,
+                {
+                    "proposal_id": proposal.get("proposal_id"),
+                    "rescued_pmids": holdout_test.get("rescued_pmids", []),
+                    "reviewed_relevant_differential_pmids": reviewed_relevant,
+                    "differential_count": int(search.get("count", 0) or 0),
+                },
+                "accepted term rescues no held-out record and has no reviewed relevant differential record tied to the named gap",
+            ),
             revision_guard.check("heldout-preserved", not lost_heldout, {"current_retrieved": sorted(current_heldout, key=int), "expanded_retrieved": sorted(expanded_heldout, key=int), "lost_pmids": lost_heldout}, "expanded block loses a previously retrieved held-out record"),
             revision_guard.check("required-blocks-justified", proposal.get("within_locked_concept_attested") is True, {"added_required_blocks": [], "concept": concept}, "vocabulary revision is not confined to an existing OR block"),
             revision_guard.check("syntax-translation-stable", syntax_ok and not drift_issues, {"syntax_ok": syntax_ok, "translation_drift_issues": drift_issues, "query_translation": expanded_search.get("query_translation", "")}, "expanded block introduces syntax or PubMed translation drift"),

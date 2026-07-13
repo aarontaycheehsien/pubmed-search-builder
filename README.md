@@ -207,8 +207,7 @@ python scripts/manifest_tool.py show --manifest run_manifest.json --validate --c
 python scripts/manifest_tool.py report --manifest run_manifest.json
 ```
 
-`workflow_tool.py` registers a stage only when its process succeeds. The complete-loop gate parses
-validation and final-QA artifacts, verifies hashes, and requires an evidence-backed version-2 critic.
+`workflow_tool.py` snapshots declared inputs before launch and registers a stage only when the process succeeds, its JSON output does not report `ok: false`, inputs remain unchanged, and a pre-existing output was actually refreshed (unless explicitly allowed). The complete-loop gate parses validation and final-QA artifacts, verifies cross-artifact hashes, and requires an evidence-backed version-2 critic.
 
 ---
 

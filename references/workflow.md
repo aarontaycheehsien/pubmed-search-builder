@@ -132,7 +132,7 @@ Inspect saved samples whenever relevance, scope, noise, or term discovery inform
 
 For a fragile or very-fragile topic, also run `strategy_analysis.py two-strand`. Keep the recall-first strategy as the authoritative main search and add reasoned narrowing blocks only to the focused prioritization strand. Report both counts, known-item losses, exact unique-record differentials, workload estimates, and narrowing rationales.
 
-Read `references/screening-burden.md` for multi-strand or material variant comparisons. Generate a complete-frame reproducible stratified sample, label likely relevant/irrelevant/uncertain records, and estimate weighted precision with confidence intervals. Compare incremental workload with independent held-out recall. Use burden to choose only among variants that already meet the declared recall threshold.
+Read `references/screening-burden.md` for multi-strand or material variant comparisons. Generate a complete-frame reproducible stratified sample whose frames record the exact normalized query and hash, relevance sort, and retrieval timestamp; stale or mismatched frames are invalid. Label likely relevant/irrelevant/uncertain records and estimate weighted precision with confidence intervals. Compare incremental workload with independent held-out recall. Use burden to choose only among recall-qualified authoritative variants; a focused-prioritization or diagnostic-only strand never replaces the recall-first main strategy.
 
 ## 6. Validate
 

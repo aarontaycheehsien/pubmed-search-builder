@@ -114,6 +114,17 @@ class MeshSweepTests(unittest.TestCase):
         self.assertEqual(len(result["pending"]), 8)
         self.assertEqual(set(result["pending"][0]), {"match", "label"})
 
+    def test_term_descriptor_lookup_budget_is_partial_and_lists_pending_lookup(self):
+        self.install_fakes()
+        mesh_tool.terms = lambda label, match, limit: {
+            "operation": "terms", "label": label, "match": match,
+            "results": [{"resource": "http://id.nlm.nih.gov/mesh/T1", "label": "bed sore"}] if match == "exact" else [],
+        }
+        result = mesh_tool.sweep("pressure ulcer", [], 20, False, 0, 30, max_seconds=0.0)
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("term_descriptor_lookup_budget", result["stop_reason"])
+        self.assertEqual(len(result["pending_term_descriptor_lookups"]), 1)
+
     def test_pending_output_writes_rerunnable_variant_labels(self):
         self.install_fakes()
         mesh_tool.time = FakeClock([0.0, 0.0, 5.0])

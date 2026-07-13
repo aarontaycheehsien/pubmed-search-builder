@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -188,6 +189,7 @@ LOW_COUNT_HOOK_COMMAND_RE = re.compile(
 # `references/no-seed-recall-estimation.md`.
 RECALL_OFFER_VALUES = ("declined", "done", "not-applicable")
 RECALL_OFFER_RESOLVED = set(RECALL_OFFER_VALUES)
+UNVALIDATED_HANDOFF_VALUES = ("accepted", "declined")
 
 # Canonical seed-gate values. The seed gate stays free-form (like the other gates), but recording it
 # as one of these lets the tool auto-detect a no-seed build and remind that the no-seed recall offer
@@ -478,6 +480,7 @@ def new_build_state() -> dict[str, object]:
         "open_decisions": [],
         "blocks": {},
         "recall_offer": "pending",
+        "unvalidated_handoff": {"status": "pending", "reason": ""},
         "scope": {
             "version": 0,
             "status": "pending",
@@ -708,12 +711,19 @@ def validate_protocol_compile(
     compile_receipt: str,
     manifest_path: Path,
 ) -> dict[str, object]:
-    """Verify a protocol compile receipt and every generated artifact without importing its tool."""
+    """Verify a protocol compile receipt and rebuild every deterministic derivative."""
     protocol_path = resolve_artifact_path(protocol_file, manifest_path)
     receipt_path = resolve_artifact_path(compile_receipt, manifest_path)
     protocol = _protocol_json(protocol_path, "protocol")
     derived = _protocol_derived_state(protocol)
     protocol_hash = canonical_json_sha256(protocol)
+    protocol_tool_path = Path(__file__).with_name("protocol_tool.py")
+    spec = importlib.util.spec_from_file_location("_manifest_protocol_tool", protocol_tool_path)
+    if spec is None or spec.loader is None:
+        raise ManifestError("could not load protocol_tool.py to rebuild protocol derivatives")
+    protocol_tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(protocol_tool)
+    expected_artifacts = protocol_tool.build_artifacts(protocol, protocol_path)
 
     receipt = _protocol_json(receipt_path, "protocol compile receipt")
     if receipt.get("operation") != "protocol-compile" or receipt.get("ok") is not True:
@@ -781,6 +791,11 @@ def validate_protocol_compile(
                     raise ManifestError(f"generated block-registry repeats essential block ID: {block_id}")
                 seen_block_ids.add(block_id)
                 registry_essential_blocks.append({"id": block_id, "label": label})
+        expected_envelope = expected_artifacts.get(artifact_path.name)
+        if expected_envelope is None or envelope != expected_envelope:
+            raise ManifestError(
+                f"generated protocol artifact does not match the derivative compiled from the protocol: {artifact_value}"
+            )
         generated_paths[artifact_type] = artifact_value
         generated_hashes[artifact_type] = artifact_hash
 
@@ -825,6 +840,7 @@ def reset_scope_dependent_state(state: dict[str, object]) -> None:
     state["critic_rounds"] = []
     state["revision_cycles"] = []
     state["recall_offer"] = "pending"
+    state["unvalidated_handoff"] = {"status": "pending", "reason": ""}
     state["open_decisions"] = []
     completed = state.get("stages_completed")
     if isinstance(completed, list):
@@ -918,7 +934,7 @@ def validated_receipt(path_value: str, expected_operation: str) -> dict[str, obj
     summary = data.get("summary")
     if not isinstance(summary, dict):
         raise ManifestError(f"validation receipt lacks a summary object: {path_value}")
-    for key in ("artifact_sha256", "evidence_bundle_sha256"):
+    for key in ("artifact_path", "artifact_sha256", "evidence_bundle_sha256"):
         if data.get(key):
             summary[key] = data[key]
     return summary
@@ -1085,13 +1101,18 @@ def requirement_satisfied(requirement: str, entries: list[object], block_key: st
     for entry in entries:
         if not isinstance(entry, dict) or not entry_matches_block(entry, block_key):
             continue
+        if entry.get("returncode") != 0:
+            continue
+        if not str(entry.get("output_path") or "").strip() or not str(entry.get("output_sha256") or "").strip():
+            continue
         kind = str(entry.get("kind", ""))
         command = str(entry.get("command", ""))
         if requirement == "mesh_sweep":
             if kind == "mesh" or MESH_SWEEP_COMMAND_RE.search(command):
                 return True
         elif requirement == "block_count":
-            if kind in ("search", "batch"):
+            count = entry.get("count")
+            if kind in ("search", "batch") and isinstance(count, int) and not isinstance(count, bool) and count >= 0:
                 return True
         elif requirement == GAP_REQUIREMENT:
             if BRAMER_GAP_COMMAND_RE.search(command):
@@ -1251,7 +1272,13 @@ def low_count_review_readiness(data: dict[str, object], manifest_path: Path, thr
             continue
         if payload.get("final_count") != final_count:
             continue
-        if payload.get("status") == "pass" and payload.get("ok") is True:
+        if (
+            entry.get("returncode") == 0
+            and payload.get("threshold") == threshold
+            and payload.get("low_count_review_required") is True
+            and payload.get("status") == "pass"
+            and payload.get("ok") is True
+        ):
             return []
 
     return [
@@ -1308,10 +1335,36 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 else {}
             )
             issues.extend(protocol_binding_issues(validation_summary, scope, "candidate-ledger validation summary"))
+        ledger_path_value = str(screening.get("artifact") or "")
+        expected_ledger_hash = str(screening.get("artifact_sha256") or "")
+        if ledger_path_value and expected_ledger_hash:
+            ledger_path = resolve_artifact_path(ledger_path_value, manifest_path)
+            if ledger_path.is_file() and sha256_file(ledger_path) != expected_ledger_hash:
+                issues.append("candidate ledger changed after its validation receipt was recorded")
+        elif screening_status == "complete":
+            issues.append("candidate screening lacks a ledger hash bound to its validation receipt")
     if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
         issues.append("candidate-screening not-applicable status lacks a reason")
 
     entries = data.get("entries", [])
+    resolved_decision_seqs = {
+        int(value)
+        for entry in entries
+        if isinstance(entry, dict)
+        for value in (entry.get("resolves_decision_seqs") or [])
+        if isinstance(value, int) and not isinstance(value, bool)
+    }
+    unresolved_decisions = [
+        entry for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("open_decision") is True
+        and int(entry.get("seq") or 0) not in resolved_decision_seqs
+    ]
+    if unresolved_decisions:
+        issues.append(
+            "unresolved manifest decisions remain open: "
+            + ", ".join(str(entry.get("seq")) for entry in unresolved_decisions[:20])
+        )
     issues.extend(block_coverage_readiness(state, entries))
     issues.extend(gap_coverage_readiness(state, entries))
     blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
@@ -1338,9 +1391,23 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         external = protocol_payload.get("external_validation") if isinstance(protocol_payload.get("external_validation"), dict) else {}
         if mode == "pubmed-plus-external-validation" and external.get("status") == "enabled":
             represented_sources: set[str] = set()
+            current_scope_seq = max(
+                (
+                    int(item.get("entry_seq") or 0)
+                    for item in scope.get("history", [])
+                    if isinstance(item, dict) and item.get("version") == scope_version
+                ),
+                default=0,
+            )
             for operation in ("registry-search", "registry-import", "registry-source-status"):
                 for entry in operation_entries(operation):
                     payload = read_manifest_output_json(manifest_path, str(entry.get("output_path") or "")) or {}
+                    if (
+                        entry.get("returncode") != 0
+                        or int(entry.get("seq") or 0) <= current_scope_seq
+                        or protocol_binding_issues(payload, scope, f"external registry source {entry.get('output_path')}")
+                    ):
+                        continue
                     source_name = str(payload.get("source") or "").strip().casefold()
                     source_status = str(payload.get("status") or "complete")
                     if source_name and source_status in {"complete", "completed", "declined", "unavailable", "not-applicable"}:
@@ -1617,10 +1684,16 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                     expected_qualified = recall_value >= minimum_recall
                     if item.get("recall_requirement_met") is not expected_qualified:
                         issues.append(f"screening-burden variant {item.get('label')!r} has an incorrect recall-gate result")
-                if item.get("recall_requirement_met") is True and item.get("precision_estimate") is not None:
+                if (
+                    item.get("recall_requirement_met") is True
+                    and item.get("precision_estimate") is not None
+                    and item.get("protocol_status") not in {"diagnostic-only", "focused-prioritization-only"}
+                ):
                     eligible_labels.add(str(item.get("label")))
                     eligible_rows.append(item)
             selection = payload.get("selection") if isinstance(payload.get("selection"), dict) else {}
+            if selection.get("main_remains_authoritative") is not True:
+                issues.append("screening-burden selection does not preserve the recall-first main strategy")
             recorded_eligible = {str(value) for value in selection.get("eligible_variant_labels", [])}
             if recorded_eligible != eligible_labels:
                 issues.append("screening-burden eligible variants do not match recall-qualified variants")
@@ -1644,6 +1717,11 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
 
     if seed_gate_is_no_seed(state):
         issues.extend(recall_offer_readiness(state))
+        unvalidated = state.get("unvalidated_handoff") if isinstance(state.get("unvalidated_handoff"), dict) else {}
+        accepted_unvalidated = (
+            unvalidated.get("status") == "accepted"
+            and bool(str(unvalidated.get("reason") or "").strip())
+        )
         discovery_entries = operation_entries("orthogonal-pilot-adjudication")
         if not discovery_entries:
             issues.append("no-seed build lacks orthogonal-pilot saturation evidence")
@@ -1666,25 +1744,27 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 issues.append("orthogonal-pilot screening was not provenance blinded")
             if missing := sorted(required_pilots - pilot_types):
                 issues.append("orthogonal-pilot evidence is missing pilot types: " + ", ".join(missing))
-            if payload.get("safety_cap_reached_any") is True:
+            if payload.get("safety_cap_reached_any") is True and not accepted_unvalidated:
                 issues.append("orthogonal-pilot safety cap was reached; saturation cannot be claimed")
-            if payload.get("saturation_reached") is not True:
+            if payload.get("saturation_reached") is not True and not accepted_unvalidated:
                 issues.append("orthogonal-pilot discovery has not reached study-and-vocabulary saturation")
             required_rounds = payload.get("required_saturated_rounds")
             consecutive_rounds = payload.get("consecutive_saturated_rounds")
-            if (
+            if not accepted_unvalidated and (
                 not isinstance(required_rounds, int)
                 or required_rounds < 2
                 or not isinstance(consecutive_rounds, int)
                 or consecutive_rounds < required_rounds
             ):
                 issues.append("orthogonal-pilot saturation lacks the required repeated zero-novelty rounds")
-            if payload.get("new_included_pmids") != [] or payload.get("new_vocabulary_term_count") != 0:
+            if not accepted_unvalidated and (payload.get("new_included_pmids") != [] or payload.get("new_vocabulary_term_count") != 0):
                 issues.append("orthogonal-pilot final round still added relevant studies or vocabulary")
             if not str(payload.get("stopping_rule") or "").strip():
                 issues.append("orthogonal-pilot artifact lacks its saturation stopping rule")
-            if screening_status == "complete" and payload.get("ledger_frozen") is not True:
+            if not accepted_unvalidated and screening_status == "complete" and payload.get("ledger_frozen") is not True:
                 issues.append("orthogonal-pilot holdout was not frozen before term mining")
+            if accepted_unvalidated and not isinstance((payload.get("saturation_gate") or {}).get("user_decision"), dict):
+                issues.append("accepted empirically-unvalidated handoff lacks the surfaced no-seed user decision artifact")
 
     critics = state.get("critic_rounds") if isinstance(state.get("critic_rounds"), list) else []
     if not critics:
@@ -1787,6 +1867,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         issues.append("seed/holdout validation is required but no validate or recall artifact is recorded")
     elif needs_validation:
         latest_validation = validation_entries[-1]
+        validation_payload: dict[str, object] | None = None
         output_value = str(latest_validation.get("output_path") or "")
         if not output_value or not output_path_exists(output_value, manifest_path=manifest_path, data=data):
             issues.append("latest required validation lacks an existing output artifact")
@@ -1808,8 +1889,22 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                         "latest required validation has unresolved missed PMIDs: "
                         + ", ".join(str(pmid) for pmid in missed[:20])
                     )
-        if latest_validation.get("scope_version") not in (None, scope_version):
+        if latest_validation.get("returncode") != 0:
+            issues.append("latest required validation command did not succeed")
+        if latest_validation.get("scope_version") != scope_version:
             issues.append("latest required validation does not match the current retrieval-scope version")
+        if scope.get("lock_mode") == "protocol" and isinstance(validation_payload, dict):
+            issues.extend(protocol_binding_issues(validation_payload, scope, "latest required validation"))
+        current_scope_seq = max(
+            (
+                int(item.get("entry_seq") or 0)
+                for item in scope.get("history", [])
+                if isinstance(item, dict) and item.get("version") == scope_version
+            ),
+            default=0,
+        )
+        if int(latest_validation.get("seq") or 0) <= current_scope_seq:
+            issues.append("required validation was not run after the current scope lock")
         revisions = state.get("revision_cycles") if isinstance(state.get("revision_cycles"), list) else []
         latest_revision_seq = max(
             (int(item.get("entry_seq") or 0) for item in revisions if isinstance(item, dict)),
@@ -1825,6 +1920,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         and "final-qa" in str(entry.get("command") or "").casefold()
     ]
     final_qa_entries.sort(key=lambda entry: int(entry.get("seq") or 0))
+    final_qa_payload: dict[str, object] | None = None
+    final_qa: dict[str, object] | None = None
     if not final_qa_entries:
         issues.append("no hooks_tool.py final-qa entry is recorded")
         final_qa_seq = 0
@@ -1857,6 +1954,12 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 ]
                 detail = f"; errors: {', '.join(error_codes)}" if error_codes else ""
                 issues.append(f"latest final-qa output did not pass (ok is not true){detail}")
+            elif final_qa_payload.get("unresolved_warning_codes"):
+                issues.append("latest final-qa output has unresolved warning dispositions")
+        if final_qa.get("returncode") != 0 or final_qa.get("scope_version") != scope_version:
+            issues.append("latest final-qa entry is not a successful current-scope operation")
+        if not str(final_qa.get("output_sha256") or ""):
+            issues.append("latest final-qa entry lacks an output hash")
 
     final_topic_entries = [
         entry for entry in entries if isinstance(entry, dict) and looks_like_final_topic_search(entry)
@@ -1865,12 +1968,29 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
     if not final_topic_entries:
         issues.append("no final topic-only strategy count is recorded")
     else:
+        final_topic = final_topic_entries[-1]
+        if final_topic.get("returncode") != 0 or final_topic.get("scope_version") != scope_version:
+            issues.append("final topic search is not a successful current-scope operation")
+        if not str(final_topic.get("output_sha256") or ""):
+            issues.append("final topic search lacks a bound output hash")
+        final_hashes = final_topic.get("input_sha256")
+        if not isinstance(final_hashes, dict) or not final_hashes:
+            issues.append("final topic search lacks a strategy input hash")
+            final_hashes = {}
+        if final_qa is not None:
+            qa_hashes = final_qa.get("input_sha256")
+            if not isinstance(qa_hashes, dict) or not qa_hashes:
+                issues.append("final QA lacks a strategy input hash")
+            elif set(final_hashes.values()).isdisjoint(set(qa_hashes.values())):
+                issues.append("final QA is not bound to the final searched strategy")
+            if isinstance(final_qa_payload, dict) and final_qa_payload.get("strategy_sha256") not in set(final_hashes.values()):
+                issues.append("final QA strategy content hash does not match the final searched strategy")
         if needs_validation and validation_entries:
-            final_hashes = final_topic_entries[-1].get("input_sha256")
             validation_hashes = validation_entries[-1].get("input_sha256")
-            if isinstance(final_hashes, dict) and final_hashes and isinstance(validation_hashes, dict) and validation_hashes:
-                if set(final_hashes.values()).isdisjoint(set(validation_hashes.values())):
-                    issues.append("final topic search and required validation are not bound to the same strategy input hash")
+            if not isinstance(final_hashes, dict) or not final_hashes or not isinstance(validation_hashes, dict) or not validation_hashes:
+                issues.append("final topic search and required validation require strategy input hashes")
+            elif set(final_hashes.values()).isdisjoint(set(validation_hashes.values())):
+                issues.append("final topic search and required validation are not bound to the same strategy input hash")
         issues.extend(low_count_review_readiness(data, manifest_path))
 
     if scope.get("lock_mode") == "protocol":
@@ -1904,6 +2024,63 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         output_value = str(audit.get("output_path") or "")
         if not output_path_exists(output_value, manifest_path=manifest_path, data=data):
             issues.append(f"audit Markdown artifact does not exist: {output_value}")
+        if audit.get("returncode") != 0 or audit.get("scope_version") != scope_version:
+            issues.append("audit Markdown is not a successful current-scope render")
+        if "audit_markdown.py" not in str(audit.get("command") or ""):
+            issues.append("final audit Markdown was not produced by audit_markdown.py")
+        if not str(audit.get("output_sha256") or ""):
+            issues.append("final audit Markdown lacks a recorded output hash")
+        audit_inputs = audit.get("input_sha256")
+        if not isinstance(audit_inputs, dict) or not audit_inputs:
+            issues.append("final audit Markdown lacks a bound audit JSON input")
+        else:
+            audit_payloads = []
+            for input_value in audit_inputs:
+                candidate = resolve_artifact_path(str(input_value), manifest_path)
+                if candidate.suffix.casefold() != ".json" or not candidate.is_file():
+                    continue
+                payload = read_manifest_output_json(manifest_path, str(candidate))
+                if isinstance(payload, dict):
+                    audit_payloads.append(payload)
+            core_payload = next(
+                (
+                    payload for payload in audit_payloads
+                    if str(payload.get("final_strategy") or payload.get("strategy") or payload.get("final_pubmed_strategy") or "").strip()
+                ),
+                None,
+            )
+            if core_payload is None:
+                issues.append("final audit input does not contain an explicit final strategy")
+            else:
+                if scope.get("lock_mode") == "protocol":
+                    issues.extend(protocol_binding_issues(core_payload, scope, "final audit input"))
+                unvalidated = state.get("unvalidated_handoff") if isinstance(state.get("unvalidated_handoff"), dict) else {}
+                if unvalidated.get("status") == "accepted":
+                    reporting = core_payload.get("reporting_notes") if isinstance(core_payload.get("reporting_notes"), dict) else {}
+                    caveat = str(reporting.get("remaining_caveats") or "").casefold()
+                    if "empirically-unvalidated" not in caveat and "empirically unvalidated" not in caveat:
+                        issues.append("accepted empirically-unvalidated handoff is not labelled in the final audit caveats")
+                audit_strategy = str(
+                    core_payload.get("final_strategy")
+                    or core_payload.get("strategy")
+                    or core_payload.get("final_pubmed_strategy")
+                    or ""
+                ).strip()
+                final_strategy_texts: set[str] = set()
+                final_inputs = final_topic_entries[-1].get("input_sha256")
+                if isinstance(final_inputs, dict):
+                    for input_value in final_inputs:
+                        candidate = resolve_artifact_path(str(input_value), manifest_path)
+                        if candidate.is_file() and candidate.suffix.casefold() not in {".json", ".csv"}:
+                            final_strategy_texts.add(candidate.read_text(encoding="utf-8-sig").strip())
+                if audit_strategy not in final_strategy_texts:
+                    issues.append("final audit strategy does not match the final searched strategy")
+        if output_path_exists(output_value, manifest_path=manifest_path, data=data):
+            audit_path = resolve_artifact_path(output_value, manifest_path)
+            markdown = audit_path.read_text(encoding="utf-8")
+            for heading in ("## Final PubMed strategy", "## Reporting notes", "## PRISMA-S appendix"):
+                if heading not in markdown:
+                    issues.append(f"final audit Markdown lacks required section: {heading}")
 
     return issues
 
@@ -2005,6 +2182,15 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                     f"Unknown recall-offer value {args.value!r}. Choose from: {', '.join(RECALL_OFFER_VALUES)}."
                 )
             state["recall_offer"] = args.value
+        elif action == "resolve-unvalidated-handoff":
+            if args.value not in UNVALIDATED_HANDOFF_VALUES:
+                raise ManifestError(
+                    f"Unknown unvalidated-handoff value {args.value!r}. Choose from: {', '.join(UNVALIDATED_HANDOFF_VALUES)}."
+                )
+            reason = str(args.reason or "").strip()
+            if not reason:
+                raise ManifestError("resolve-unvalidated-handoff requires a non-empty user decision reason")
+            state["unvalidated_handoff"] = {"status": args.value, "reason": reason, "recorded_utc": now}
         elif action == "lock-protocol":
             summary = validate_protocol_compile(args.protocol_file, args.compile_receipt, path)
             scope = state["scope"]
@@ -2183,6 +2369,12 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                 raise ManifestError("candidate ledger scope_version does not match the locked retrieval scope")
             binding_issues = protocol_binding_issues(summary, scope, "candidate-ledger validation summary")
             ledger_path = resolve_artifact_path(args.ledger_file, path)
+            receipt_path_value = str(summary.get("artifact_path") or "")
+            if not receipt_path_value or Path(receipt_path_value).resolve() != ledger_path.resolve():
+                raise ManifestError("candidate-ledger validation receipt is not bound to --ledger-file")
+            receipt_hash = str(summary.get("artifact_sha256") or "")
+            if not receipt_hash or receipt_hash != sha256_file(ledger_path):
+                raise ManifestError("candidate-ledger validation receipt hash does not match --ledger-file")
             ledger_payload = _protocol_json(ledger_path, "candidate ledger")
             binding_issues.extend(protocol_binding_issues(ledger_payload, scope, "candidate ledger"))
             if binding_issues:
@@ -2203,6 +2395,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                 "status": "complete",
                 "artifact": args.ledger_file,
                 "validation_artifact": args.validation_file,
+                "artifact_sha256": receipt_hash,
                 "summary": summary,
                 "reason": "",
                 "entry_seq": entry_seq,
@@ -2395,6 +2588,7 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
                 "supersedes": supersedes,
                 "note": args.note or "",
                 "open_decision": bool(args.open_decision),
+                "resolves_decision_seqs": sorted(set(args.resolves_decision_seq or [])),
                 "scope_version": args.scope_version,
                 "returncode": args.returncode,
                 "output_sha256": output_sha256,
@@ -2610,6 +2804,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Essential-block label this entry supplies evidence for (links sweeps/counts to a registered block for the coverage gate).",
     )
     add_parser.add_argument("--open-decision", action="store_true", help="Flag this entry as an unresolved decision to surface in report.")
+    add_parser.add_argument(
+        "--resolves-decision-seq",
+        action="append",
+        type=int,
+        default=[],
+        help="Resolve a prior open-decision entry by sequence number; repeatable.",
+    )
     add_parser.add_argument("--topic-slug", default="", help="Topic slug, used only when auto-creating the manifest.")
     add_parser.add_argument(
         "--skill-version", default=DEFAULT_SKILL_VERSION, help="Skill version, used only when auto-creating the manifest."
@@ -2686,6 +2887,13 @@ def build_parser() -> argparse.ArgumentParser:
         f"Record the no-seed heuristic recall-offer outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.",
     )
     resolve_recall_offer.add_argument("value", help=f"Outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.")
+
+    resolve_unvalidated = add_state_action(
+        "resolve-unvalidated-handoff",
+        "Record the user's explicit decision whether to accept a deliberately empirically-unvalidated no-seed handoff.",
+    )
+    resolve_unvalidated.add_argument("value", choices=UNVALIDATED_HANDOFF_VALUES)
+    resolve_unvalidated.add_argument("--reason", required=True, help="User decision and adoption-confidence rationale.")
 
     lock_protocol = add_state_action(
         "lock-protocol",

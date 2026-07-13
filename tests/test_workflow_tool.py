@@ -74,6 +74,37 @@ class WorkflowToolTests(unittest.TestCase):
             self.assertFalse(receipt["manifest_updated"])
             self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["entries"], [])
 
+    def test_rejects_stage_that_mutates_declared_input(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "run_manifest.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                manifest_tool.main(["init", "--manifest", str(manifest), "--topic-slug", "x"])
+            source = root / "query.txt"
+            source.write_text("before", encoding="utf-8")
+            code = "import pathlib; pathlib.Path('query.txt').write_text('after'); pathlib.Path('out.json').write_text('{}')"
+            rc, receipt = self.run_main([
+                "--manifest", str(manifest), "--kind", "search", "--input", "query.txt",
+                "--output", "out.json", "--cwd", str(root), "--", sys.executable, "-c", code,
+            ])
+            self.assertEqual(rc, 1)
+            self.assertIn("modified declared input", receipt["error"])
+            self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["entries"], [])
+
+    def test_rejects_unchanged_preexisting_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "run_manifest.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                manifest_tool.main(["init", "--manifest", str(manifest), "--topic-slug", "x"])
+            (root / "out.json").write_text('{"ok": true}', encoding="utf-8")
+            rc, receipt = self.run_main([
+                "--manifest", str(manifest), "--kind", "search", "--output", "out.json",
+                "--cwd", str(root), "--", sys.executable, "-c", "pass",
+            ])
+            self.assertEqual(rc, 1)
+            self.assertIn("unchanged", receipt["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

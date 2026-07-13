@@ -124,7 +124,7 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
     revised_blocks = {str(value) for value in revised.get("required_block_ids", [])}
     authorized_blocks = {str(value) for value in data.get("authorized_required_block_ids", [])}
     added_blocks = sorted(revised_blocks - baseline_blocks)
-    unjustified_blocks = sorted(set(added_blocks) - authorized_blocks)
+    removed_blocks = sorted(baseline_blocks - revised_blocks)
 
     drift = revised.get("translation_drift_issues")
     if not isinstance(drift, list):
@@ -151,6 +151,10 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
         )
     else:
         scope_pass = baseline_scope == revised_scope and baseline_protocol == revised_protocol
+    if changed and scope_pass:
+        required_blocks_pass = bool(authorized_blocks) and revised_blocks == authorized_blocks
+    else:
+        required_blocks_pass = baseline_blocks == revised_blocks
 
     baseline_count = baseline.get("result_count")
     revised_count = revised.get("result_count")
@@ -189,7 +193,7 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
             or bool(low_signal.get("no_included_candidates"))
             or verdict in UNTRUSTED_DISCOVERY_VERDICTS
         )
-        low_signal_active = explicit_active if isinstance(explicit_active, bool) else derived_active
+        low_signal_active = derived_active or explicit_active is True
         signal_evidence = {
             "low_count": bool(low_signal.get("low_count")),
             "topic_only_count": low_signal.get("topic_only_count"),
@@ -247,7 +251,18 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
     checks = [
         check("named-defect-fixed", defect_pass, {"defect_id": defect_id, "evidence": defect_evidence}, "named defect lacks a fixed=true evidence record"),
         check("heldout-preserved", not lost_heldout, {"baseline_retrieved": baseline_heldout, "revised_retrieved": revised_heldout, "lost_pmids": lost_heldout}, "revision loses previously retrieved held-out records"),
-        check("required-blocks-justified", not unjustified_blocks, {"added": added_blocks, "authorized": sorted(authorized_blocks), "unjustified": unjustified_blocks}, "revision adds an unauthorized required block"),
+        check(
+            "required-blocks-justified",
+            required_blocks_pass,
+            {
+                "baseline": sorted(baseline_blocks),
+                "revised": sorted(revised_blocks),
+                "added": added_blocks,
+                "removed": removed_blocks,
+                "authorized_current_scope": sorted(authorized_blocks),
+            },
+            "revision changes required blocks without an authorized protocol version whose registry exactly matches the revised block set",
+        ),
         check("syntax-translation-stable", syntax_pass, {"syntax_ok": revised.get("syntax_ok"), "translation_drift_issues": drift}, "revision introduces syntax or translation drift"),
         check("scope-unchanged-or-explicit", scope_pass, {"changed": changed, "authorized": scope.get("authorized"), "baseline_scope_version": baseline_scope, "revised_scope_version": revised_scope}, "revision changes scope without a valid new protocol version"),
         check("workload-recorded", workload_pass, workload, "revision lacks numeric before/after result counts"),

@@ -1,6 +1,6 @@
 # No-Seed Heuristic Recall Estimation
 
-Use this reference only after retrieval scope is locked, candidate anchors are screened, and a draft strategy exists. It estimates recall relative to a proxy set; it is not validated sensitivity or known-item recall.
+Use the orthogonal discovery portion of this reference after retrieval scope is locked. Use the recall-estimation portions only after candidate anchors are screened and a draft strategy exists. Any estimate is relative to a proxy set; it is not validated sensitivity or known-item recall.
 
 ## Why it is heuristic
 
@@ -16,7 +16,7 @@ Interpret asymmetrically:
 - Seed gate resolved to no seeds.
 - Retrieval scope version 1 or later is locked.
 - Orthogonal pilot specifications are saved; their merged candidates will be screened before vocabulary mining or benchmark use.
-- A draft strategy and blocks file exist.
+- For recall estimation (but not initial discovery), a draft strategy and blocks file exist.
 - The recall check is accepted by the user/protocol, or the protocol authorizes it by default.
 
 Record the outcome with `manifest_tool.py state resolve-recall-offer <done|declined|not-applicable>`.
@@ -81,7 +81,7 @@ python scripts/no_seed_discovery.py adjudicate \
 - **discovery-bottleneck** (volume ≥ floor, topic-core basis only): substantial literature exists but discovery surfaced nothing. Saturation is **blocked**. Repair or broaden the pilots, or reconsider an over-narrow essential block, then run another round. Do not narrow scope — a low screened-in count is never evidence the topic is small.
 - **indeterminate** (between the two, or a single-concept proxy at/over the floor): add a topic-core probe, widen the pilots, or obtain a human decision before declaring saturation. A proxy volume is only an upper bound on the AND core, so it can rule sparsity out but is capped at `indeterminate` rather than reported as a bottleneck it cannot confirm.
 
-Without a discrimination artifact the empty-set verdict is `pending-discrimination` and saturation stays blocked, exactly like an unresolved safety cap. The gate applies only at or below `--min-screened-in-for-saturation` (default 1, i.e. only the empty set), so a single screened-in record still freezes a small non-independent (`both`-role) ledger as before.
+Without a discrimination artifact the empty-set verdict is `pending-discrimination` and saturation stays blocked, exactly like an unresolved safety cap. The gate applies only below `--min-screened-in-for-saturation` (default 1, i.e. only the empty set), so a single screened-in record still freezes a small non-independent (`both`-role) ledger as before. The sparse ceiling must be strictly lower than the bottleneck floor; invalid or reversed thresholds are rejected.
 
 ## Surface the decision to the user early
 
@@ -92,6 +92,8 @@ Do not silently route an empty screened-in result to the record-free path and le
 - **the choices**, each with its consequence: (i) supply known-relevant seed PMIDs, (ii) name adjacent/prior systematic reviews to benchmark against, (iii) repair/broaden the pilots and retry discovery, or (iv) proceed with a protocol-only, empirically-unvalidated search.
 
 The recommended option follows the verdict: `discovery-bottleneck` and `indeterminate` recommend repairing discovery (and flag option (iv) as high-risk); `genuinely-sparse` recommends explicitly accepting the unvalidated search; `pending-discrimination` recommends measuring topic volume first. Accepting an empirically-unvalidated search is an **adoption-confidence decision the user makes up front**, not an automatic fallback the build takes on its own.
+
+Record that choice with `manifest_tool.py state resolve-unvalidated-handoff accepted --reason "..."` (or `declined`). Acceptance is valid only when the adjudication artifact contains the surfaced `saturation_gate.user_decision`; the final audit must explicitly label the search empirically unvalidated and carry the reason.
 
 Related neighbors used only for the benchmark may remain unscreened but must be called heuristic candidates, never relevant studies. Screen any neighbor before harvesting its vocabulary.
 
@@ -146,7 +148,7 @@ python scripts/pubmed_tool.py recall --query-file strategy.txt \
   --output recall_prior_review.json
 ```
 
-`benchmark-harvest` merges two sources — the cited references of the review PMIDs (via the `refs` elink) and any user-supplied included-study PMID list — excludes the review PMIDs themselves, and writes a provenance-blinded screening artifact on a track separate from discovery. `benchmark-freeze` keeps only screened-in `include` records and labels the artifact `prior-review-semi-independent` with `confidence: semi-independent`. Passing `--unscreened` freezes every harvested candidate as `confidence: indicative` (it then also imports citation noise) — use it only as a quick smoke test.
+`benchmark-harvest` merges two sources — the cited references of the review PMIDs (via the `refs` elink) and any user-supplied included-study PMID list — excludes the review PMIDs themselves, and writes a provenance-blinded screening artifact on a track separate from discovery. `benchmark-freeze` keeps only screened-in `include` records and labels the artifact `prior-review-semi-independent` with `confidence: semi-independent`. A safety-capped harvest cannot be frozen as a benchmark: complete or narrow the harvest first. Passing `--unscreened` freezes every fully harvested candidate as `confidence: indicative` (it then also imports citation noise) — use it only as a quick smoke test.
 
 Interpret the result **asymmetrically**, exactly like every other no-seed recall signal: low recall against the benchmark is a real leak signal (inspect and screen the missed records, then route lexical gaps to block revision and structural gaps to scope re-entry); high recall is weak positive evidence only. A prior-review benchmark is *less* strategy-adjacent than a seed-expansion benchmark, so it flatters recall less, but it still cannot prove absolute sensitivity. Record the outcome with `manifest_tool.py state resolve-recall-offer done`.
 

@@ -118,6 +118,10 @@ If a validated filter or focused variant was also tested:
 - **Empirical and final handling:** [stable / fragile / very-fragile; human override and required reason, or none]
 - **Orthogonal no-seed pilots:** [MeSH / exact phrase / operational description / prior review / citation-registry / historical terminology, or not applicable]
 - **Internal pilot convergence:** [convergence score / unique-family yield / recall-risk / indeterminate; explicitly not capture-recapture or a completeness estimate]
+- **Provenance-blinded screening:** [yes/no/not applicable]
+- **Saturation history:** [new included studies and new vocabulary per round; consecutive zero-novelty rounds]
+- **Holdout freeze:** [allocation method and ledger path before term mining, or not applicable]
+- **Empirically-unvalidated handoff:** [not applicable / explicitly accepted by user, with reason and saturation-gate decision artifact]
 
 ## External trial-registry validation
 
@@ -131,9 +135,6 @@ If a validated filter or focused variant was also tested:
 - **Eligible linked PubMed denominator, hits, and misses:** [details]
 - **Interpretation:** [misses resolved; coverage findings; no eligible trials gives no reassurance]
 - **Limitation:** [registry check is a PubMed leak sentinel, not review-level completeness]
-- **Provenance-blinded screening:** [yes/no/not applicable]
-- **Saturation history:** [new included studies and new vocabulary per round; consecutive zero-novelty rounds]
-- **Holdout freeze:** [allocation method and ledger path before term mining, or not applicable]
 
 ### Active vocabulary learning
 
@@ -145,7 +146,7 @@ If a validated filter or focused variant was also tested:
 
 ### Labelled-sample screening burden
 
-- **Sampling design:** [complete-frame strata, shared/unique and rank bands, seed, sample size, date]
+- **Sampling design:** [complete-frame strata, shared/unique and rank bands, seed, sample size, date, exact normalized query hashes, relevance sort, and retrieval timestamps]
 - **Labels:** [likely relevant / irrelevant / uncertain counts by variant and stratum]
 - **Precision:** [weighted estimate, 95% confidence interval, uncertain-label lower/upper bounds]
 - **Screening burden:** [estimated records screened per relevant report and confidence interval]

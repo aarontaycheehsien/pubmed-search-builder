@@ -113,6 +113,7 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
         return issues + ["evidence bundle artifacts must be a non-empty list"], bundle
     roles: set[str] = set()
     packet_binding: dict[str, Any] | None = None
+    resolved_artifacts: dict[str, dict[str, str]] = {}
     for index, item in enumerate(artifacts, start=1):
         if not isinstance(item, dict):
             issues.append(f"evidence artifact {index} must be an object")
@@ -129,6 +130,8 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
             issues.append(f"evidence artifact {role!r} does not exist: {file_path}")
         elif not expected or sha256_file(file_path) != expected:
             issues.append(f"evidence artifact {role!r} hash does not match")
+        else:
+            resolved_artifacts[role] = {"path": str(file_path.resolve()), "sha256": expected}
         if role in {"critic_packet", "protocol-packet"} and file_path.is_file():
             try:
                 binding = protocol_packet_binding(file_path)
@@ -140,6 +143,7 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
     if "strategy" not in roles:
         issues.append("evidence bundle lacks the strategy role")
     bundle["roles"] = sorted(roles)
+    bundle["resolved_artifacts"] = resolved_artifacts
     if packet_binding:
         for key, expected in packet_binding.items():
             if bundle.get(key) != expected:
@@ -151,6 +155,7 @@ def validate_artifact(
     data: dict[str, Any],
     *,
     evidence_bundle: dict[str, Any] | None = None,
+    artifact_base: Path | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     issues: list[str] = []
     round_number = data.get("round")
@@ -161,6 +166,17 @@ def validate_artifact(
         issues.append("scope_version must be a positive integer")
     if not str(data.get("strategy_file") or "").strip():
         issues.append("strategy_file is required")
+    elif evidence_bundle is not None and (evidence_bundle.get("resolved_artifacts") or {}).get("strategy"):
+        strategy_path = Path(str(data.get("strategy_file")))
+        if not strategy_path.is_absolute() and artifact_base is not None:
+            strategy_path = artifact_base / strategy_path
+        bundled_strategy = (evidence_bundle.get("resolved_artifacts") or {}).get("strategy", {})
+        if (
+            not strategy_path.is_file()
+            or str(strategy_path.resolve()) != str(bundled_strategy.get("path") or "")
+            or sha256_file(strategy_path) != bundled_strategy.get("sha256")
+        ):
+            issues.append("strategy_file does not match the strategy role in the evidence bundle")
 
     overall_status = str(data.get("overall_status") or "").strip()
     if overall_status not in OVERALL_STATUSES:
@@ -217,6 +233,10 @@ def validate_artifact(
                 open_actionable += 1
         if severity == "must-fix" and status == "accepted-risk":
             issues.append(f"{prefix} must-fix findings cannot be accepted-risk")
+        if status in {"accepted-risk", "not-applicable"} and not str(
+            finding.get("status_rationale") or finding.get("rationale") or ""
+        ).strip():
+            issues.append(f"{prefix} {status} status requires a rationale")
 
         if data.get("critic_version") == 2:
             finding_id = str(finding.get("finding_id") or "").strip()
@@ -243,6 +263,10 @@ def validate_artifact(
     if critic_version == 2:
         if not str(data.get("evidence_bundle") or "").strip():
             issues.append("critic_version 2 requires evidence_bundle")
+        if data.get("protocol_sha256") and (
+            not isinstance(evidence_bundle, dict) or not evidence_bundle.get("protocol_sha256")
+        ):
+            issues.append("protocol-bound critic_version 2 requires a critic packet in the evidence bundle")
         verdicts = data.get("domain_verdicts")
         if not isinstance(verdicts, list):
             issues.append("critic_version 2 requires domain_verdicts list")
@@ -350,7 +374,9 @@ def main(argv: list[str] | None = None) -> int:
             if not bundle_path.is_absolute():
                 bundle_path = artifact_path.parent / bundle_path
             bundle_issues, bundle_data = validate_evidence_bundle(bundle_path)
-        issues, summary = validate_artifact(data, evidence_bundle=bundle_data)
+        issues, summary = validate_artifact(
+            data, evidence_bundle=bundle_data, artifact_base=artifact_path.resolve().parent
+        )
         issues = bundle_issues + issues
     except CriticArtifactError as exc:
         issues, summary = [str(exc)], {}

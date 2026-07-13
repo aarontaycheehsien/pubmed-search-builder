@@ -95,6 +95,22 @@ def run_stage(args: argparse.Namespace) -> dict[str, Any]:
         raise WorkflowRunError(
             f"Requested scope version {args.scope_version} does not match locked scope version {inferred_scope}"
         )
+    resolved_inputs = [
+        (Path(path) if Path(path).is_absolute() else cwd / path).resolve()
+        for path in args.input
+    ]
+    input_hashes_before: dict[Path, str] = {}
+    for input_path in resolved_inputs:
+        if not input_path.is_file():
+            raise WorkflowRunError(f"Input artifact does not exist: {input_path}")
+        input_hashes_before[input_path] = manifest_tool.sha256_file(input_path)
+    output_path = None
+    output_hash_before = None
+    if args.output:
+        candidate = Path(args.output)
+        output_path = (candidate if candidate.is_absolute() else cwd / candidate).resolve()
+        if output_path.is_file():
+            output_hash_before = manifest_tool.sha256_file(output_path)
     proc = subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         return {
@@ -106,12 +122,22 @@ def run_stage(args: argparse.Namespace) -> dict[str, Any]:
             "stderr_tail": proc.stderr[-2000:],
             "manifest_updated": False,
         }
-    output_path = None
-    if args.output:
-        candidate = Path(args.output)
-        output_path = candidate if candidate.is_absolute() else cwd / candidate
+    for input_path, expected_hash in input_hashes_before.items():
+        if not input_path.is_file() or manifest_tool.sha256_file(input_path) != expected_hash:
+            raise WorkflowRunError(f"Command modified declared input artifact: {input_path}")
+    if output_path is not None:
         if not output_path.is_file():
             raise WorkflowRunError(f"Command succeeded but expected output does not exist: {output_path}")
+        output_hash_after = manifest_tool.sha256_file(output_path)
+        if (
+            output_hash_before is not None
+            and output_hash_after == output_hash_before
+            and not args.allow_unchanged_output
+        ):
+            raise WorkflowRunError(
+                "Command succeeded but the expected output was unchanged; use "
+                "--allow-unchanged-output only for an intentional, documented reuse"
+            )
     payload = read_json_object(output_path) if output_path else None
     if payload is None:
         try:
@@ -119,11 +145,13 @@ def run_stage(args: argparse.Namespace) -> dict[str, Any]:
             payload = parsed_stdout if isinstance(parsed_stdout, dict) else None
         except json.JSONDecodeError:
             payload = None
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        raise WorkflowRunError("Command output reports ok=false and cannot be registered as successful evidence")
     count = args.count if args.count is not None else infer_count(payload)
     command_text = subprocess.list2cmdline(command)
     if output_path is not None:
         args.output = str(output_path)
-    args.input = [str((Path(path) if Path(path).is_absolute() else cwd / path).resolve()) for path in args.input]
+    args.input = [str(path) for path in resolved_inputs]
     manifest_receipt = register_entry(args, command_text, count)
     return {
         "ok": True,
@@ -147,6 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block", default="")
     parser.add_argument("--note", default="")
     parser.add_argument("--output", help="Expected command output path, relative to --cwd.")
+    parser.add_argument(
+        "--allow-unchanged-output",
+        action="store_true",
+        help="Allow intentional reuse of a pre-existing identical output artifact.",
+    )
     parser.add_argument("--input", action="append", default=[], help="Input artifact to hash; repeatable.")
     parser.add_argument("--scope-version", type=int)
     parser.add_argument("--count", type=int, help="Explicit result count; otherwise inferred from output JSON.")

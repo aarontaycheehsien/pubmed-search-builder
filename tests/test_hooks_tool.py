@@ -44,6 +44,19 @@ class SplitTopLevelOrTests(unittest.TestCase):
         parts = hooks_tool.split_top_level_or('"word or phrase"[tiab] OR b[tiab]')
         self.assertEqual(parts, ['"word or phrase"[tiab]', "b[tiab]"])
 
+    def test_rejects_misordered_parentheses(self):
+        self.assertIsNotNone(hooks_tool.parenthesis_nesting_issue(")("))
+
+
+class WarningDispositionTests(unittest.TestCase):
+    def test_warning_requires_authored_disposition(self):
+        strategy = '("Asthma"[Mesh]) NOT animals[Mesh]'
+        unresolved = hooks_tool.final_qa(strategy)
+        self.assertFalse(unresolved["ok"])
+        self.assertIn("not_operator", unresolved["unresolved_warning_codes"])
+        resolved = hooks_tool.final_qa(strategy, {"not_operator": "Protocol-authorized exclusion, tested against holdout."})
+        self.assertNotIn("not_operator", resolved["unresolved_warning_codes"])
+
 
 class ExtractLeafAtomsTests(unittest.TestCase):
     def test_recurses_into_nested_and_or_groups(self):
