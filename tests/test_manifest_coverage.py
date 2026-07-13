@@ -45,7 +45,14 @@ class ManifestCoverageTests(unittest.TestCase):
         return self.run_cli(["state", *args, "--manifest", self.manifest])
 
     def add(self, **kw):
-        args = ["add", "--manifest", self.manifest, "--kind", kw.pop("kind"), "--command", kw.pop("command", "cmd")]
+        kind = kw.pop("kind")
+        command = kw.pop("command", "cmd")
+        if command != "cmd" and "output" not in kw:
+            data = self.load() if Path(self.manifest).exists() else {}
+            output = self.dir / f"evidence_{len(data.get('entries', []))}.json"
+            output.write_text(json.dumps({"ok": True, "command": command}), encoding="utf-8")
+            kw["output"] = str(output)
+        args = ["add", "--manifest", self.manifest, "--kind", kind, "--command", command]
         for flag, value in kw.items():
             args += [f"--{flag}", str(value)]
         return self.run_cli(args)
@@ -101,7 +108,7 @@ class ManifestCoverageTests(unittest.TestCase):
         self.state("register-block", "malaria")
         # No --block; the free-text label contains the block key.
         self.add(kind="mesh", label="malaria block", command="mesh_tool.py sweep --concept malaria --output s.json")
-        self.add(kind="batch", label="malaria counts", command="pubmed_tool.py batch q.json")
+        self.add(kind="batch", label="malaria counts", command="pubmed_tool.py batch q.json", count="5")
         rc, receipt = self.state("coverage")
         self.assertEqual(rc, 0)
         self.assertTrue(receipt["ok"])
@@ -231,6 +238,8 @@ class ManifestCoverageTests(unittest.TestCase):
                     "status": "pass",
                     "ok": True,
                     "final_count": 39,
+                    "threshold": 500,
+                    "low_count_review_required": True,
                 }
             ),
             encoding="utf-8",
@@ -269,7 +278,14 @@ class BramerGapCoverageTests(unittest.TestCase):
         return self.run_cli(["state", *args, "--manifest", self.manifest])
 
     def add(self, **kw):
-        args = ["add", "--manifest", self.manifest, "--kind", kw.pop("kind"), "--command", kw.pop("command", "cmd")]
+        kind = kw.pop("kind")
+        command = kw.pop("command", "cmd")
+        if command != "cmd" and "output" not in kw:
+            data = json.loads(Path(self.manifest).read_text(encoding="utf-8")) if Path(self.manifest).exists() else {}
+            output = self.dir / f"evidence_{len(data.get('entries', []))}.json"
+            output.write_text(json.dumps({"ok": True, "command": command}), encoding="utf-8")
+            kw["output"] = str(output)
+        args = ["add", "--manifest", self.manifest, "--kind", kind, "--command", command]
         for flag, value in kw.items():
             args += [f"--{flag}", str(value)]
         return self.run_cli(args)

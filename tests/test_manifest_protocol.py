@@ -82,70 +82,62 @@ class ManifestProtocolTests(unittest.TestCase):
             {"id": "allocation", "label": "Quasi-random allocation", "role": "essential"},
             {"id": "bias", "label": "Selection bias", "role": "optional"},
         ]
-        protocol = {
-            "dsl_version": 1,
-            "protocol_id": protocol_id,
-            "scope_version": version,
-            "version_change": {"reason": "initial lock" if version == 1 else "scope revision"},
-            "review": {"question": "How does quasi-randomization perform in emergency trials?", "framework": {"name": "PICO"}},
-            "eligibility": {"include": [], "exclude": []},
-            "searchable_scope": {"concepts": concepts},
-            "screening_only": [],
-            "filters_and_limits": {"decisions": filter_decisions or []},
-            "date_boundaries": [],
-            "seeds": {"records": seed_records or []},
-            "priorities": [],
-            "focused_variants": [],
-        }
-        protocol_path = self.directory / f"protocol_v{version}.json"
-        protocol_path.write_text(json.dumps(protocol, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        protocol_sha = canonical_hash(protocol)
-
-        artifact_specs = {
-            "concept-ledger": {"essential_blocks": [item["id"] for item in concepts if item["role"] == "essential"]},
-            "block-registry": {
-                "blocks": [
-                    {
-                        "block_id": item["id"],
-                        "concept_id": item["id"],
-                        "label": item["label"],
-                        "role": item["role"],
-                    }
-                    for item in concepts
-                ]
-            },
-            "candidate-ledger-template": {"ledger_status": "template", "records": []},
-            "critic-packet": {"reviewed_domains": []},
-            "audit-outline": {"sections": []},
-        }
-        artifacts = []
-        for artifact_type, payload in artifact_specs.items():
-            path = self.directory / f"{artifact_type}_v{version}.json"
-            envelope = {
-                "artifact_type": artifact_type,
-                "artifact_version": 1,
-                "protocol_id": protocol_id,
-                "scope_version": version,
-                "dsl_version": 1,
-                "generated_from": {"path": protocol_path.name, "sha256": protocol_sha},
-                **payload,
+        normalized_concepts = [
+            {
+                **item,
+                "eligibility_refs": ["eligible_core"] if item["role"] == "essential" else [],
+                "framework_slots": ["core"],
+                "definition": f"Definition for {item['label']}",
+                "rationale": "Protocol-defined retrieval concept",
+                "provisional_fragility": "stable",
+                "term_families": [],
             }
-            path.write_text(
-                json.dumps(envelope, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            artifacts.append({"artifact_type": artifact_type, "path": str(path), "sha256": file_hash(path)})
-
-        receipt = {
-            "operation": "protocol-compile",
-            "ok": True,
-            "protocol_sha256": protocol_sha,
+            for item in concepts
+        ]
+        decisions = []
+        for item in filter_decisions or []:
+            row = dict(item)
+            if row.get("status") == "selected" and not row.get("validated_source"):
+                row["validated_source"] = "Protocol-authorized restriction"
+            decisions.append(row)
+        protocol = protocol_tool.new_protocol()
+        protocol.update({
             "protocol_id": protocol_id,
             "scope_version": version,
-            "dsl_version": 1,
-            "artifacts": artifacts,
-        }
+            "version_change": {
+                "previous_scope_version": None if version == 1 else version - 1,
+                "reason": "initial lock" if version == 1 else "scope revision",
+                "decision_source": "test protocol",
+            },
+            "review": {
+                "question": "How does quasi-randomization perform in emergency trials?",
+                "framework": {
+                    "name": "PICO", "rationale": "Protocol framework",
+                    "slots": [{"id": "core", "label": "Core", "description": "Core review concepts"}],
+                },
+            },
+            "eligibility": {
+                "inclusion": [{"id": "eligible_core", "label": "Eligible core", "description": "Core eligibility"}],
+                "exclusion": [],
+            },
+            "searchable_scope": {"concepts": normalized_concepts},
+            "filters_and_limits": {"decisions": decisions},
+            "seeds": {"records": seed_records or []},
+            "priorities": {
+                "recall": {"policy": "Recall-first", "minimum_heldout_recall": 1.0},
+                "workload": {
+                    "policy": "Burden only after recall qualification",
+                    "selection_rule": "Lowest burden among recall-qualified variants",
+                },
+            },
+        })
+        protocol_tool.require_valid(protocol, "lock")
+        protocol_path = self.directory / f"protocol_v{version}.json"
+        protocol_path.write_bytes(protocol_tool.pretty_bytes(protocol))
         receipt_path = self.directory / f"protocol_compile_v{version}.json"
+        receipt = protocol_tool.compile_protocol(protocol_path, self.directory, receipt_path)
+        for row in receipt["artifacts"]:
+            row["path"] = str((receipt_path.parent / row["path"]).resolve())
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         return protocol_path, receipt_path, protocol, receipt
 
@@ -339,6 +331,19 @@ class ManifestProtocolTests(unittest.TestCase):
         rc, _, error = self.lock(protocol_path, receipt_path)
         self.assertEqual(rc, 1)
         self.assertIn("artifact hash mismatch", error)
+
+    def test_lock_protocol_rejects_forged_derivative_and_updated_receipt_hash(self):
+        protocol_path, receipt_path, _, receipt = self.compiled_protocol()
+        artifact_row = next(row for row in receipt["artifacts"] if row["artifact_type"] == "concept-ledger")
+        artifact_path = Path(artifact_row["path"])
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        artifact["concepts"][0]["label"] = "Forged derivative"
+        artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        artifact_row["sha256"] = file_hash(artifact_path)
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 1)
+        self.assertIn("does not match the derivative compiled", error)
 
     def test_lock_protocol_rejects_generated_from_mismatch(self):
         protocol_path, receipt_path, _, receipt = self.compiled_protocol()

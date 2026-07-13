@@ -68,7 +68,9 @@ class NoSeedDiscoveryTests(unittest.TestCase):
             ],
         }
         provenance = {
+            "operation": "orthogonal-pilot-provenance",
             "scope_version": 1,
+            "round": 1,
             "pilot_types": sorted(no_seed.PILOT_TYPES),
             "safety_cap_reached": False,
             "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}],
@@ -79,14 +81,14 @@ class NoSeedDiscoveryTests(unittest.TestCase):
         self.assertFalse(state1["saturation_reached"])
         self.assertIsNone(ledger1)
         empty_screening = {**screening, "round": 2, "records": []}
-        empty_provenance = {**provenance, "records": []}
+        empty_provenance = {**provenance, "round": 2, "records": []}
         state2, ledger2 = no_seed.adjudicate(
             empty_screening, empty_provenance, previous_state=state1, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
         )
         self.assertFalse(state2["saturation_reached"])
         self.assertIsNone(ledger2)
         state3, ledger3 = no_seed.adjudicate(
-            {**empty_screening, "round": 3}, empty_provenance, previous_state=state2, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
+            {**empty_screening, "round": 3}, {**empty_provenance, "round": 3}, previous_state=state2, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
         )
         self.assertTrue(state3["saturation_reached"])
         self.assertTrue(state3["ledger_frozen"])
@@ -96,8 +98,8 @@ class NoSeedDiscoveryTests(unittest.TestCase):
     def test_reached_safety_cap_blocks_false_saturation(self):
         state, ledger = no_seed.adjudicate(
             {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 2, "provenance_blinded": True, "records": []},
-            {"scope_version": 1, "records": [], "safety_cap_reached": True},
-            previous_state={"consecutive_saturated_rounds": 1, "seen_pmids": [], "included_pmids": [], "vocabulary_terms": [], "adjudicated_records": []},
+            {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 2, "records": [], "safety_cap_reached": True},
+            previous_state={"operation": "orthogonal-pilot-adjudication", "ok": True, "scope_version": 1, "round": 1, "consecutive_saturated_rounds": 1, "seen_pmids": [], "included_pmids": [], "vocabulary_terms": [], "adjudicated_records": []},
             scope_version=1,
             required_saturated_rounds=2,
             allocation_seed="test",
@@ -110,8 +112,12 @@ class NoSeedDiscoveryTests(unittest.TestCase):
 def _empty_saturating_round():
     """A round that reaches novelty saturation with an empty screened-in set."""
     screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 2, "provenance_blinded": True, "records": []}
-    provenance = {"scope_version": 1, "records": [], "safety_cap_reached": False}
+    provenance = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 2, "records": [], "safety_cap_reached": False}
     previous = {
+        "operation": "orthogonal-pilot-adjudication",
+        "ok": True,
+        "scope_version": 1,
+        "round": 1,
         "consecutive_saturated_rounds": 1,
         "seen_pmids": [],
         "included_pmids": [],
@@ -139,7 +145,7 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
 
     def test_empty_saturation_with_bottleneck_verdict_is_blocked(self):
         screening, provenance, previous = _empty_saturating_round()
-        discrimination = {"scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "topic-core"}
+        discrimination = {"operation": "orthogonal-pilot-discrimination", "ok": True, "scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "topic-core"}
         state, ledger = no_seed.adjudicate(
             screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
             allocation_seed="test", discrimination=discrimination,
@@ -153,7 +159,7 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
         # The binding gate must respect basis too: a large single-concept proxy blocks
         # saturation as indeterminate, not as an over-confident discovery-bottleneck.
         screening, provenance, previous = _empty_saturating_round()
-        discrimination = {"scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "single-concept-proxy"}
+        discrimination = {"operation": "orthogonal-pilot-discrimination", "ok": True, "scope_version": 1, "discriminating_volume": 5000, "discriminating_basis": "single-concept-proxy"}
         state, ledger = no_seed.adjudicate(
             screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
             allocation_seed="test", discrimination=discrimination,
@@ -165,7 +171,7 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
 
     def test_empty_saturation_with_sparse_verdict_is_accepted(self):
         screening, provenance, previous = _empty_saturating_round()
-        discrimination = {"scope_version": 1, "discriminating_volume": 80, "discriminating_basis": "topic-core"}
+        discrimination = {"operation": "orthogonal-pilot-discrimination", "ok": True, "scope_version": 1, "discriminating_volume": 80, "discriminating_basis": "topic-core"}
         state, ledger = no_seed.adjudicate(
             screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2,
             allocation_seed="test", discrimination=discrimination,
@@ -194,8 +200,8 @@ class VolumeDiscriminationGateTests(unittest.TestCase):
             "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "scope",
         }
         screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 3, "provenance_blinded": True, "records": [record]}
-        provenance = {"scope_version": 1, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
-        previous = {"consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
+        provenance = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 3, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
+        previous = {"operation": "orthogonal-pilot-adjudication", "ok": True, "scope_version": 1, "round": 2, "consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
         state, ledger = no_seed.adjudicate(
             screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
         )
@@ -257,8 +263,8 @@ class UserDecisionTests(unittest.TestCase):
             "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "scope",
         }
         screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 3, "provenance_blinded": True, "records": [record]}
-        provenance = {"scope_version": 1, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
-        previous = {"consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
+        provenance = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 3, "records": [{"candidate_id": candidate_id, "pmid": "1", "pilot_types": ["mesh-led"], "pilot_labels": ["mesh"]}], "safety_cap_reached": False}
+        previous = {"operation": "orthogonal-pilot-adjudication", "ok": True, "scope_version": 1, "round": 2, "consecutive_saturated_rounds": 2, "seen_pmids": ["1"], "included_pmids": ["1"], "vocabulary_terms": [], "adjudicated_records": []}
         state, _ = no_seed.adjudicate(
             screening, provenance, previous_state=previous, scope_version=1, required_saturated_rounds=2, allocation_seed="test"
         )
@@ -461,7 +467,9 @@ class InternalConvergenceTests(unittest.TestCase):
             "records": screening_records,
         }
         provenance_artifact = {
+            "operation": "orthogonal-pilot-provenance",
             "scope_version": 1,
+            "round": 1,
             "safety_cap_reached": False,
             "records": provenance_records,
         }
@@ -547,7 +555,7 @@ class InternalConvergenceTests(unittest.TestCase):
             prov_records.append({"candidate_id": cid, "pmid": pmid, "pilot_types": fams, "pilot_labels": fams})
         screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 1,
                      "provenance_blinded": True, "records": screening_records}
-        prov = {"scope_version": 1, "pilot_types": sorted(no_seed.PILOT_TYPES),
+        prov = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 1, "pilot_types": sorted(no_seed.PILOT_TYPES),
                 "safety_cap_reached": False, "records": prov_records}
         state, _ = no_seed.adjudicate(
             screening, prov, previous_state=None, scope_version=1,
@@ -572,7 +580,7 @@ class InternalConvergenceTests(unittest.TestCase):
             prov_records.append({"candidate_id": cid, "pmid": pmid, "pilot_types": fams, "pilot_labels": fams})
         screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 1,
                      "provenance_blinded": True, "records": screening_records}
-        prov = {"scope_version": 1, "safety_cap_reached": False, "records": prov_records}
+        prov = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 1, "safety_cap_reached": False, "records": prov_records}
         return no_seed.adjudicate(
             screening, prov, previous_state=None, scope_version=1,
             required_saturated_rounds=2, allocation_seed="test",
@@ -589,7 +597,7 @@ class InternalConvergenceTests(unittest.TestCase):
         # all 20 accumulated screened-in records and keep the recall-risk signal.
         empty_screening = {"operation": "orthogonal-pilot-screening", "scope_version": 1, "round": 2,
                            "provenance_blinded": True, "records": []}
-        empty_prov = {"scope_version": 1, "safety_cap_reached": False, "records": []}
+        empty_prov = {"operation": "orthogonal-pilot-provenance", "scope_version": 1, "round": 2, "safety_cap_reached": False, "records": []}
         state2, _ = no_seed.adjudicate(
             empty_screening, empty_prov, previous_state=state1, scope_version=1,
             required_saturated_rounds=2, allocation_seed="test",

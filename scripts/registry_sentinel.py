@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 
 CTGOV_API = "https://clinicaltrials.gov/api/v2/studies"
-PMID_RE = re.compile(r"(?<!\d)([1-9]\d{4,9})(?!\d)")
+PMID_RE = re.compile(r"(?<!\d)([1-9]\d{0,9})(?!\d)")
 DECISIONS = {"include", "exclude", "uncertain", "pending"}
 ACTIVE_STATUSES = {"RECRUITING", "NOT_YET_RECRUITING", "ENROLLING_BY_INVITATION", "ACTIVE_NOT_RECRUITING"}
 
@@ -82,6 +82,27 @@ def protocol_binding(path: str | None, scope_version: int) -> dict[str, Any]:
         "information_source_mode": mode,
         "external_validation": external,
     }
+
+
+def validate_stage_input(
+    value: Any,
+    *,
+    path: str,
+    operations: set[str],
+    binding: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("operation") not in operations:
+        raise RegistryError(
+            f"Input {path} must be one of: {', '.join(sorted(operations))}"
+        )
+    for key in ("scope_version", "protocol_id", "protocol_sha256", "information_source_mode"):
+        if value.get(key) != binding.get(key):
+            raise RegistryError(f"Input {path} {key} does not match the current protocol")
+    return value
+
+
+def input_receipt(path: str) -> dict[str, str]:
+    return {"path": str(Path(path).resolve()), "sha256": file_sha256(path)}
 
 
 def http_json(url: str, *, timeout: int = 60) -> dict[str, Any]:
@@ -272,6 +293,7 @@ def merge_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for extra in matches[1:]:
             for key in ("registry_ids", "registry_sources", "linked_publications"):
                 target[key] = target.get(key, []) + extra.get(key, [])
+            target.setdefault("source_records", []).extend(extra.get("source_records", []))
             groups.remove(extra)
         for key in ("registry_ids", "registry_sources", "linked_publications"):
             target[key] = target.get(key, []) + record.get(key, [])
@@ -499,26 +521,33 @@ def main() -> int:
         elif args.command == "source-status":
             artifact = {"operation": "registry-source-status", "source": args.source, "status": args.status, "reason": args.reason, "run_utc": now, "records": [], **binding}
         elif args.command == "merge":
-            inputs = [read_json(path) for path in args.inputs]
-            for value in inputs:
-                if value.get("scope_version") != args.scope_version:
-                    raise RegistryError("Input registry artifact scope_version mismatch")
+            inputs = [
+                validate_stage_input(
+                    read_json(path),
+                    path=path,
+                    operations={"registry-search", "registry-import", "registry-source-status"},
+                    binding=binding,
+                )
+                for path in args.inputs
+            ]
             records = merge_records([record for value in inputs for record in value.get("records", [])])
-            artifact = {"operation": "registry-merge", "run_utc": now, "input_artifacts": args.inputs, "record_count": len(records), "records": records, **binding}
+            artifact = {"operation": "registry-merge", "run_utc": now, "input_artifacts": [input_receipt(path) for path in args.inputs], "record_count": len(records), "records": records, **binding}
         elif args.command == "screen":
-            source = read_json(args.ledger)
-            if source.get("operation") != "registry-merge":
-                raise RegistryError("screen requires a registry-merge ledger")
+            source = validate_stage_input(
+                read_json(args.ledger), path=args.ledger, operations={"registry-merge"}, binding=binding
+            )
             records = source.get("records") or []
             bad = [r.get("trial_id") for r in records if r.get("eligibility_decision") not in DECISIONS - {"pending"}]
             uncertain = [r.get("trial_id") for r in records if r.get("eligibility_decision") == "uncertain"]
             missing_reason = [r.get("trial_id") for r in records if not str(r.get("eligibility_reason") or "").strip()]
             if bad or missing_reason or (uncertain and not args.allow_uncertain):
                 raise RegistryError(f"Registry screening incomplete: invalid/pending={bad}, missing reasons={missing_reason}, uncertain={uncertain}")
-            artifact = {"operation": "registry-screen", "run_utc": now, "screening_complete": True, "records": records, **binding}
+            artifact = {"operation": "registry-screen", "run_utc": now, "input_artifact": input_receipt(args.ledger), "screening_complete": True, "records": records, **binding}
         elif args.command == "link-pubmed":
-            source = read_json(args.ledger)
-            if source.get("operation") != "registry-screen" or source.get("screening_complete") is not True:
+            source = validate_stage_input(
+                read_json(args.ledger), path=args.ledger, operations={"registry-screen"}, binding=binding
+            )
+            if source.get("screening_complete") is not True:
                 raise RegistryError("link-pubmed requires a completed registry-screen artifact")
             records = source.get("records") or []
             if args.links_file:
@@ -527,14 +556,17 @@ def main() -> int:
                 apply_links(records, links)
             for record in records:
                 record["publication_status"] = publication_class(record)
-            artifact = {"operation": "registry-publication-link", "run_utc": now, "records": records, **binding}
+            artifact = {"operation": "registry-publication-link", "run_utc": now, "input_artifact": input_receipt(args.ledger), "links_input": input_receipt(args.links_file) if args.links_file else None, "records": records, **binding}
         else:
-            source = read_json(args.ledger)
-            if source.get("operation") != "registry-publication-link":
-                raise RegistryError("evaluate-pubmed requires a registry-publication-link artifact")
+            source = validate_stage_input(
+                read_json(args.ledger),
+                path=args.ledger,
+                operations={"registry-publication-link"},
+                binding=binding,
+            )
             records = source.get("records") or []
             summary = evaluate(records, load_retrieved_pmids(args.retrieved_pmids_file))
-            artifact = {"operation": "external-pubmed-benchmark", "run_utc": now, "retrieved_pmids_input": {"path": str(Path(args.retrieved_pmids_file).resolve()), "sha256": file_sha256(args.retrieved_pmids_file)}, "records": records, "summary": summary, "handoff_blocked": bool(summary["unresolved_pubmed_misses"]), **binding}
+            artifact = {"operation": "external-pubmed-benchmark", "run_utc": now, "input_artifact": input_receipt(args.ledger), "retrieved_pmids_input": input_receipt(args.retrieved_pmids_file), "records": records, "summary": summary, "handoff_blocked": bool(summary["unresolved_pubmed_misses"]), **binding}
         write_json(args.output, artifact)
         print(json.dumps({"ok": True, "operation": artifact["operation"], "output": args.output, "record_count": len(artifact.get("records", []))}, indent=2))
         return 0

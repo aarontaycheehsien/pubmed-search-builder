@@ -89,7 +89,8 @@ def complete_retrieval_sets(
     results: dict[str, dict[str, Any]] = {}
     for item in variants:
         label = str(item["label"])
-        query = str(item["query"])
+        query = pubmed_tool.normalize_query(str(item["query"]))
+        query_sha256 = hashlib.sha256(query.encode("utf-8")).hexdigest()
         if isinstance(supplied, dict) and label in supplied:
             source = supplied[label]
             if not isinstance(source, dict):
@@ -101,7 +102,26 @@ def complete_retrieval_sets(
                 raise ScreeningBurdenError(
                     f"Retrieval set {label!r} must declare complete=true and total_count equal to the complete PMID list length"
                 )
-            results[label] = {"label": label, "variant_id": item.get("variant_id"), "query": query, "total_count": total, "ranked_pmids": pmids, "source": "provided-complete-export"}
+            source_query = pubmed_tool.normalize_query(str(source.get("query") or ""))
+            if source_query != query or source.get("query_sha256") != query_sha256:
+                raise ScreeningBurdenError(
+                    f"Retrieval set {label!r} is not bound to the current normalized query"
+                )
+            if source.get("sort") != "relevance" or not str(source.get("retrieved_at_utc") or "").strip():
+                raise ScreeningBurdenError(
+                    f"Retrieval set {label!r} requires sort='relevance' and retrieved_at_utc provenance"
+                )
+            results[label] = {
+                "label": label,
+                "variant_id": item.get("variant_id"),
+                "query": query,
+                "query_sha256": query_sha256,
+                "total_count": total,
+                "ranked_pmids": pmids,
+                "sort": "relevance",
+                "retrieved_at_utc": source["retrieved_at_utc"],
+                "source": "provided-complete-export",
+            }
             continue
         count_result = pubmed_tool.esearch(client, query, retmax=0, retstart=0, sort="relevance")
         total = int(count_result.get("count", 0) or 0)
@@ -114,7 +134,17 @@ def complete_retrieval_sets(
         pmids = pubmed_tool.dedup_preserving_order([str(value) for value in full.get("pmids", [])])
         if len(pmids) != total:
             raise ScreeningBurdenError(f"PubMed returned an incomplete PMID frame for variant {label!r}: {len(pmids)}/{total}")
-        results[label] = {"label": label, "variant_id": item.get("variant_id"), "query": query, "total_count": total, "ranked_pmids": pmids, "source": "pubmed-complete-frame"}
+        results[label] = {
+            "label": label,
+            "variant_id": item.get("variant_id"),
+            "query": query,
+            "query_sha256": query_sha256,
+            "total_count": total,
+            "ranked_pmids": pmids,
+            "sort": "relevance",
+            "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source": "pubmed-complete-frame",
+        }
     return results
 
 
@@ -200,6 +230,9 @@ def sample_variants(
                 "label": label,
                 "variant_id": item.get("variant_id"),
                 "query": item["query"],
+                "query_sha256": item.get("query_sha256") or hashlib.sha256(
+                    pubmed_tool.normalize_query(str(item["query"])).encode("utf-8")
+                ).hexdigest(),
                 "total_count": item["total_count"],
                 "retrieval_frame_complete": True,
                 "retrieval_frame_source": item["source"],
@@ -208,7 +241,7 @@ def sample_variants(
                 "protocol_status": (
                     "main-authoritative"
                     if label == baseline_label
-                    else "permitted"
+                    else "focused-prioritization-only"
                     if policy and str(item.get("variant_id") or "") in set(policy.get("permitted_focused_variant_ids", []))
                     else "diagnostic-only"
                 ),
@@ -332,9 +365,21 @@ def estimate_variant(row: dict[str, Any], labels: dict[str, str]) -> dict[str, A
     }
 
 
-def resolve_holdout(candidate_ledger: str | None, explicit_pmids: list[str]) -> tuple[list[str], str]:
+def resolve_holdout(
+    candidate_ledger: str | None,
+    explicit_pmids: list[str],
+    *,
+    scope_version: int,
+    policy: dict[str, Any] | None,
+) -> tuple[list[str], str]:
     if candidate_ledger:
-        pmids, meta = pubmed_tool.candidate_ledger_pmids(candidate_ledger, "validation")
+        pmids, meta = pubmed_tool.candidate_ledger_pmids(
+            candidate_ledger,
+            "validation",
+            expected_scope_version=scope_version,
+            expected_protocol_id=policy.get("protocol_id") if policy else None,
+            expected_protocol_sha256=policy.get("protocol_sha256") if policy else None,
+        )
         if meta.get("independent") is not True:
             raise ScreeningBurdenError("Candidate ledger lacks an independent holdout; burden comparison requires held-out recall")
         return pmids, f"candidate-ledger:{candidate_ledger}"
@@ -407,12 +452,28 @@ def estimate_burden(
         row for row in variants
         if row["recall_requirement_met"]
         and row["precision_estimate"] is not None
-        and row.get("protocol_status") != "diagnostic-only"
+        and row.get("protocol_status") not in {"diagnostic-only", "focused-prioritization-only"}
+    ]
+    focused_eligible = [
+        row for row in variants
+        if row["recall_requirement_met"]
+        and row["precision_estimate"] is not None
+        and row.get("protocol_status") == "focused-prioritization-only"
     ]
     recommended = None
     if len(eligible) >= 2:
         recommended = min(
             eligible,
+            key=lambda row: (
+                float(row["estimated_records_screened_per_relevant_report"] or float("inf")),
+                int(row["total_count"]),
+                str(row["label"]),
+            ),
+        )["label"]
+    focused_recommended = None
+    if focused_eligible:
+        focused_recommended = min(
+            focused_eligible,
             key=lambda row: (
                 float(row["estimated_records_screened_per_relevant_report"] or float("inf")),
                 int(row["total_count"]),
@@ -433,7 +494,9 @@ def estimate_burden(
             "burden_used_for_selection": len(eligible) >= 2,
             "eligible_variant_labels": [row["label"] for row in eligible],
             "recommended_variant_label": recommended,
-            "rule": "Compare burden only among variants meeting the held-out recall requirement; choose the lowest estimated records screened per relevant report.",
+            "focused_prioritization_label": focused_recommended,
+            "main_remains_authoritative": True,
+            "rule": "Adoption compares only co-authoritative variants meeting held-out recall. Focused variants may prioritize screening but cannot replace the recall-first main strategy.",
             "diagnostic_only_variant_labels": [row["label"] for row in variants if row.get("protocol_status") == "diagnostic-only"],
         },
         "caveat": "Precision and burden are sample estimates. Counts remain exact workload totals; uncertain labels are reported as sensitivity bounds.",
@@ -504,7 +567,12 @@ def main(argv: list[str] | None = None) -> int:
                 or sample.get("protocol_sha256") != policy.get("protocol_sha256")
             ):
                 raise ScreeningBurdenError("Sample artifact does not match the supplied protocol")
-            heldout_pmids, heldout_source = resolve_holdout(args.candidate_ledger, args.heldout_pmids or [])
+            heldout_pmids, heldout_source = resolve_holdout(
+                args.candidate_ledger,
+                args.heldout_pmids or [],
+                scope_version=args.scope_version,
+                policy=policy,
+            )
             result = estimate_burden(
                 client,
                 sample,

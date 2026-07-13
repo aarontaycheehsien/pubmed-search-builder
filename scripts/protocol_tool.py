@@ -209,10 +209,12 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
         sources = _array(external.get("sources"), "$.external_validation.sources", issues)
         for index, source in enumerate(sources):
             _text(source, f"$.external_validation.sources[{index}]", issues, lock=lock)
+        if len(sources) != len(set(sources)):
+            issues.append("$.external_validation.sources must contain unique values")
         if lock and status == "enabled" and not sources:
             issues.append("$.external_validation.sources must not be empty when external validation is enabled")
-        if lock and status == "enabled" and purpose != "pubmed-leak-detection":
-            issues.append("$.external_validation.purpose must be pubmed-leak-detection when enabled")
+        if purpose != "pubmed-leak-detection":
+            issues.append("$.external_validation.purpose must be pubmed-leak-detection")
     if source_mode == "pubmed-plus-external-validation":
         if not isinstance(external, dict) or external.get("status") != "enabled":
             issues.append("$.external_validation.status must be enabled in pubmed-plus-external-validation mode")
@@ -654,6 +656,11 @@ def verify_protocol(protocol_path: Path, receipt_path: Path) -> dict[str, Any]:
         issues.append("receipt artifacts must contain the five generated derivatives")
         rows = []
     seen_types: set[str] = set()
+    expected_artifacts = build_artifacts(protocol, protocol_path)
+    expected_by_type = {
+        artifact["artifact_type"]: (name, artifact)
+        for name, artifact in expected_artifacts.items()
+    }
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             issues.append(f"receipt artifact {index} must be an object")
@@ -667,6 +674,11 @@ def verify_protocol(protocol_path: Path, receipt_path: Path) -> dict[str, Any]:
             issues.append(f"receipt artifact {index} path is invalid")
             continue
         path = (receipt_path.parent / path_value).resolve()
+        expected_row = expected_by_type.get(artifact_type)
+        if expected_row is not None and path.name != expected_row[0]:
+            issues.append(
+                f"generated artifact {path_value} has unexpected filename; expected {expected_row[0]}"
+            )
         if not path.is_file():
             issues.append(f"generated artifact is missing: {path_value}")
             continue
@@ -679,6 +691,10 @@ def verify_protocol(protocol_path: Path, receipt_path: Path) -> dict[str, Any]:
         except ProtocolError as exc:
             issues.append(str(exc))
             continue
+        if expected_row is not None and artifact != expected_row[1]:
+            issues.append(
+                f"generated artifact {path_value} does not match the derivative compiled from the protocol"
+            )
         envelope = {
             "artifact_type": artifact_type,
             "artifact_version": ARTIFACT_VERSION,

@@ -861,6 +861,7 @@ def build_sweep_result(
     max_term_descriptor_lookups: int,
     term_descriptor_lookup_count: int,
     term_descriptor_lookup_skipped: int,
+    pending_term_descriptor_lookups: list[dict[str, str]],
     max_detail_candidates: int,
     detail_candidate_count: int,
     detail_candidate_skipped: int,
@@ -901,6 +902,7 @@ def build_sweep_result(
             "units_pending": units_pending,
         },
         "pending": pending,
+        "pending_term_descriptor_lookups": pending_term_descriptor_lookups,
         "errors": errors,
         "max_seconds": max_seconds,
         "elapsed_seconds": round(elapsed_seconds, 3),
@@ -953,6 +955,7 @@ def sweep(
     candidate_sources: defaultdict[str, list[str]] = defaultdict(list)
     term_descriptor_lookup_count = 0
     term_descriptor_lookup_skipped = 0
+    pending_term_descriptor_lookups: list[dict[str, str]] = []
     seen_term_resources: set[str] = set()
     errors: list[dict[str, object]] = []
     details_map: dict[str, object] = {}
@@ -988,6 +991,7 @@ def sweep(
             max_term_descriptor_lookups=max_term_descriptor_lookups,
             term_descriptor_lookup_count=term_descriptor_lookup_count,
             term_descriptor_lookup_skipped=term_descriptor_lookup_skipped,
+            pending_term_descriptor_lookups=pending_term_descriptor_lookups,
             max_detail_candidates=max_detail_candidates,
             detail_candidate_count=len(details_map),
             detail_candidate_skipped=len(details_skipped_ids),
@@ -1058,6 +1062,14 @@ def sweep(
                     do_lookup = True
                 else:
                     term_descriptor_lookup_skipped += 1
+                    pending_item = {
+                        "term_resource": term_resource,
+                        "match": match,
+                        "label": label,
+                        "term_label": str(item.get("label") or ""),
+                    }
+                    if pending_item not in pending_term_descriptor_lookups:
+                        pending_term_descriptor_lookups.append(pending_item)
                     do_lookup = False
                 if not do_lookup:
                     continue
@@ -1117,6 +1129,8 @@ def sweep(
         reasons.append("time_budget")
     if errors:
         reasons.append("request_errors")
+    if pending_term_descriptor_lookups:
+        reasons.append("term_descriptor_lookup_budget")
     stop_reason = "+".join(reasons) if reasons else None
     status = "partial" if (reasons or pending) else "complete"
 

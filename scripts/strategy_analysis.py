@@ -250,7 +250,7 @@ def recommend_block(
         name="focused_variant_min_reduction_percent",
     )
     role = str(block.get("role") or block.get("proposed_role") or "required").strip().casefold()
-    fragility = str(block.get("fragility") or "stable").strip().casefold()
+    fragility = str(block.get("fragility") or "stable").strip().casefold().replace("_", "-")
     parent = str(block.get("parent_block") or block.get("move_inside_or_block") or "").strip()
     losses = list(development.get("lost_due_to_full", [])) + list(holdout.get("lost_due_to_full", []))
     reduction = float(workload_change.get("reduction_percent") or 0)
@@ -640,11 +640,20 @@ def empirical_fragility(
     }
 
 
-def ledger_sets(path: str | None) -> tuple[list[str], list[str], dict[str, Any] | None]:
+def ledger_sets(
+    path: str | None,
+    scope_version: int,
+    policy: dict[str, Any] | None,
+) -> tuple[list[str], list[str], dict[str, Any] | None]:
     if not path:
         return [], [], None
-    development, development_meta = pubmed_tool.candidate_ledger_pmids(path, "discovery")
-    holdout, holdout_meta = pubmed_tool.candidate_ledger_pmids(path, "validation")
+    binding = {
+        "expected_scope_version": scope_version,
+        "expected_protocol_id": policy.get("protocol_id") if policy else None,
+        "expected_protocol_sha256": policy.get("protocol_sha256") if policy else None,
+    }
+    development, development_meta = pubmed_tool.candidate_ledger_pmids(path, "discovery", **binding)
+    holdout, holdout_meta = pubmed_tool.candidate_ledger_pmids(path, "validation", **binding)
     independent = bool(holdout_meta.get("independent"))
     if not independent:
         holdout = []
@@ -705,7 +714,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         policy = protocol_policy(args.protocol_file, args.scope_version)
         registry = load_block_registry(args.block_registry, policy, args.scope_version)
-        ledger_development, ledger_holdout, ledger_meta = ledger_sets(args.candidate_ledger)
+        ledger_development, ledger_holdout, ledger_meta = ledger_sets(
+            args.candidate_ledger, args.scope_version, policy
+        )
         development = pubmed_tool.dedup_preserving_order(ledger_development + [str(v) for v in args.development_pmids])
         holdout = pubmed_tool.dedup_preserving_order(ledger_holdout + [str(v) for v in args.holdout_pmids])
         pubmed_tool.assert_numeric_pmids(development, source="development PMID input")

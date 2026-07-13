@@ -258,6 +258,24 @@ class ProtocolCompilationTests(unittest.TestCase):
             with self.assertRaisesRegex(protocol_tool.ProtocolError, "hash mismatch"):
                 protocol_tool.verify_protocol(source, receipt_path)
 
+    def test_verify_rebuilds_derivative_even_if_receipt_hash_is_forged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            source = self.write_protocol(directory)
+            receipt_path = directory / "protocol_compile_v1.json"
+            protocol_tool.compile_protocol(source, directory, receipt_path)
+            artifact = directory / "concept_ledger_v1.json"
+            value = json.loads(artifact.read_text(encoding="utf-8"))
+            value["concepts"][0]["label"] = "Forged derivative"
+            artifact.write_text(json.dumps(value), encoding="utf-8")
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            item = next(row for row in receipt["artifacts"] if row["artifact_type"] == "concept-ledger")
+            item["sha256"] = protocol_tool.file_sha256(artifact)
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+            with self.assertRaisesRegex(protocol_tool.ProtocolError, "does not match the derivative compiled"):
+                protocol_tool.verify_protocol(source, receipt_path)
+
     def test_protocol_identity_ignores_source_whitespace(self):
         left = valid_protocol()
         right = copy.deepcopy(left)

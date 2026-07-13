@@ -23,9 +23,9 @@ class CandidateLedgerInputTests(unittest.TestCase):
             ledger = self.write_ledger(
                 Path(td),
                 [
-                    {"pmid": "1", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "discovery"},
-                    {"pmid": "2", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "holdout"},
-                    {"pmid": "3", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "both"},
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "discovery"},
+                    {"pmid": "2", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "holdout"},
+                    {"pmid": "3", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "both"},
                 ],
             )
             discovery, discovery_meta = pubmed_tool.candidate_ledger_pmids(str(ledger), "discovery")
@@ -39,11 +39,23 @@ class CandidateLedgerInputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ledger = self.write_ledger(
                 Path(td),
-                [{"pmid": "3", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "both"}],
+                [{"pmid": "3", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "both"}],
             )
             pmids, metadata = pubmed_tool.candidate_ledger_pmids(str(ledger), "validation")
             self.assertEqual(pmids, ["3"])
             self.assertFalse(metadata["independent"])
+
+    def test_duplicate_discovery_and_holdout_rows_are_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            ledger = self.write_ledger(
+                Path(td),
+                [
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "discovery"},
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "yes", "use": "holdout"},
+                ],
+            )
+            with self.assertRaises(pubmed_tool.PubMedError):
+                pubmed_tool.candidate_ledger_pmids(str(ledger), "validation")
 
     def test_ledger_native_cli_sources_parse(self):
         parser = pubmed_tool.build_parser()

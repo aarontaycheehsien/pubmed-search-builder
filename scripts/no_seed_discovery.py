@@ -71,6 +71,7 @@ def classify_discrimination_verdict(
     sparse_ceiling: int,
     bottleneck_floor: int,
 ) -> str:
+    validate_volume_thresholds(sparse_ceiling, bottleneck_floor)
     """Map a measured broad-topic volume to a verdict, respecting the basis confidence.
 
     A ``single-concept-proxy`` volume is the max over single essential-concept counts,
@@ -605,6 +606,63 @@ def blind_id(scope_version: int, pmid: str) -> str:
     return "C" + hashlib.sha256(f"scope:{scope_version}:pmid:{pmid}".encode("utf-8")).hexdigest()[:12].upper()
 
 
+def validate_volume_thresholds(sparse_ceiling: int, bottleneck_floor: int) -> None:
+    if sparse_ceiling < 0 or bottleneck_floor < 0 or sparse_ceiling >= bottleneck_floor:
+        raise NoSeedDiscoveryError(
+            "Volume thresholds require 0 <= sparse_volume_ceiling < bottleneck_volume_floor"
+        )
+
+
+def validate_bound_artifact(
+    payload: dict[str, Any],
+    *,
+    label: str,
+    operation: str,
+    scope_version: int,
+    binding: dict[str, Any] | None,
+) -> None:
+    if payload.get("operation") != operation or payload.get("ok", True) is not True:
+        raise NoSeedDiscoveryError(f"{label} has the wrong operation or is not successful")
+    if payload.get("scope_version") != scope_version:
+        raise NoSeedDiscoveryError(f"{label} scope_version does not match --scope-version")
+    if binding:
+        for key in ("protocol_id", "protocol_sha256"):
+            if payload.get(key) != binding.get(key):
+                raise NoSeedDiscoveryError(f"{label} {key} does not match the supplied protocol")
+
+
+def validate_previous_state(
+    previous_state: dict[str, Any] | None,
+    *,
+    scope_version: int,
+    binding: dict[str, Any] | None,
+    next_round: int,
+) -> None:
+    if previous_state is None:
+        return
+    validate_bound_artifact(
+        previous_state,
+        label="Previous adjudication state",
+        operation="orthogonal-pilot-adjudication",
+        scope_version=scope_version,
+        binding=binding,
+    )
+    previous_round = previous_state.get("round")
+    if not isinstance(previous_round, int) or previous_round >= next_round:
+        raise NoSeedDiscoveryError("Previous adjudication round must precede the current round")
+    seen_pmids: set[str] = set()
+    for index, record in enumerate(previous_state.get("adjudicated_records", []), start=1):
+        if not isinstance(record, dict):
+            raise NoSeedDiscoveryError(f"Previous adjudication record {index} must be an object")
+        pmid = str(record.get("pmid") or "")
+        candidate_id = str(record.get("candidate_id") or "")
+        if not pmid.isdigit() or candidate_id != blind_id(scope_version, pmid):
+            raise NoSeedDiscoveryError(f"Previous adjudication record {index} has invalid candidate identity")
+        if pmid in seen_pmids:
+            raise NoSeedDiscoveryError(f"Previous adjudication repeats PMID {pmid}")
+        seen_pmids.add(pmid)
+
+
 def discover(
     client: pubmed_tool.NcbiClient,
     pilots: list[dict[str, Any]],
@@ -615,6 +673,12 @@ def discover(
     safety_cap_per_pilot: int,
     binding: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    validate_previous_state(
+        previous_state,
+        scope_version=scope_version,
+        binding=binding,
+        next_round=round_number,
+    )
     seen_pmids = {str(value) for value in (previous_state or {}).get("seen_pmids", [])}
     provenance: dict[str, dict[str, Any]] = {}
     pilot_receipts = []
@@ -693,7 +757,7 @@ def discover(
                 "eligibility_reason": "",
             }
         )
-        provenance_records.append(provenance[pmid])
+    provenance_records = [provenance[pmid] for pmid in sorted(provenance, key=int)]
     screening = {
         "operation": "orthogonal-pilot-screening",
         "scope_version": scope_version,
@@ -750,19 +814,39 @@ def adjudicate(
     recapture_converged_completeness: float = RECAPTURE_CONVERGED_COMPLETENESS,
     recapture_undersaturated_completeness: float = RECAPTURE_UNDERSATURATED_COMPLETENESS,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    validate_volume_thresholds(sparse_volume_ceiling, bottleneck_volume_floor)
     if screening.get("operation") != "orthogonal-pilot-screening" or screening.get("provenance_blinded") is not True:
         raise NoSeedDiscoveryError("Screening artifact is not a provenance-blinded orthogonal-pilot file")
-    if screening.get("scope_version") != scope_version or provenance.get("scope_version") != scope_version:
-        raise NoSeedDiscoveryError("Screening/provenance scope_version mismatch")
-    if binding:
-        for key in ("protocol_id", "protocol_sha256"):
-            if screening.get(key) != binding.get(key) or provenance.get(key) != binding.get(key):
-                raise NoSeedDiscoveryError(f"Screening/provenance {key} does not match the supplied protocol")
+    validate_bound_artifact(
+        screening,
+        label="Screening artifact",
+        operation="orthogonal-pilot-screening",
+        scope_version=scope_version,
+        binding=binding,
+    )
+    validate_bound_artifact(
+        provenance,
+        label="Provenance artifact",
+        operation="orthogonal-pilot-provenance",
+        scope_version=scope_version,
+        binding=binding,
+    )
+    round_number = screening.get("round")
+    if not isinstance(round_number, int) or provenance.get("round") != round_number:
+        raise NoSeedDiscoveryError("Screening/provenance round mismatch")
+    validate_previous_state(
+        previous_state,
+        scope_version=scope_version,
+        binding=binding,
+        next_round=round_number,
+    )
     provenance_by_id = {
         str(item.get("candidate_id")): item
         for item in provenance.get("records", [])
         if isinstance(item, dict)
     }
+    if len(provenance_by_id) != len([item for item in provenance.get("records", []) if isinstance(item, dict)]):
+        raise NoSeedDiscoveryError("Provenance artifact repeats candidate IDs")
     current_records = []
     for index, record in enumerate(screening.get("records", []), start=1):
         if not isinstance(record, dict):
@@ -779,13 +863,36 @@ def adjudicate(
         if not reason:
             raise NoSeedDiscoveryError(f"Screening record {index} requires eligibility_reason")
         prov = provenance_by_id[candidate_id]
+        pmid = str(record.get("pmid") or "")
+        if not pmid.isdigit() or candidate_id != blind_id(scope_version, pmid):
+            raise NoSeedDiscoveryError(f"Screening record {index} has invalid candidate identity")
+        if str(prov.get("pmid") or "") != pmid:
+            raise NoSeedDiscoveryError(f"Screening record {index} does not match its provenance PMID")
         current_records.append(
             {
                 **record,
                 "provenance_detail": {"pilot_types": prov.get("pilot_types", []), "pilot_labels": prov.get("pilot_labels", [])},
             }
         )
-    previous_records = [item for item in (previous_state or {}).get("adjudicated_records", []) if isinstance(item, dict)]
+    previous_records = [dict(item) for item in (previous_state or {}).get("adjudicated_records", []) if isinstance(item, dict)]
+    provenance_by_pmid = {
+        str(item.get("pmid")): item
+        for item in provenance.get("records", [])
+        if isinstance(item, dict) and str(item.get("pmid") or "").isdigit()
+    }
+    for item in previous_records:
+        pmid = str(item.get("pmid") or "")
+        observed = provenance_by_pmid.get(pmid)
+        if not observed:
+            continue
+        detail = dict(item.get("provenance_detail") or {})
+        detail["pilot_types"] = sorted(
+            set(detail.get("pilot_types", [])) | set(observed.get("pilot_types", []))
+        )
+        detail["pilot_labels"] = sorted(
+            set(detail.get("pilot_labels", [])) | set(observed.get("pilot_labels", []))
+        )
+        item["provenance_detail"] = detail
     combined_by_pmid = {str(item.get("pmid")): item for item in previous_records + current_records if item.get("pmid")}
     combined = list(combined_by_pmid.values())
     previous_included = {str(value) for value in (previous_state or {}).get("included_pmids", [])}
@@ -839,8 +946,13 @@ def adjudicate(
             )
             saturation_reached = False
         else:
-            if discrimination.get("scope_version") != scope_version:
-                raise NoSeedDiscoveryError("Discrimination artifact scope_version does not match --scope-version")
+            validate_bound_artifact(
+                discrimination,
+                label="Discrimination artifact",
+                operation="orthogonal-pilot-discrimination",
+                scope_version=scope_version,
+                binding=binding,
+            )
             volume = int(discrimination.get("discriminating_volume", 0) or 0)
             verdict = classify_discrimination_verdict(
                 volume,
@@ -1113,6 +1225,10 @@ def freeze_benchmark(
         for key in ("protocol_id", "protocol_sha256"):
             if screening.get(key) != binding.get(key):
                 raise NoSeedDiscoveryError(f"Benchmark screening {key} does not match the supplied protocol")
+    if screening.get("safety_cap_reached") is True:
+        raise NoSeedDiscoveryError(
+            "Benchmark harvest reached its retrieval safety cap; resolve the cap before freezing"
+        )
     records = [item for item in screening.get("records", []) if isinstance(item, dict)]
     if screened:
         pmids = []

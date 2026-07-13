@@ -26,7 +26,7 @@ Note: this strategy covers PubMed only. The review protocol should specify addit
 
 ### Items 3-7. Study registries, online resources and browsing, citation searching, contacts, other methods
 
-Out of scope for this skill. Flag in the output that supplementary search methods are typically required for systematic reviews and similar evidence syntheses, including trial registries (ClinicalTrials.gov, ICTRP), grey literature sources, citation searching (forward and backward), reference list checking, hand-searching key journals, and contacting authors or experts. These are reported separately by the review team.
+In the default `pubmed-only` mode these are out of scope; flag that supplementary methods are typically required and are reported separately by the review team. When the locked protocol enables `pubmed-plus-external-validation`, report the registry sources, interfaces, exact queries/imports, run and data dates, and results produced by the registry sentinel under the applicable item. Citation expansion performed for candidate discovery or a prior-review benchmark must likewise be reported accurately, while grey literature, hand-searching, and contacts remain outside this skill unless independently supplied as evidence.
 
 ## Section 2: Search strategies
 
@@ -147,7 +147,7 @@ Use this block in the final report, mapping each line to the PRISMA-S item numbe
 ```text
 Database (Item 1): PubMed (NLM interface).
 Multi-database searching (Item 2): [out of scope for this strategy; see protocol for full database list].
-Study registries / online resources / citation searching / contacts / other methods (Items 3-7): [reported separately by review team].
+Study registries / online resources / citation searching / contacts / other methods (Items 3-7): [for pubmed-only, reported separately by review team; for protocol-enabled external validation or citation discovery, report the exact sources, interfaces, queries/imports, dates, and results here, and identify the remaining methods as not performed by this skill].
 Full search strategy (Item 8): [reproduced verbatim above].
 Limits and restrictions (Item 9): [list each, with justification and recall risk note].
 Search filters (Item 10): [name each filter/hedge, source, version, interface, exact syntax, adaptations, reason for use, recall risk, and seed-PMID impact; or state none used].

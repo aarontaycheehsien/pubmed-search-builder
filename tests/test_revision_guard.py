@@ -76,6 +76,13 @@ class RevisionGuardTests(unittest.TestCase):
         self.assertIn("required-blocks-justified", result["failed_checks"])
         self.assertIn("scope-unchanged-or-explicit", result["failed_checks"])
 
+    def test_removing_required_block_without_scope_change_fails(self):
+        payload = self.payload()
+        payload["baseline"]["required_block_ids"] = ["condition", "setting"]
+        payload["revised"]["required_block_ids"] = ["condition"]
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertIn("required-blocks-justified", result["failed_checks"])
+
     def test_no_low_signal_makes_narrowing_check_not_applicable(self):
         result = guard.evaluate_payload(self.payload(), base=self.root)
         self.assertFalse(result["low_signal_active"])
@@ -92,6 +99,15 @@ class RevisionGuardTests(unittest.TestCase):
         self.assertTrue(result["low_signal_active"])
         self.assertIn("no-narrowing-under-low-signal", result["failed_checks"])
         self.assertEqual(result["disposition"], "revert-to-baseline")
+
+    def test_explicit_false_cannot_override_derived_low_signal(self):
+        payload = self.payload()
+        payload["low_signal"] = {"active": False, "no_included_candidates": True}
+        payload["baseline"]["search_term_count"] = 12
+        payload["revised"]["search_term_count"] = 7
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertTrue(result["low_signal_active"])
+        self.assertIn("no-narrowing-under-low-signal", result["failed_checks"])
 
     def test_breadth_preserved_under_low_signal_passes(self):
         payload = self.payload()

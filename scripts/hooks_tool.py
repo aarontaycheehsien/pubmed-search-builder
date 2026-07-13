@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -18,6 +19,7 @@ LOW_COUNT_DECISIONS = (
     "low-count-plausible",
     "blocked-pending-decision",
 )
+LOW_COUNT_THRESHOLD = 500
 
 
 def read_file(path: str) -> str:
@@ -563,6 +565,10 @@ def detect_filter_fragments(text: str) -> list[str]:
         r"\bcochrane hsss\b",
         r"\bmcMaster\b",
         r"\bISSG\b",
+        r"\b(?:humans?|animals?)\s*\[(?:mesh|mesh terms|mh)\]",
+        r"\b[a-z]+\[(?:lang|la)\]",
+        r"\[(?:dp|date - publication|publication date|edat|crdt)\]",
+        r"\b(?:adult|child|adolescent|aged|infant)\s*\[(?:mesh|mesh terms|mh)\]",
     ]
     found = []
     for pattern in patterns:
@@ -570,13 +576,41 @@ def detect_filter_fragments(text: str) -> list[str]:
     return found[:20]
 
 
-def final_qa(strategy: str) -> dict[str, object]:
+def parenthesis_nesting_issue(text: str) -> str | None:
+    depth = 0
+    quoted = False
+    escaped = False
+    for char in text:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quoted:
+            escaped = True
+            continue
+        if char == '"':
+            quoted = not quoted
+            continue
+        if quoted:
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return "A closing parenthesis appears before its matching opening parenthesis."
+    if depth:
+        return "The strategy has unmatched opening or closing parentheses."
+    return None
+
+
+def final_qa(strategy: str, warning_dispositions: dict[str, str] | None = None) -> dict[str, object]:
     issues: list[dict[str, str]] = []
     text = strategy.strip()
     lower = text.lower()
 
-    if text.count("(") != text.count(")"):
-        add_issue(issues, "error", "unbalanced_parentheses", "The strategy has an unequal number of opening and closing parentheses.")
+    nesting_issue = parenthesis_nesting_issue(text)
+    if nesting_issue:
+        add_issue(issues, "error", "unbalanced_parentheses", nesting_issue)
     if text.count('"') % 2:
         add_issue(issues, "error", "unbalanced_quotes", "The strategy has an odd number of quotation marks.")
 
@@ -623,6 +657,20 @@ def final_qa(strategy: str) -> dict[str, object]:
             ", ".join(intents or filters),
         )
 
+    warning_dispositions = warning_dispositions or {}
+    warning_codes = sorted({issue["code"] for issue in issues if issue["severity"] == "warning"})
+    unresolved_warning_codes = [
+        code for code in warning_codes if not str(warning_dispositions.get(code) or "").strip()
+    ]
+    for code in unresolved_warning_codes:
+        add_issue(
+            issues,
+            "error",
+            "unresolved_warning",
+            "Every recall-reducing QA warning requires a recorded disposition and rationale.",
+            code,
+        )
+
     followups = [
         "Resolve all errors before final output.",
         "Document justification for all recall-reducing warnings that remain.",
@@ -646,6 +694,9 @@ def final_qa(strategy: str) -> dict[str, object]:
         "ok": not any(issue["severity"] == "error" for issue in issues),
         "issue_counts": severity_counts(issues),
         "issues": issues,
+        "warning_dispositions": warning_dispositions,
+        "unresolved_warning_codes": unresolved_warning_codes,
+        "strategy_sha256": hashlib.sha256(strategy.encode("utf-8")).hexdigest(),
         "required_followups": followups,
     }
 
@@ -911,6 +962,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     qa_parser = subparsers.add_parser("final-qa", help="Run pre-final strategy QA checks.")
     add_text_args(qa_parser, "strategy", "strategy text")
+    qa_parser.add_argument(
+        "--warning-dispositions-file",
+        help="JSON object mapping each warning code to its reviewed disposition/rationale.",
+    )
     qa_parser.add_argument("--output", help="Optional path to save the hook JSON.")
 
     filter_parser = subparsers.add_parser("filter-check", help="Check methodological filter requirements.")
@@ -932,7 +987,6 @@ def build_parser() -> argparse.ArgumentParser:
     low_parser = subparsers.add_parser("low-count-review", help="Review a final topic-only strategy with a low PubMed count.")
     add_text_args(low_parser, "strategy", "strategy text")
     low_parser.add_argument("--final-count", type=int, required=True)
-    low_parser.add_argument("--threshold", type=int, default=500)
     low_parser.add_argument("--decision", choices=LOW_COUNT_DECISIONS, default="undecided")
     low_parser.add_argument("--rationale")
     low_parser.add_argument("--relaxed-variant-tested", action="store_true")
@@ -958,7 +1012,13 @@ def main(argv: list[str] | None = None) -> int:
             parser=parser,
             label="strategy",
         )
-        write_json(final_qa(strategy), args.output)
+        dispositions = {}
+        if args.warning_dispositions_file:
+            value = json.loads(Path(args.warning_dispositions_file).read_text(encoding="utf-8-sig"))
+            if not isinstance(value, dict):
+                parser.error("--warning-dispositions-file must contain a JSON object")
+            dispositions = {str(key): str(reason) for key, reason in value.items()}
+        write_json(final_qa(strategy, dispositions), args.output)
     elif args.command == "filter-check":
         text = read_text_source(
             text=args.text,
@@ -992,7 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
             low_count_review(
                 strategy,
                 final_count=args.final_count,
-                threshold=args.threshold,
+                threshold=LOW_COUNT_THRESHOLD,
                 decision=args.decision,
                 rationale=args.rationale,
                 relaxed_variant_tested=args.relaxed_variant_tested,

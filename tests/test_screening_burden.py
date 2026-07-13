@@ -101,6 +101,32 @@ class ScreeningBurdenTests(unittest.TestCase):
         self.assertIsNone(result["selection"]["recommended_variant_label"])
         self.assertEqual(result["selection"]["diagnostic_only_variant_labels"], ["focused"])
 
+    def test_focused_variant_is_only_a_prioritization_recommendation(self):
+        sample = self.labelled_sample()
+        sample["variants"][0]["protocol_status"] = "main-authoritative"
+        sample["variants"][1]["protocol_status"] = "focused-prioritization-only"
+        with mock.patch.object(burden.pubmed_tool, "retrieve_against_pmids", return_value={"10", "11"}):
+            result = burden.estimate_burden(
+                FakeClient(), sample, scope_version=1, heldout_pmids=["10", "11"], heldout_source="test", minimum_recall=1.0
+            )
+        self.assertIsNone(result["selection"]["recommended_variant_label"])
+        self.assertEqual(result["selection"]["focused_prioritization_label"], "focused")
+        self.assertTrue(result["selection"]["main_remains_authoritative"])
+
+    def test_provided_retrieval_frame_must_match_query(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "frames.json"
+            path.write_text(json.dumps({"main": {
+                "complete": True, "total_count": 1, "pmids": ["1"],
+                "query": "OLD", "query_sha256": "wrong", "sort": "relevance",
+                "retrieved_at_utc": "2026-07-13T00:00:00Z",
+            }}), encoding="utf-8")
+            with self.assertRaises(burden.ScreeningBurdenError):
+                burden.complete_retrieval_sets(
+                    FakeClient(), [{"label": "main", "query": "NEW"}],
+                    retrieval_sets_file=str(path), auto_retrieval_limit=10,
+                )
+
     def test_auto_sampling_rejects_incomplete_top_result_frame(self):
         with mock.patch.object(burden.pubmed_tool, "esearch", return_value={"count": 100, "pmids": []}):
             with self.assertRaises(burden.ScreeningBurdenError):

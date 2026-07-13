@@ -31,9 +31,9 @@ class VocabularyLearningTests(unittest.TestCase):
             {
                 "scope_version": 1,
                 "records": [
-                    {"pmid": "1", "decision": "include", "use": "discovery", "eligibility_reason": "in scope"},
-                    {"pmid": "2", "decision": "exclude", "use": "neither", "eligibility_reason": "wrong condition"},
-                    {"pmid": "3", "decision": "include", "use": "holdout", "eligibility_reason": "in scope"},
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "use": "discovery", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                    {"pmid": "2", "provenance": "user-seed", "decision": "exclude", "use": "neither", "title_abstract_reviewed": True, "eligibility_reason": "wrong condition"},
+                    {"pmid": "3", "provenance": "user-seed", "decision": "include", "use": "holdout", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
                 ],
             },
         )
@@ -160,6 +160,34 @@ class VocabularyLearningTests(unittest.TestCase):
         blocks = self.write("blocks.json", [{"label": "condition", "query": "asthma[tiab]"}])
         with self.assertRaises(vocabulary.VocabularyLearningError):
             vocabulary.retest_learning(FakeClient(), extraction, blocks, scope_version=1, sample_size=5)
+
+    def test_missing_record_is_retried_after_blocker_is_fixed(self):
+        records = self.write("records_missing.json", {"records": []})
+        first = vocabulary.extract_learning(
+            self.scope, self.ledger, records, self.config, scope_version=1
+        )
+        self.assertEqual(first["processed_included_pmids"], [])
+        self.assertTrue(first["processing_blockers"])
+        second = vocabulary.extract_learning(
+            self.scope,
+            self.ledger,
+            self.records,
+            self.config,
+            scope_version=1,
+            previous_learning=first,
+        )
+        self.assertEqual(second["processed_included_pmids"], ["1"])
+        self.assertTrue(second["proposals"])
+
+    def test_invalid_unscreened_ledger_cannot_drive_proposals(self):
+        invalid = self.write(
+            "invalid_ledger.json",
+            {"scope_version": 1, "records": [{"pmid": "1", "decision": "include", "use": "discovery"}]},
+        )
+        with self.assertRaises(vocabulary.VocabularyLearningError):
+            vocabulary.extract_learning(
+                self.scope, invalid, self.records, self.config, scope_version=1
+            )
 
 
 if __name__ == "__main__":
