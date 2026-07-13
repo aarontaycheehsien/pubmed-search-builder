@@ -4,16 +4,34 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import hashlib
+import http.client
 import json
+import math
 import os
+import random
 import re
+import shutil
+import socket
+import ssl
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
+
+
+# Keep the real wall clock available even when sweep tests replace the module-level ``time``
+# object with a deterministic monotonic clock.
+SYSTEM_WALL_TIME = time.time
 
 
 LOOKUP_BASE = "https://id.nlm.nih.gov/mesh/lookup"
@@ -27,14 +45,74 @@ DEFAULT_SWEEP_MAX_SECONDS = 120.0
 DEFAULT_EMAIL = ""
 DEFAULT_TOOL = "codex-search-strategy-check"
 REQUEST_TIMEOUT_SECONDS = 30
-REQUEST_RETRIES = 3
 REQUEST_BACKOFF_SECONDS = 1.0
 REQUEST_CACHE: dict[tuple[str, tuple[tuple[str, str], ...]], object] = {}
 ENV_FILE_CACHE: dict[str, str] | None = None
+CACHE_SCHEMA_VERSION = 1
+RESILIENCE_STATE_VERSION = 1
+DEFAULT_CACHE_TTL_DAYS = 1.0
+DEFAULT_RATE_LIMIT = 2.0
+DEFAULT_THROTTLE_RETRIES = 1
+DEFAULT_TRANSIENT_RETRIES = 3
+DEFAULT_CIRCUIT_THRESHOLD = 3
+DEFAULT_CIRCUIT_COOLDOWN_SECONDS = 120.0
+DEFAULT_CIRCUIT_MAX_COOLDOWN_SECONDS = 900.0
+DEFAULT_STATE_LOCK_TIMEOUT_SECONDS = 5.0
+DEFAULT_STATE_LOCK_STALE_SECONDS = 30.0
+ERROR_RATE_LIMIT_LIKE = "rate_limit_like"
+ERROR_TRANSIENT = "transient"
+ERROR_HARD = "hard"
+CACHE_BYPASS = False
+NETWORK_METRICS: defaultdict[str, float] = defaultdict(float)
+FALLBACK_HOST_STATE: dict[str, dict[str, object]] = {}
+FALLBACK_STATE_LOCK = threading.Lock()
+CACHE_MISS = object()
+TRANSPORT_METRIC_NAMES = (
+    "logical_requests",
+    "logical_successes",
+    "logical_failures",
+    "memory_cache_hits",
+    "persistent_cache_hits",
+    "persistent_cache_stale",
+    "cache_corrupt_or_unreadable",
+    "cache_misses",
+    "persistent_cache_writes",
+    "cache_write_errors",
+    "network_requests",
+    "retry_attempts",
+    "retry_sleep_seconds",
+    "pacing_wait_seconds",
+    "rate_limit_like_events",
+    "transient_events",
+    "hard_events",
+    "circuit_open_events",
+    "resilience_state_errors",
+)
 
 
 class MeshError(Exception):
     pass
+
+
+class CircuitOpenError(MeshError):
+    def __init__(self, host: str, cooldown_until: float, *, half_open_probe: bool = False):
+        self.host = host
+        self.cooldown_until = cooldown_until
+        self.half_open_probe = half_open_probe
+        if cooldown_until > 0:
+            until = datetime.fromtimestamp(cooldown_until, timezone.utc).isoformat().replace("+00:00", "Z")
+            detail = f" until {until}"
+        else:
+            detail = ""
+        reason = "another half-open probe is already running" if half_open_probe else "the host is cooling down"
+        super().__init__(
+            f"MeSH RDF circuit is open for {host}{detail}: {reason}. Fresh cached responses remain "
+            "available; retry after the cooldown or inspect `mesh_tool.py circuit status`."
+        )
+
+
+class TransientResponseError(Exception):
+    """A successful HTTP response whose body cannot yet be used as JSON."""
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -116,58 +194,635 @@ def mesh_user_agent() -> str:
     return user_agent
 
 
-def retry_delay(attempt: int) -> float:
-    return REQUEST_BACKOFF_SECONDS * (2**attempt)
+def env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    raw = read_env(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value >= minimum else default
 
 
-def transient_http_error(exc: urllib.error.HTTPError) -> bool:
-    return exc.code in {408, 429, 500, 502, 503, 504}
+def env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    raw = read_env(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def wall_time() -> float:
+    return SYSTEM_WALL_TIME()
+
+
+def monotonic_time() -> float:
+    return time.monotonic()
+
+
+def sleep_seconds(seconds: float) -> None:
+    if seconds > 0:
+        time.sleep(seconds)
+
+
+def cache_enabled() -> bool:
+    if CACHE_BYPASS:
+        return False
+    return read_env("MESH_CACHE", "on").strip().casefold() not in {"0", "false", "no", "off", "disabled"}
+
+
+def mesh_cache_dir() -> Path:
+    configured = read_env("MESH_CACHE_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    codex_home = read_env("CODEX_HOME", "").strip()
+    root = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    return (root / "cache" / "pubmed-search-builder" / "mesh-rdf").resolve()
+
+
+def response_cache_dir() -> Path:
+    return mesh_cache_dir() / "responses"
+
+
+def resilience_state_path() -> Path:
+    return mesh_cache_dir() / "resilience_state.json"
+
+
+def resilience_lock_path() -> Path:
+    return mesh_cache_dir() / "resilience_state.lock"
+
+
+def metric_add(name: str, value: float = 1.0) -> None:
+    NETWORK_METRICS[name] += value
+
+
+def metrics_snapshot() -> dict[str, float]:
+    return dict(NETWORK_METRICS)
+
+
+def metrics_delta(start: dict[str, float]) -> dict[str, int | float]:
+    keys = set(TRANSPORT_METRIC_NAMES) | set(start) | set(NETWORK_METRICS)
+    result: dict[str, int | float] = {}
+    for key in sorted(keys):
+        value = NETWORK_METRICS.get(key, 0.0) - start.get(key, 0.0)
+        result[key] = round(value, 3) if not float(value).is_integer() else int(value)
+    return result
+
+
+def request_cache_key(url: str, params: dict[str, str]) -> str:
+    canonical = json.dumps(
+        {
+            "schema_version": CACHE_SCHEMA_VERSION,
+            "url": url,
+            "params": sorted((str(key), str(value)) for key, value in params.items()),
+            "accept": "application/json",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def cache_entry_path(url: str, params: dict[str, str]) -> Path:
+    digest = request_cache_key(url, params)
+    return response_cache_dir() / digest[:2] / f"{digest}.json"
+
+
+def atomic_write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            Path(temporary).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def persistent_cache_get(url: str, params: dict[str, str]) -> object:
+    path = cache_entry_path(url, params)
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return CACHE_MISS
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        metric_add("cache_corrupt_or_unreadable")
+        return CACHE_MISS
+    if not isinstance(entry, dict) or entry.get("schema_version") != CACHE_SCHEMA_VERSION:
+        metric_add("cache_corrupt_or_unreadable")
+        return CACHE_MISS
+    request = entry.get("request")
+    expected_request = {"url": url, "params": {str(key): str(value) for key, value in sorted(params.items())}}
+    if request != expected_request:
+        metric_add("cache_corrupt_or_unreadable")
+        return CACHE_MISS
+    fetched_epoch = entry.get("fetched_epoch")
+    if not isinstance(fetched_epoch, (int, float)):
+        metric_add("cache_corrupt_or_unreadable")
+        return CACHE_MISS
+    ttl_seconds = env_float("MESH_CACHE_TTL_DAYS", DEFAULT_CACHE_TTL_DAYS) * 86400.0
+    if ttl_seconds <= 0 or wall_time() - float(fetched_epoch) > ttl_seconds:
+        metric_add("persistent_cache_stale")
+        return CACHE_MISS
+    if "payload" not in entry:
+        metric_add("cache_corrupt_or_unreadable")
+        return CACHE_MISS
+    metric_add("persistent_cache_hits")
+    return entry["payload"]
+
+
+def persistent_cache_put(url: str, params: dict[str, str], payload: object) -> None:
+    now = wall_time()
+    entry = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "request": {"url": url, "params": {str(key): str(value) for key, value in sorted(params.items())}},
+        "fetched_epoch": now,
+        "fetched_utc": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "payload": payload,
+    }
+    try:
+        atomic_write_json(cache_entry_path(url, params), entry)
+        metric_add("persistent_cache_writes")
+    except OSError:
+        metric_add("cache_write_errors")
+
+
+def cache_stats() -> dict[str, object]:
+    root = response_cache_dir()
+    now = wall_time()
+    ttl_seconds = env_float("MESH_CACHE_TTL_DAYS", DEFAULT_CACHE_TTL_DAYS) * 86400.0
+    counts = {"fresh": 0, "stale": 0, "corrupt": 0, "bytes": 0}
+    for path in root.rglob("*.json") if root.is_dir() else []:
+        try:
+            counts["bytes"] += path.stat().st_size
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            fetched = entry.get("fetched_epoch") if isinstance(entry, dict) else None
+            if not isinstance(fetched, (int, float)) or entry.get("schema_version") != CACHE_SCHEMA_VERSION:
+                counts["corrupt"] += 1
+            elif ttl_seconds <= 0 or now - float(fetched) > ttl_seconds:
+                counts["stale"] += 1
+            else:
+                counts["fresh"] += 1
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            counts["corrupt"] += 1
+    return {
+        "operation": "mesh-cache-stats",
+        "cache_dir": str(mesh_cache_dir()),
+        "enabled": cache_enabled(),
+        "ttl_days": env_float("MESH_CACHE_TTL_DAYS", DEFAULT_CACHE_TTL_DAYS),
+        **counts,
+    }
+
+
+def clear_cache() -> dict[str, object]:
+    before = cache_stats()
+    root = response_cache_dir()
+    if root.exists():
+        shutil.rmtree(root)
+    REQUEST_CACHE.clear()
+    return {
+        "operation": "mesh-cache-clear",
+        "cache_dir": str(mesh_cache_dir()),
+        "removed_entries": int(before["fresh"]) + int(before["stale"]) + int(before["corrupt"]),
+        "removed_bytes": before["bytes"],
+    }
+
+
+def default_host_state() -> dict[str, object]:
+    return {
+        "state": "closed",
+        "consecutive_rate_limit_failures": 0,
+        "cooldown_until": 0.0,
+        "open_count": 0,
+        "half_open_probe_until": 0.0,
+        "next_allowed_at": 0.0,
+        "updated_epoch": 0.0,
+    }
+
+
+def default_resilience_state() -> dict[str, object]:
+    return {"schema_version": RESILIENCE_STATE_VERSION, "hosts": {}}
+
+
+def normalized_host_state(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    normalized = default_host_state()
+    state = str(source.get("state") or "closed")
+    normalized["state"] = state if state in {"closed", "open", "half-open"} else "closed"
+    for name in ("cooldown_until", "half_open_probe_until", "next_allowed_at", "updated_epoch"):
+        try:
+            numeric = float(source.get(name) or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            numeric = 0.0
+        normalized[name] = numeric if math.isfinite(numeric) and numeric >= 0 else 0.0
+    for name in ("consecutive_rate_limit_failures", "open_count"):
+        try:
+            numeric = int(source.get(name) or 0)
+        except (TypeError, ValueError, OverflowError):
+            numeric = 0
+        normalized[name] = max(0, numeric)
+    return normalized
+
+
+def read_resilience_state() -> dict[str, object]:
+    try:
+        state = json.loads(resilience_state_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return default_resilience_state()
+    if not isinstance(state, dict) or state.get("schema_version") != RESILIENCE_STATE_VERSION:
+        return default_resilience_state()
+    if not isinstance(state.get("hosts"), dict):
+        state["hosts"] = {}
+    return state
+
+
+@contextmanager
+def resilience_state_lock():
+    path = resilience_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timeout = DEFAULT_STATE_LOCK_TIMEOUT_SECONDS
+    stale_after = DEFAULT_STATE_LOCK_STALE_SECONDS
+    deadline = monotonic_time() + timeout
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(descriptor, f"pid={os.getpid()} epoch={wall_time()}\n".encode("ascii", errors="replace"))
+            except OSError:
+                os.close(descriptor)
+                descriptor = None
+                path.unlink(missing_ok=True)
+                raise
+        except FileExistsError:
+            try:
+                stale = wall_time() - path.stat().st_mtime > stale_after
+            except OSError:
+                stale = False
+            if stale:
+                try:
+                    path.unlink()
+                    continue
+                except OSError:
+                    pass
+            if monotonic_time() >= deadline:
+                raise OSError(f"Timed out acquiring MeSH resilience state lock: {path}")
+            sleep_seconds(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def mutate_host_state(host: str, mutation):
+    try:
+        with resilience_state_lock():
+            state = read_resilience_state()
+            hosts = state.setdefault("hosts", {})
+            current = hosts.get(host)
+            current = normalized_host_state(current)
+            result = mutation(current)
+            current["updated_epoch"] = wall_time()
+            hosts[host] = current
+            atomic_write_json(resilience_state_path(), state)
+            return result
+    except OSError:
+        metric_add("resilience_state_errors")
+        with FALLBACK_STATE_LOCK:
+            current = normalized_host_state(FALLBACK_HOST_STATE.get(host, {}))
+            result = mutation(current)
+            current["updated_epoch"] = wall_time()
+            FALLBACK_HOST_STATE[host] = current
+            return result
+
+
+def current_host_state(host: str) -> dict[str, object]:
+    state = read_resilience_state()
+    hosts = state.get("hosts", {})
+    current = hosts.get(host) if isinstance(hosts, dict) else None
+    if isinstance(current, dict):
+        return normalized_host_state(current)
+    with FALLBACK_STATE_LOCK:
+        return normalized_host_state(FALLBACK_HOST_STATE.get(host, {}))
+
+
+def circuit_before_request(host: str) -> bool:
+    now = wall_time()
+    probe_window = max(10.0, REQUEST_TIMEOUT_SECONDS * 2.0)
+
+    def mutation(current: dict[str, object]) -> dict[str, object]:
+        state = str(current.get("state") or "closed")
+        cooldown_until = float(current.get("cooldown_until") or 0.0)
+        probe_until = float(current.get("half_open_probe_until") or 0.0)
+        if state == "open" and cooldown_until > now:
+            return {"allowed": False, "cooldown_until": cooldown_until, "half_open_probe": False}
+        if state in {"open", "half-open"}:
+            if state == "half-open" and probe_until > now:
+                return {"allowed": False, "cooldown_until": probe_until, "half_open_probe": True}
+            current["state"] = "half-open"
+            current["half_open_probe_until"] = now + probe_window
+            return {"allowed": True, "half_open_owner": True}
+        return {"allowed": True, "half_open_owner": False}
+
+    result = mutate_host_state(host, mutation)
+    if not result.get("allowed"):
+        metric_add("circuit_open_events")
+        raise CircuitOpenError(
+            host,
+            float(result.get("cooldown_until") or 0.0),
+            half_open_probe=bool(result.get("half_open_probe")),
+        )
+    return bool(result.get("half_open_owner"))
+
+
+def circuit_success(host: str) -> None:
+    def mutation(current: dict[str, object]) -> None:
+        current.update(
+            {
+                "state": "closed",
+                "consecutive_rate_limit_failures": 0,
+                "cooldown_until": 0.0,
+                "open_count": 0,
+                "half_open_probe_until": 0.0,
+            }
+        )
+
+    mutate_host_state(host, mutation)
+
+
+def circuit_rate_limit_failure(host: str) -> dict[str, object]:
+    now = wall_time()
+    threshold = env_int("MESH_CIRCUIT_THRESHOLD", DEFAULT_CIRCUIT_THRESHOLD, minimum=1)
+    base_cooldown = env_float("MESH_CIRCUIT_COOLDOWN", DEFAULT_CIRCUIT_COOLDOWN_SECONDS)
+    max_cooldown = env_float("MESH_CIRCUIT_MAX_COOLDOWN", DEFAULT_CIRCUIT_MAX_COOLDOWN_SECONDS)
+
+    def mutation(current: dict[str, object]) -> dict[str, object]:
+        was_half_open = current.get("state") == "half-open"
+        failures = int(current.get("consecutive_rate_limit_failures") or 0) + 1
+        current["consecutive_rate_limit_failures"] = failures
+        should_open = was_half_open or failures >= threshold
+        if should_open:
+            open_count = int(current.get("open_count") or 0) + 1
+            cooldown = min(max_cooldown, base_cooldown * (2 ** max(0, open_count - 1)))
+            current.update(
+                {
+                    "state": "open",
+                    "open_count": open_count,
+                    "cooldown_until": now + cooldown,
+                    "half_open_probe_until": 0.0,
+                }
+            )
+        return {"opened": should_open, "state": current.get("state"), "cooldown_until": current.get("cooldown_until")}
+
+    return mutate_host_state(host, mutation)
+
+
+def circuit_transient_failure(host: str, *, half_open_owner: bool) -> None:
+    now = wall_time()
+    base_cooldown = env_float("MESH_CIRCUIT_COOLDOWN", DEFAULT_CIRCUIT_COOLDOWN_SECONDS)
+    max_cooldown = env_float("MESH_CIRCUIT_MAX_COOLDOWN", DEFAULT_CIRCUIT_MAX_COOLDOWN_SECONDS)
+
+    def mutation(current: dict[str, object]) -> None:
+        if not half_open_owner:
+            current["consecutive_rate_limit_failures"] = 0
+            return
+        open_count = int(current.get("open_count") or 0) + 1
+        cooldown = min(max_cooldown, base_cooldown * (2 ** max(0, open_count - 1)))
+        current.update(
+            {
+                "state": "open",
+                "open_count": open_count,
+                "cooldown_until": now + cooldown,
+                "half_open_probe_until": 0.0,
+            }
+        )
+
+    mutate_host_state(host, mutation)
+
+
+def circuit_hard_failure(host: str, *, half_open_owner: bool) -> None:
+    if half_open_owner:
+        circuit_success(host)
+        return
+
+    def mutation(current: dict[str, object]) -> None:
+        current["consecutive_rate_limit_failures"] = 0
+
+    mutate_host_state(host, mutation)
+
+
+def reserve_request_slot(host: str) -> float:
+    requests_per_second = env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT)
+    if requests_per_second <= 0:
+        return 0.0
+    now = wall_time()
+    interval = 1.0 / requests_per_second
+    jitter = random.uniform(0.0, interval * 0.1)
+
+    def mutation(current: dict[str, object]) -> float:
+        scheduled = max(now, float(current.get("next_allowed_at") or 0.0))
+        current["next_allowed_at"] = scheduled + interval + jitter
+        return scheduled
+
+    scheduled = float(mutate_host_state(host, mutation))
+    wait = max(0.0, scheduled - now)
+    if wait:
+        metric_add("pacing_wait_seconds", wait)
+        sleep_seconds(wait)
+    return wait
+
+
+def circuit_status(host: str = "id.nlm.nih.gov") -> dict[str, object]:
+    current = current_host_state(host)
+    return {
+        "operation": "mesh-circuit-status",
+        "host": host,
+        **current,
+        "now_epoch": wall_time(),
+        "state_file": str(resilience_state_path()),
+    }
+
+
+def reset_circuit(host: str = "id.nlm.nih.gov") -> dict[str, object]:
+    def mutation(current: dict[str, object]) -> None:
+        next_allowed = current.get("next_allowed_at", 0.0)
+        current.clear()
+        current.update(default_host_state())
+        current["next_allowed_at"] = next_allowed
+
+    mutate_host_state(host, mutation)
+    return {"operation": "mesh-circuit-reset", "host": host, "state": "closed"}
+
+
+def retry_after_seconds(exc: Exception) -> float | None:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return None
+    value = exc.headers.get("Retry-After") if exc.headers else None
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, retry_at.timestamp() - wall_time())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def retry_delay(attempt: int, retry_after: float | None = None) -> float:
+    if retry_after is not None:
+        return retry_after
+    base = REQUEST_BACKOFF_SECONDS * (2**attempt)
+    return base + random.uniform(0.0, base * 0.25)
+
+
+def classify_request_error(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 429 or (exc.code == 403 and retry_after_seconds(exc) is not None):
+            return ERROR_RATE_LIMIT_LIKE
+        if exc.code in {408, 500, 502, 503, 504}:
+            return ERROR_TRANSIENT
+        return ERROR_HARD
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return classify_request_error(reason) if isinstance(reason, Exception) else ERROR_TRANSIENT
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return ERROR_HARD
+    if isinstance(exc, (ConnectionResetError, http.client.RemoteDisconnected)):
+        return ERROR_RATE_LIMIT_LIKE
+    if isinstance(exc, (TimeoutError, socket.timeout, socket.gaierror, http.client.IncompleteRead, TransientResponseError)):
+        return ERROR_TRANSIENT
+    if isinstance(exc, ssl.SSLError):
+        return ERROR_TRANSIENT
+    if isinstance(exc, OSError):
+        code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+        message = str(exc).casefold()
+        if code in {errno.ECONNRESET, 10054} or any(
+            marker in message for marker in ("reset by peer", "forcibly closed", "recv failure", "connection reset")
+        ):
+            return ERROR_RATE_LIMIT_LIKE
+        return ERROR_TRANSIENT
+    return ERROR_HARD
+
+
+def error_detail(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:2000]
+        except OSError:
+            body = ""
+        suffix = f": {body}" if body else ""
+        return f"HTTP {exc.code}{suffix}"
+    if isinstance(exc, urllib.error.URLError):
+        return str(exc.reason)
+    return str(exc)
+
+
+def close_request_error(exc: Exception) -> None:
+    if isinstance(exc, urllib.error.HTTPError):
+        exc.close()
+    elif isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, urllib.error.HTTPError):
+        exc.reason.close()
 
 
 def request_json(url: str, params: dict[str, str]) -> object:
-    cache_key = (url, tuple(sorted(params.items())))
-    if cache_key in REQUEST_CACHE:
-        return REQUEST_CACHE[cache_key]
+    memory_key = (url, tuple(sorted(params.items())))
+    use_cache = cache_enabled()
+    if use_cache and memory_key in REQUEST_CACHE:
+        metric_add("memory_cache_hits")
+        return REQUEST_CACHE[memory_key]
+    if use_cache:
+        persisted = persistent_cache_get(url, params)
+        if persisted is not CACHE_MISS:
+            REQUEST_CACHE[memory_key] = persisted
+            return persisted
+    metric_add("cache_misses")
+    metric_add("logical_requests")
 
     encoded = urllib.parse.urlencode(params)
     req = urllib.request.Request(f"{url}?{encoded}", method="GET")
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", mesh_user_agent())
+    host = urllib.parse.urlparse(url).hostname or "id.nlm.nih.gov"
+    retries = {ERROR_RATE_LIMIT_LIKE: 0, ERROR_TRANSIENT: 0}
+    limits = {
+        ERROR_RATE_LIMIT_LIKE: env_int("MESH_THROTTLE_RETRIES", DEFAULT_THROTTLE_RETRIES),
+        ERROR_TRANSIENT: env_int("MESH_TRANSIENT_RETRIES", DEFAULT_TRANSIENT_RETRIES),
+    }
+    attempts = 0
+    half_open_owner = False
 
-    last_error: Exception | None = None
-    for attempt in range(REQUEST_RETRIES + 1):
+    while True:
+        if attempts == 0:
+            half_open_owner = circuit_before_request(host)
+        elif not half_open_owner:
+            circuit_before_request(host)
+        reserve_request_slot(host)
+        attempts += 1
+        metric_add("network_requests")
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 raw = response.read()
-            break
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if not transient_http_error(exc) or attempt == REQUEST_RETRIES:
-                body = exc.read().decode("utf-8", errors="replace")[:2000]
-                attempts = attempt + 1
-                raise MeshError(f"MeSH HTTP {exc.code} after {attempts} attempt(s): {body}") from exc
-        except urllib.error.URLError as exc:
-            last_error = exc
-            if attempt == REQUEST_RETRIES:
-                raise MeshError(f"MeSH request failed after {attempt + 1} attempt(s): {exc.reason}") from exc
-        except TimeoutError as exc:
-            last_error = exc
-            if attempt == REQUEST_RETRIES:
-                raise MeshError(f"MeSH request timed out after {attempt + 1} attempt(s): {exc}") from exc
-        except OSError as exc:
-            last_error = exc
-            if attempt == REQUEST_RETRIES:
-                raise MeshError(f"MeSH request failed after {attempt + 1} attempt(s): {exc}") from exc
-        time.sleep(retry_delay(attempt))
-    else:
-        raise MeshError(f"MeSH request failed: {last_error}") from last_error
+            if not raw:
+                raise TransientResponseError("empty JSON response body")
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise TransientResponseError(f"invalid JSON response: {exc}") from exc
+        except CircuitOpenError:
+            raise
+        except Exception as exc:
+            classification = classify_request_error(exc)
+            retry_after = retry_after_seconds(exc)
+            metric_add(f"{classification}_events")
+            retry_limit = limits.get(classification, 0)
+            retry_count = retries.get(classification, 0)
+            if classification == ERROR_HARD or retry_count >= retry_limit:
+                metric_add("logical_failures")
+                if classification == ERROR_RATE_LIMIT_LIKE:
+                    circuit_result = circuit_rate_limit_failure(host)
+                    if circuit_result.get("opened"):
+                        metric_add("circuit_open_events")
+                        close_request_error(exc)
+                        raise CircuitOpenError(host, float(circuit_result.get("cooldown_until") or 0.0)) from exc
+                elif classification == ERROR_TRANSIENT:
+                    circuit_transient_failure(host, half_open_owner=half_open_owner)
+                else:
+                    circuit_hard_failure(host, half_open_owner=half_open_owner)
+                detail = error_detail(exc)
+                close_request_error(exc)
+                raise MeshError(f"MeSH request failed ({classification}) after {attempts} attempt(s): {detail}") from exc
+            retries[classification] = retry_count + 1
+            delay = retry_delay(retry_count, retry_after)
+            close_request_error(exc)
+            metric_add("retry_attempts")
+            metric_add("retry_sleep_seconds", delay)
+            sleep_seconds(delay)
+            continue
 
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise MeshError(f"Could not parse MeSH JSON response: {exc}") from exc
-    REQUEST_CACHE[cache_key] = data
-    return data
+        circuit_success(host)
+        metric_add("logical_successes")
+        if use_cache:
+            REQUEST_CACHE[memory_key] = data
+            persistent_cache_put(url, params, data)
+        return data
 
 
 def read_lines(path: str) -> list[str]:
@@ -865,6 +1520,8 @@ def build_sweep_result(
     max_detail_candidates: int,
     detail_candidate_count: int,
     detail_candidate_skipped: int,
+    pending_detail_descriptors: list[str],
+    transport_metrics: dict[str, int | float],
 ) -> dict[str, object]:
     """Assemble the full sweep result dict, including the completeness/recall accounting. The same
     shape is used for on-disk checkpoints and the final returned result."""
@@ -874,9 +1531,9 @@ def build_sweep_result(
     if status != "complete":
         review_required.append(
             f"Sweep is PARTIAL (stop_reason={stop_reason}): MeSH/entry-term recall is incomplete. "
-            "Rerun the labels in `pending` and any failed labels in `errors` (a separate sweep is "
-            "fine) and merge candidates before finalizing the concept block. Do not treat these "
-            "candidates as a complete MeSH layer."
+            "Rerun the labels in `pending`, unresolved term mappings, pending detail descriptors, "
+            "and any failed labels in `errors` (a separate sweep is fine), then merge candidates "
+            "before finalizing the concept block. Do not treat these candidates as a complete MeSH layer."
         )
     review_required.extend(
         [
@@ -903,6 +1560,7 @@ def build_sweep_result(
         },
         "pending": pending,
         "pending_term_descriptor_lookups": pending_term_descriptor_lookups,
+        "pending_detail_descriptors": pending_detail_descriptors,
         "errors": errors,
         "max_seconds": max_seconds,
         "elapsed_seconds": round(elapsed_seconds, 3),
@@ -918,6 +1576,11 @@ def build_sweep_result(
             "max_detail_candidates": max_detail_candidates,
             "detail_candidates_used": detail_candidate_count,
             "detail_candidates_skipped": detail_candidate_skipped,
+            "transport": transport_metrics,
+            "persistent_cache_enabled": cache_enabled(),
+            "persistent_cache_dir": str(mesh_cache_dir()),
+            "rate_limit_requests_per_second": env_float("MESH_RATE_LIMIT", DEFAULT_RATE_LIMIT),
+            "circuit": circuit_status(),
         },
         "review_required": review_required,
     }
@@ -960,6 +1623,9 @@ def sweep(
     errors: list[dict[str, object]] = []
     details_map: dict[str, object] = {}
     details_skipped_ids: set[str] = set()
+    pending_detail_descriptors: list[str] = []
+    circuit_interrupted = False
+    transport_metrics_start = metrics_snapshot()
 
     start = time.monotonic()
     deadline = start + max_seconds if max_seconds and max_seconds > 0 else None
@@ -995,6 +1661,8 @@ def sweep(
             max_detail_candidates=max_detail_candidates,
             detail_candidate_count=len(details_map),
             detail_candidate_skipped=len(details_skipped_ids),
+            pending_detail_descriptors=pending_detail_descriptors,
+            transport_metrics=metrics_delta(transport_metrics_start),
         )
 
     def checkpoint(status: str, stop_reason: str | None, pending_units: list[dict[str, str]]) -> None:
@@ -1035,6 +1703,13 @@ def sweep(
                     },
                 )
                 candidate_sources[descriptor_id].append(f"descriptor:{match}:{label}")
+        except CircuitOpenError as exc:
+            circuit_interrupted = True
+            pending = [{"match": m, "label": l} for (m, l) in units[index:]]
+            errors.append(
+                {"source": "transport", "code": "circuit_open", "match": match, "label": label, "message": str(exc)}
+            )
+            break
         except MeshError as exc:
             errors.append({"source": "descriptor", "match": match, "label": label, "message": str(exc)})
 
@@ -1075,6 +1750,8 @@ def sweep(
                     continue
                 try:
                     descriptor_hits = term_descriptor_candidates(term_resource, limit=10)
+                except CircuitOpenError:
+                    raise
                 except MeshError as exc:
                     errors.append(
                         {
@@ -1099,35 +1776,61 @@ def sweep(
                     candidate_sources[descriptor_id].append(
                         f"term:{match}:{label}:{item.get('label', '')}"
                     )
+        except CircuitOpenError as exc:
+            circuit_interrupted = True
+            pending = [{"match": m, "label": l} for (m, l) in units[index:]]
+            errors.append(
+                {"source": "transport", "code": "circuit_open", "match": match, "label": label, "message": str(exc)}
+            )
+            break
         except MeshError as exc:
             errors.append({"source": "term", "match": match, "label": label, "message": str(exc)})
 
         checkpoint("partial", "in_progress", [{"match": m, "label": l} for (m, l) in units[index + 1 :]])
 
     # Detail phase: enrich ranked candidates within the same wall-clock and count budgets.
-    if include_details and not time_budget_hit:
-        detail_attempts = 0
+    ordered_detail_ids = [
+        descriptor_id
         for descriptor_id, _candidate in sorted(
             candidates.items(),
             key=lambda item: candidate_sort_key(item, candidate_sources, labels_normalized),
-        ):
-            if budget_exceeded():
-                time_budget_hit = True
-                break
-            if detail_attempts >= max_detail_candidates:
-                details_skipped_ids.add(descriptor_id)
-                continue
-            detail_attempts += 1
-            try:
-                details_map[descriptor_id] = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
-            except MeshError as exc:
-                errors.append({"source": "details", "descriptor": descriptor_id, "message": str(exc)})
-            checkpoint("partial", "in_progress", pending)
+        )
+    ]
+    eligible_detail_ids = ordered_detail_ids[:max_detail_candidates]
+    if include_details:
+        details_skipped_ids.update(ordered_detail_ids[max_detail_candidates:])
+        if circuit_interrupted or time_budget_hit:
+            pending_detail_descriptors.extend(eligible_detail_ids)
+        elif not time_budget_hit:
+            for detail_index, descriptor_id in enumerate(eligible_detail_ids):
+                if budget_exceeded():
+                    time_budget_hit = True
+                    pending_detail_descriptors.extend(eligible_detail_ids[detail_index:])
+                    break
+                try:
+                    details_map[descriptor_id] = details(descriptor_id, "terms,seealso,qualifiers").get("details", {})
+                except CircuitOpenError as exc:
+                    circuit_interrupted = True
+                    pending_detail_descriptors.extend(eligible_detail_ids[detail_index:])
+                    errors.append(
+                        {
+                            "source": "transport",
+                            "code": "circuit_open",
+                            "descriptor": descriptor_id,
+                            "message": str(exc),
+                        }
+                    )
+                    break
+                except MeshError as exc:
+                    errors.append({"source": "details", "descriptor": descriptor_id, "message": str(exc)})
+                checkpoint("partial", "in_progress", pending)
 
     reasons = []
     if time_budget_hit:
         reasons.append("time_budget")
-    if errors:
+    if circuit_interrupted:
+        reasons.append("circuit_open")
+    if any(error.get("code") != "circuit_open" for error in errors):
         reasons.append("request_errors")
     if pending_term_descriptor_lookups:
         reasons.append("term_descriptor_lookup_budget")
@@ -1209,6 +1912,10 @@ def summarize_sweep(result: dict[str, object]) -> dict[str, object]:
     }
     if result.get("pending"):
         summary["pending"] = result["pending"]
+    if result.get("pending_term_descriptor_lookups"):
+        summary["pending_term_descriptor_lookups"] = result["pending_term_descriptor_lookups"]
+    if result.get("pending_detail_descriptors"):
+        summary["pending_detail_descriptors"] = result["pending_detail_descriptors"]
     if errors:
         summary["errors"] = errors[:5]
         if len(errors) > 5:
@@ -1272,26 +1979,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MeSH RDF helper.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    def add_cache_bypass_flag(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--no-cache",
+            action="store_true",
+            help="Bypass both memory and persistent MeSH response caches for this command.",
+        )
+
     lookup_parser = subparsers.add_parser("lookup", help="Search MeSH descriptors by label.")
+    add_cache_bypass_flag(lookup_parser)
     lookup_parser.add_argument("--label", required=True)
     lookup_parser.add_argument("--match", choices=["exact", "contains", "startswith"], default="contains")
     lookup_parser.add_argument("--limit", type=int, default=10)
 
     details_parser = subparsers.add_parser("details", help="Fetch descriptor details.")
+    add_cache_bypass_flag(details_parser)
     details_parser.add_argument("--descriptor", required=True)
     details_parser.add_argument("--include", default="terms,seealso,qualifiers")
 
     terms_parser = subparsers.add_parser("terms", help="Search MeSH entry terms.")
+    add_cache_bypass_flag(terms_parser)
     terms_parser.add_argument("--label", required=True)
     terms_parser.add_argument("--match", choices=["exact", "contains", "startswith"], default="contains")
     terms_parser.add_argument("--limit", type=int, default=10)
 
     tree_parser = subparsers.add_parser("tree", help="Fetch descriptor tree context, scope, entry terms, siblings, descendants, and SCR mapping.")
+    add_cache_bypass_flag(tree_parser)
     tree_parser.add_argument("--descriptor", required=True)
     tree_parser.add_argument("--max-descendants", type=int, default=DEFAULT_MAX_TREE_DESCENDANTS)
     tree_parser.add_argument("--max-siblings", type=int, default=DEFAULT_MAX_TREE_SIBLINGS)
 
     sweep_parser = subparsers.add_parser("sweep", help="Aggressively search MeSH descriptors and entry terms for a concept plus variants.")
+    add_cache_bypass_flag(sweep_parser)
     sweep_parser.add_argument("--concept", required=True)
     sweep_parser.add_argument("--variant", action="append", default=[], help="Additional synonym/acronym/spelling/seed term. Repeat as needed.")
     sweep_parser.add_argument("--variants-file", help="Optional newline-delimited variants file. Use '-' for stdin.")
@@ -1334,17 +2053,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sparql_parser = subparsers.add_parser("sparql", help="Run a MeSH RDF SPARQL query.")
+    add_cache_bypass_flag(sparql_parser)
     sparql_parser.add_argument("query")
     sparql_parser.add_argument("--limit", type=int, default=100)
     sparql_parser.add_argument("--offset", type=int, default=0)
     sparql_parser.add_argument("--inference", action="store_true")
 
+    cache_parser = subparsers.add_parser("cache", help="Inspect or clear the persistent MeSH RDF response cache.")
+    cache_parser.add_argument("action", choices=["stats", "clear"])
+
+    circuit_parser = subparsers.add_parser("circuit", help="Inspect or reset the MeSH RDF circuit breaker.")
+    circuit_parser.add_argument("action", choices=["status", "reset"])
+    circuit_parser.add_argument("--host", default="id.nlm.nih.gov")
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    global CACHE_BYPASS
     parser = build_parser()
     args = parser.parse_args(argv)
+    CACHE_BYPASS = bool(getattr(args, "no_cache", False))
 
     try:
         if args.command == "lookup":
@@ -1372,6 +2101,10 @@ def main(argv: list[str] | None = None) -> int:
             emit_sweep(result, args)
         elif args.command == "sparql":
             write_json(sparql(args.query, args.limit, args.offset, args.inference))
+        elif args.command == "cache":
+            write_json(cache_stats() if args.action == "stats" else clear_cache())
+        elif args.command == "circuit":
+            write_json(circuit_status(args.host) if args.action == "status" else reset_circuit(args.host))
         else:
             parser.error(f"Unknown command: {args.command}")
     except MeshError as exc:
