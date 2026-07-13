@@ -64,6 +64,32 @@ def classify_topic_volume(
     return "indeterminate"
 
 
+def classify_discrimination_verdict(
+    discriminating_volume: int,
+    discriminating_basis: str | None,
+    *,
+    sparse_ceiling: int,
+    bottleneck_floor: int,
+) -> str:
+    """Map a measured broad-topic volume to a verdict, respecting the basis confidence.
+
+    A ``single-concept-proxy`` volume is the max over single essential-concept counts,
+    which is an upper bound on the true essential-AND core (the intersection can only
+    be smaller). So a proxy at/under the ceiling still *confirms* sparsity, but a proxy
+    at/over the floor cannot *confirm* a ``discovery-bottleneck`` - one large concept
+    says nothing about the size of the intersection. Proxy volumes above the ceiling are
+    therefore capped at ``indeterminate`` (which also blocks saturation) rather than
+    reported as a false, over-confident bottleneck. A ``topic-core`` basis directly
+    measures the core, so all three verdicts remain reachable.
+    """
+    verdict = classify_topic_volume(
+        discriminating_volume, sparse_ceiling=sparse_ceiling, bottleneck_floor=bottleneck_floor
+    )
+    if discriminating_basis == "single-concept-proxy" and verdict == "discovery-bottleneck":
+        return "indeterminate"
+    return verdict
+
+
 def build_user_decision(
     *,
     verdict: str,
@@ -353,6 +379,50 @@ def internal_convergence_diagnostic(
 estimate_completeness = internal_convergence_diagnostic
 
 
+def accumulated_provenance(
+    adjudicated_records: list[dict[str, Any]] | None,
+    *extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble a cumulative provenance map for the convergence diagnostic.
+
+    Per-round discovery only writes provenance for records first seen that round,
+    so a single round's provenance file cannot describe how the pilot families
+    overlap across the whole screened-in set - and it collapses to empty at the
+    saturation round, exactly when the diagnostic is read. Each adjudicated record
+    keeps the pilot families that found it in ``provenance_detail`` (captured in the
+    round it was discovered), so the accumulated ledger is the complete, correct
+    source. Any ``extra`` single-round provenance maps are unioned in as a fallback
+    for records that lack ``provenance_detail``.
+    """
+    families: dict[str, list[str]] = {}
+    order: list[str] = []
+
+    def absorb(pmid: Any, pilot_types: Any) -> None:
+        text = str(pmid or "").strip()
+        if not text:
+            return
+        if text not in families:
+            families[text] = []
+            order.append(text)
+        for family in pilot_types or []:
+            name = str(family)
+            if name and name not in families[text]:
+                families[text].append(name)
+
+    for item in adjudicated_records or []:
+        if not isinstance(item, dict):
+            continue
+        detail = item.get("provenance_detail") if isinstance(item.get("provenance_detail"), dict) else {}
+        absorb(item.get("pmid"), detail.get("pilot_types"))
+    for source in extra:
+        if not isinstance(source, dict):
+            continue
+        for item in source.get("records", []):
+            if isinstance(item, dict):
+                absorb(item.get("pmid"), item.get("pilot_types"))
+    return {"records": [{"pmid": pmid, "pilot_types": families[pmid]} for pmid in order]}
+
+
 def read_json(path: str) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -452,9 +522,19 @@ def discriminate(
     """Measure broad topic volume and emit a discrimination artifact.
 
     A ``topic-core`` probe (essential concepts AND-ed, fragile/optional blocks
-    stripped) is the high-confidence basis. When only ``essential-concept``
-    probes are supplied, the maximum single-concept volume is a lower-confidence
-    proxy: it can only rule sparsity *out*, never confirm a bottleneck on its own.
+    stripped) is the high-confidence basis. When several topic-core probes are
+    supplied they are competing vocabulary renderings of the *same* essential-AND;
+    the aggregate is the ``max`` across them, because ``genuinely-sparse`` is the
+    only verdict that accepts an empty screened-in set, so it must be hard to reach.
+    Trusting the smallest rendering (``min``) would let one narrow/broken rendering -
+    the very failure mode that produces an empty screened-in set - trigger a false
+    sparse verdict; ``max`` declares sparse only when even the most generous
+    rendering is small, and over-blocks (forces repair) otherwise.
+
+    When only ``essential-concept`` probes are supplied, the maximum single-concept
+    volume is a lower-confidence proxy: it can only rule sparsity *out*, never
+    confirm a bottleneck on its own. Both branches therefore take the aggregate that
+    makes ``genuinely-sparse`` hardest to reach.
     """
     probe_receipts = []
     topic_core_volumes: list[int] = []
@@ -468,22 +548,25 @@ def discriminate(
         else:
             essential_volumes.append(count)
     if topic_core_volumes:
-        discriminating_volume = min(topic_core_volumes)
+        discriminating_volume = max(topic_core_volumes)
         basis = "topic-core"
         confidence = "high"
     else:
         discriminating_volume = max(essential_volumes) if essential_volumes else 0
         basis = "single-concept-proxy"
         confidence = "low"
-    verdict = classify_topic_volume(
-        discriminating_volume, sparse_ceiling=sparse_ceiling, bottleneck_floor=bottleneck_floor
+    verdict = classify_discrimination_verdict(
+        discriminating_volume, basis, sparse_ceiling=sparse_ceiling, bottleneck_floor=bottleneck_floor
     )
     artifact = {
         "operation": "orthogonal-pilot-discrimination",
         "ok": True,
         "scope_version": scope_version,
         "probes": probe_receipts,
-        "topic_core_volume": min(topic_core_volumes) if topic_core_volumes else None,
+        "topic_core_volume": max(topic_core_volumes) if topic_core_volumes else None,
+        "topic_core_volume_range": (
+            {"min": min(topic_core_volumes), "max": max(topic_core_volumes)} if topic_core_volumes else None
+        ),
         "max_essential_concept_volume": max(essential_volumes) if essential_volumes else None,
         "discriminating_volume": discriminating_volume,
         "discriminating_basis": basis,
@@ -493,8 +576,10 @@ def discriminate(
         "provisional_verdict": verdict,
         "note": (
             "Provisional verdict is advisory; the adjudicate gate re-derives the binding "
-            "verdict against the actual screened-in count. A single-concept-proxy basis can "
-            "only rule sparsity out, not confirm a bottleneck."
+            "verdict against the actual screened-in count. Multiple topic-core renderings are "
+            "combined with max (the most generous volume), so one narrow rendering cannot force a "
+            "false genuinely-sparse verdict. A single-concept-proxy basis can only rule sparsity "
+            "out, not confirm a bottleneck."
         ),
     }
     if binding:
@@ -708,11 +793,15 @@ def adjudicate(
     # would masquerade as saturation. Applies only at/under the configured floor, so a
     # single screened-in record still freezes a small (non-independent) ledger as before.
     included_count = len(included)
-    # Internal convergence diagnostic over the screened-in relevant set. This is
-    # descriptive only and never changes saturation or estimates completeness.
+    # Internal convergence diagnostic over the *accumulated* screened-in relevant
+    # set. The current round's provenance file only covers records first seen this
+    # round, so overlap is derived from the accumulated ledger (each adjudicated
+    # record carries its pilot families in provenance_detail), with the current
+    # provenance file unioned in as a fallback. This is descriptive only and never
+    # changes saturation or estimates completeness.
     completeness = internal_convergence_diagnostic(
         sorted(included, key=int),
-        provenance,
+        accumulated_provenance(combined, provenance),
         min_screened_in_for_estimate=recapture_min_screened_in_for_estimate,
         min_screened_in_for_firm_verdict=recapture_min_screened_in_for_firm_verdict,
         converged_completeness=recapture_converged_completeness,
@@ -739,8 +828,11 @@ def adjudicate(
             if discrimination.get("scope_version") != scope_version:
                 raise NoSeedDiscoveryError("Discrimination artifact scope_version does not match --scope-version")
             volume = int(discrimination.get("discriminating_volume", 0) or 0)
-            verdict = classify_topic_volume(
-                volume, sparse_ceiling=sparse_volume_ceiling, bottleneck_floor=bottleneck_volume_floor
+            verdict = classify_discrimination_verdict(
+                volume,
+                discrimination.get("discriminating_basis"),
+                sparse_ceiling=sparse_volume_ceiling,
+                bottleneck_floor=bottleneck_volume_floor,
             )
             gate.update(
                 {
@@ -1251,9 +1343,12 @@ def main(argv: list[str] | None = None) -> int:
                     if provenance.get(key) != binding.get(key):
                         raise NoSeedDiscoveryError(f"Provenance {key} does not match the supplied protocol")
             included_pmids = [str(value) for value in state.get("included_pmids", [])]
+            # Prefer the accumulated per-record provenance carried in the state's
+            # adjudicated_records; fall back to (and union in) the single-round
+            # provenance file for states that predate provenance_detail.
             estimate = internal_convergence_diagnostic(
                 included_pmids,
-                provenance,
+                accumulated_provenance(state.get("adjudicated_records") or [], provenance),
                 min_screened_in_for_estimate=max(1, args.min_screened_in_for_estimate),
                 min_screened_in_for_firm_verdict=max(1, args.min_screened_in_for_firm_verdict),
                 converged_completeness=args.converged_completeness,
