@@ -50,7 +50,13 @@ class ManifestCoverageTests(unittest.TestCase):
         if command != "cmd" and "output" not in kw:
             data = self.load() if Path(self.manifest).exists() else {}
             output = self.dir / f"evidence_{len(data.get('entries', []))}.json"
-            output.write_text(json.dumps({"ok": True, "command": command}), encoding="utf-8")
+            # A coverage test that claims a MeSH sweep must supply the minimum
+            # machine-readable sweep receipt.  A filename or command alone could
+            # otherwise make a tree lookup or partial run look complete.
+            payload = {"ok": True, "command": command}
+            if "mesh_tool.py sweep" in command:
+                payload.update({"operation": "sweep", "status": "complete"})
+            output.write_text(json.dumps(payload), encoding="utf-8")
             kw["output"] = str(output)
         args = ["add", "--manifest", self.manifest, "--kind", kind, "--command", command]
         for flag, value in kw.items():
@@ -119,6 +125,87 @@ class ManifestCoverageTests(unittest.TestCase):
         self.add(kind="other", block="malaria", command="python scripts/mesh_tool.py sweep --concept malaria --output s.json")
         cov = manifest_tool.derive_block_coverage(self.load()["build_state"], self.load()["entries"])
         self.assertEqual(cov["malaria"]["mesh_sweep"]["status"], "satisfied")
+
+    def test_tree_receipt_cannot_satisfy_a_mesh_sweep_requirement(self):
+        self.state("register-block", "malaria")
+        output = self.dir / "tree.json"
+        output.write_text(json.dumps({"operation": "tree", "status": "complete", "ok": True}), encoding="utf-8")
+
+        self.add(
+            kind="mesh",
+            block="malaria",
+            command="python scripts/mesh_tool.py tree --descriptor D1 --output tree.json",
+            output=str(output),
+        )
+
+        cov = manifest_tool.derive_block_coverage(self.load()["build_state"], self.load()["entries"])
+        self.assertEqual(cov["malaria"]["mesh_sweep"]["status"], "pending")
+
+    def test_partial_sweep_receipt_cannot_satisfy_coverage(self):
+        self.state("register-block", "malaria")
+        output = self.dir / "partial.json"
+        output.write_text(json.dumps({"operation": "sweep", "status": "partial", "ok": True}), encoding="utf-8")
+
+        self.add(
+            kind="mesh",
+            block="malaria",
+            command="python scripts/mesh_tool.py sweep --concept malaria --output partial.json",
+            output=str(output),
+        )
+
+        cov = manifest_tool.derive_block_coverage(self.load()["build_state"], self.load()["entries"])
+        self.assertEqual(cov["malaria"]["mesh_sweep"]["status"], "pending")
+
+    def test_add_records_canonical_mesh_evidence_from_output(self):
+        output = self.dir / "reduced.json"
+        output.write_text(
+            json.dumps(
+                {
+                    "operation": "sweep",
+                    "status": "complete",
+                    "backend_provenance": [
+                        {
+                            "backend": "eutils",
+                            "fidelity": "reduced",
+                            "method": "eutils_batch_esearch_esummary",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rc, _ = self.add(
+            kind="mesh",
+            block="malaria",
+            command="python scripts/mesh_tool.py sweep --concept malaria --output reduced.json",
+            output=str(output),
+        )
+
+        self.assertEqual(rc, 0)
+        summary = self.load()["entries"][0]["mesh_evidence"]
+        self.assertTrue(summary["reduced_fidelity_present"])
+        self.assertEqual(summary["operation"], "sweep")
+
+    def test_validation_rejects_tampered_embedded_mesh_evidence(self):
+        output = self.dir / "tampered.json"
+        output.write_text(
+            json.dumps(
+                {
+                    "operation": "lookup",
+                    "status": "complete",
+                    "provenance": {"backend": "rdf", "fidelity": "full", "method": "rdf_sparql"},
+                    "mesh_evidence": {"operation": "lookup", "overall_fidelity": "reduced"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.add(kind="mesh", command="python scripts/mesh_tool.py lookup --label malaria", output=str(output))
+
+        rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--validate", "--check-files"])
+
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("mesh_evidence does not match" in issue for issue in receipt["issues"]))
 
     def test_non_matching_entries_leave_requirements_pending(self):
         self.state("register-block", "malaria")
@@ -283,7 +370,10 @@ class BramerGapCoverageTests(unittest.TestCase):
         if command != "cmd" and "output" not in kw:
             data = json.loads(Path(self.manifest).read_text(encoding="utf-8")) if Path(self.manifest).exists() else {}
             output = self.dir / f"evidence_{len(data.get('entries', []))}.json"
-            output.write_text(json.dumps({"ok": True, "command": command}), encoding="utf-8")
+            payload = {"ok": True, "command": command}
+            if "mesh_tool.py sweep" in command:
+                payload.update({"operation": "sweep", "status": "complete"})
+            output.write_text(json.dumps(payload), encoding="utf-8")
             kw["output"] = str(output)
         args = ["add", "--manifest", self.manifest, "--kind", kind, "--command", command]
         for flag, value in kw.items():

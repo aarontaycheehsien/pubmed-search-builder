@@ -20,6 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from mesh_evidence import build_mesh_evidence, is_mesh_artifact
+
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_EMAIL = ""
@@ -3018,6 +3024,89 @@ def _scaffold_concept_blocks(blocks_raw: object, cli_checks: dict[str, object]) 
     return blocks
 
 
+def _scaffold_manifest_artifact(manifest_path: str, output_path: object) -> dict[str, object] | None:
+    if not manifest_path or not isinstance(output_path, str) or not output_path:
+        return None
+    candidate = Path(output_path)
+    if not candidate.is_absolute():
+        manifest_relative = Path(manifest_path).parent / candidate
+        candidate = manifest_relative if manifest_relative.exists() else candidate
+    try:
+        data = load_json_file(str(candidate))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _scaffold_mesh_backend_evidence(
+    manifest_data: dict[str, object] | None,
+    sources: dict[str, str],
+) -> tuple[dict[str, object] | None, list[str]]:
+    """Project current manifest-bound MeSH evidence into audit-ready disclosure rows."""
+    if not isinstance(manifest_data, dict):
+        return None, []
+    superseded = {
+        str(item.get("path") or "")
+        for item in manifest_data.get("superseded", [])
+        if isinstance(item, dict) and str(item.get("path") or "")
+    }
+    state = manifest_data.get("build_state")
+    scope = state.get("scope") if isinstance(state, dict) and isinstance(state.get("scope"), dict) else {}
+    current_scope = scope.get("version") if isinstance(scope, dict) else 0
+    rows: list[dict[str, object]] = []
+    automatic_points: list[str] = []
+    for entry in manifest_data.get("entries", []):
+        if not isinstance(entry, dict) or entry.get("returncode") != 0:
+            continue
+        artifact = str(entry.get("output_path") or "")
+        if not artifact or artifact in superseded:
+            continue
+        if isinstance(current_scope, int) and current_scope > 0 and entry.get("scope_version") not in (None, current_scope):
+            continue
+        payload = _scaffold_manifest_artifact(sources.get("manifest", ""), artifact)
+        evidence = build_mesh_evidence(payload) if payload and is_mesh_artifact(payload) else entry.get("mesh_evidence")
+        if not isinstance(evidence, dict):
+            continue
+        row = {
+            "manifest_entry_seq": entry.get("seq"),
+            "artifact": artifact,
+            "artifact_sha256": entry.get("output_sha256") or "",
+            "block": entry.get("block") or "",
+            "label": entry.get("label") or "",
+            "scope_version": entry.get("scope_version"),
+            "evidence": evidence,
+        }
+        rows.append(row)
+        identity = str(row["block"] or row["label"] or "unlabelled MeSH evidence")
+        methods = ", ".join(str(value) for value in evidence.get("methods", []) if str(value)) or "unspecified method"
+        reasons = ", ".join(str(value) for value in evidence.get("fallback_reasons", []) if str(value))
+        if evidence.get("reduced_fidelity_present") is True:
+            point = (
+                f"Reduced-fidelity MeSH evidence for {identity} came from `{artifact}` via {methods}. "
+                "Confirm it against MeSH RDF before finalizing descriptor, entry-term, qualifier, or tree decisions."
+            )
+            if reasons:
+                point = f"{point} RDF fallback reason(s): {reasons}."
+            automatic_points.append(point)
+        if evidence.get("operation") == "sweep" and evidence.get("status") != "complete":
+            automatic_points.append(
+                f"MeSH sweep evidence for {identity} in `{artifact}` is {evidence.get('status')}; "
+                "rerun or waive it explicitly before treating the block as complete."
+            )
+    if not rows:
+        return None, []
+    automatic_points = list(dict.fromkeys(automatic_points))
+    return {
+        "schema_version": 1,
+        "artifacts": rows,
+        "reduced_fidelity_present": any(
+            isinstance(row.get("evidence"), dict) and row["evidence"].get("reduced_fidelity_present") is True
+            for row in rows
+        ),
+        "automatic_peer_review_attention_points": automatic_points,
+    }, automatic_points
+
+
 def build_audit_scaffold(
     *,
     topic_slug: str,
@@ -3289,6 +3378,11 @@ def build_audit_scaffold(
         filled.append("record_content_evidence (paths only)")
         placeholders.append("record_content_evidence (review/supported)")
 
+    mesh_backend_evidence, mesh_attention_points = _scaffold_mesh_backend_evidence(manifest_data, sources)
+    if mesh_backend_evidence:
+        audit["mesh_backend_evidence"] = mesh_backend_evidence
+        filled.append("mesh_backend_evidence")
+
     # Forced judgment placeholders: the agent must author these (render blocked until then).
     scope_version = None
     if isinstance(manifest_state, dict) and isinstance(manifest_state.get("scope"), dict):
@@ -3318,7 +3412,10 @@ def build_audit_scaffold(
         "sensitivity_vs_precision": audit_placeholder("sensitivity vs precision: chosen design and reason"),
         "qa": audit_placeholder("QA summary: drift, final-qa, filter-check"),
     }
-    audit["peer_review_attention_points"] = [audit_placeholder("peer-review attention point: high-impact decision")]
+    audit["peer_review_attention_points"] = [
+        *mesh_attention_points,
+        audit_placeholder("peer-review attention point: high-impact decision"),
+    ]
     placeholders.extend(["search_structure", "decision_ledger", "rationale", "peer_review_attention_points"])
 
     # Capture dropped zero-hit phrases: embed the PubMed-reported phrases as a hint, but leave the

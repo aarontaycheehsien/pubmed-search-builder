@@ -71,6 +71,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_artifact, mesh_evidence_issues
+
 MANIFEST_VERSION = "1.1"
 SKILL_NAME = "pubmed-search-builder"
 DEFAULT_SKILL_VERSION = "2.0.0"
@@ -429,6 +435,16 @@ def validate_manifest(
                 resolved = resolve_artifact_path(out, manifest_path or Path("run_manifest.json"))
                 if not resolved.is_file() or sha256_file(resolved) != recorded_hash:
                     issues.append(f"entry seq={seq} output artifact hash no longer matches: {out}")
+            if check_files and manifest_path is not None:
+                payload = read_manifest_output_json(manifest_path, out)
+                if payload and is_mesh_artifact(payload):
+                    issues.extend(f"entry seq={seq} {issue}" for issue in mesh_evidence_issues(payload))
+                    derived = build_mesh_evidence(payload)
+                    stored = entry.get("mesh_evidence")
+                    if isinstance(stored, dict) and stored != derived:
+                        issues.append(f"entry seq={seq} stored mesh_evidence does not match its output artifact")
+                elif kind == "mesh":
+                    issues.append(f"entry seq={seq} kind=mesh output is not a recognized mesh_tool artifact")
         input_hashes = entry.get("input_sha256")
         if check_files and isinstance(input_hashes, dict):
             for input_path, recorded_hash in input_hashes.items():
@@ -1096,10 +1112,26 @@ def entry_matches_block(entry: dict[str, object], block_key: str) -> bool:
     return bool(label) and block_key in label
 
 
-def requirement_satisfied(requirement: str, entries: list[object], block_key: str) -> bool:
+def entry_matches_scope(entry: dict[str, object], required_scope_version: object) -> bool:
+    """Require current-scope evidence once a block was registered against a positive scope version."""
+    if not isinstance(required_scope_version, int) or required_scope_version <= 0:
+        return True
+    return entry.get("scope_version") == required_scope_version
+
+
+def requirement_satisfied(
+    requirement: str,
+    entries: list[object],
+    block_key: str,
+    required_scope_version: object = 0,
+) -> bool:
     """True when at least one manifest entry supplies the given evidence for the block."""
     for entry in entries:
-        if not isinstance(entry, dict) or not entry_matches_block(entry, block_key):
+        if (
+            not isinstance(entry, dict)
+            or not entry_matches_block(entry, block_key)
+            or not entry_matches_scope(entry, required_scope_version)
+        ):
             continue
         if entry.get("returncode") != 0:
             continue
@@ -1108,7 +1140,7 @@ def requirement_satisfied(requirement: str, entries: list[object], block_key: st
         kind = str(entry.get("kind", ""))
         command = str(entry.get("command", ""))
         if requirement == "mesh_sweep":
-            if kind == "mesh" or MESH_SWEEP_COMMAND_RE.search(command):
+            if (kind == "mesh" or MESH_SWEEP_COMMAND_RE.search(command)) and complete_sweep_evidence(entry.get("mesh_evidence")):
                 return True
         elif requirement == "block_count":
             count = entry.get("count")
@@ -1141,7 +1173,7 @@ def derive_block_coverage(
             waiver_reason = str(waivers.get(requirement, "")).strip()
             if waiver_reason:
                 reqs[requirement] = {"status": "waived", "reason": waiver_reason}
-            elif requirement_satisfied(requirement, entries, block_key):
+            elif requirement_satisfied(requirement, entries, block_key, spec.get("scope_version")):
                 reqs[requirement] = {"status": "satisfied"}
             else:
                 reqs[requirement] = {"status": "pending"}
@@ -1231,6 +1263,103 @@ def read_manifest_output_json(manifest_path: Path, output_path: object) -> dict[
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def derived_mesh_evidence(manifest_path: Path, output_path: object) -> dict[str, object] | None:
+    """Rebuild MeSH evidence from a hash-bound output without issuing a network request."""
+    payload = read_manifest_output_json(manifest_path, output_path)
+    if not payload or not is_mesh_artifact(payload):
+        return None
+    return build_mesh_evidence(payload)
+
+
+def entry_mesh_evidence(entry: dict[str, object], manifest_path: Path) -> dict[str, object] | None:
+    # Prefer a fresh offline derivation whenever the artifact is available. This keeps an
+    # audit/report honest even if someone edits the optional manifest projection between
+    # `add` and a later `show`; the stored copy remains the legacy fallback for moved files.
+    derived = derived_mesh_evidence(manifest_path, entry.get("output_path"))
+    if derived is not None:
+        return derived
+    stored = entry.get("mesh_evidence")
+    if isinstance(stored, dict):
+        return stored
+    return None
+
+
+def current_mesh_entries(data: dict[str, object], manifest_path: Path) -> list[dict[str, object]]:
+    """Return successful, current-scope, non-superseded MeSH artifacts with their evidence."""
+    superseded_paths = {
+        str(item.get("path") or "")
+        for item in data.get("superseded", [])
+        if isinstance(item, dict) and str(item.get("path") or "")
+    }
+    state = data.get("build_state") if isinstance(data.get("build_state"), dict) else {}
+    scope = state.get("scope") if isinstance(state.get("scope"), dict) else {}
+    current_scope = scope.get("version") if isinstance(scope, dict) else 0
+    rows: list[dict[str, object]] = []
+    for entry in data.get("entries", []):
+        if not isinstance(entry, dict) or entry.get("returncode") != 0:
+            continue
+        output_path = str(entry.get("output_path") or "")
+        if not output_path or output_path in superseded_paths:
+            continue
+        if isinstance(current_scope, int) and current_scope > 0 and entry.get("scope_version") not in (None, current_scope):
+            continue
+        evidence = entry_mesh_evidence(entry, manifest_path)
+        if evidence is None:
+            continue
+        rows.append({"entry": entry, "evidence": evidence})
+    rows.sort(key=lambda row: int(row["entry"].get("seq") or 0))
+    return rows
+
+
+def mesh_audit_disclosure_issues(
+    data: dict[str, object],
+    manifest_path: Path,
+    audit_payload: dict[str, object],
+) -> list[str]:
+    """Require final audit disclosure for every current reduced-fidelity MeSH artifact.
+
+    Reduced fidelity is an allowed, explicit fallback.  The gate therefore does not reject it;
+    it rejects a handoff that fails to disclose the hash-bound evidence requiring RDF review.
+    """
+    expected = [
+        row for row in current_mesh_entries(data, manifest_path)
+        if row["evidence"].get("reduced_fidelity_present") is True
+    ]
+    if not expected:
+        return []
+    audit_evidence = audit_payload.get("mesh_backend_evidence")
+    if not isinstance(audit_evidence, dict):
+        return ["final audit lacks mesh_backend_evidence for reduced-fidelity MeSH artifacts"]
+    audit_rows = audit_evidence.get("artifacts")
+    if not isinstance(audit_rows, list):
+        return ["final audit mesh_backend_evidence lacks artifact rows"]
+    issues: list[str] = []
+    for row in expected:
+        entry = row["entry"]
+        artifact = str(entry.get("output_path") or "")
+        artifact_hash = str(entry.get("output_sha256") or "")
+        matching = [
+            item for item in audit_rows
+            if isinstance(item, dict)
+            and str(item.get("artifact") or "") == artifact
+            and str(item.get("artifact_sha256") or "") == artifact_hash
+            and isinstance(item.get("evidence"), dict)
+            and item["evidence"] == row["evidence"]
+        ]
+        if not matching:
+            issues.append(f"final audit does not disclose reduced-fidelity MeSH artifact: {artifact}")
+    points = audit_evidence.get("automatic_peer_review_attention_points")
+    if not isinstance(points, list):
+        issues.append("final audit lacks automatic reduced-fidelity MeSH peer-review attention points")
+    else:
+        point_text = "\n".join(str(item) for item in points)
+        for row in expected:
+            artifact = str(row["entry"].get("output_path") or "")
+            if artifact and artifact not in point_text:
+                issues.append(f"final audit peer-review attention points omit reduced-fidelity artifact: {artifact}")
+    return issues
 
 
 def low_count_review_entries(entries: list[object]) -> list[dict[str, object]]:
@@ -2054,6 +2183,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             else:
                 if scope.get("lock_mode") == "protocol":
                     issues.extend(protocol_binding_issues(core_payload, scope, "final audit input"))
+                issues.extend(mesh_audit_disclosure_issues(data, manifest_path, core_payload))
                 unvalidated = state.get("unvalidated_handoff") if isinstance(state.get("unvalidated_handoff"), dict) else {}
                 if unvalidated.get("status") == "accepted":
                     reporting = core_payload.get("reporting_notes") if isinstance(core_payload.get("reporting_notes"), dict) else {}
@@ -2081,6 +2211,9 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             for heading in ("## Final PubMed strategy", "## Reporting notes", "## PRISMA-S appendix"):
                 if heading not in markdown:
                     issues.append(f"final audit Markdown lacks required section: {heading}")
+            if any(row["evidence"].get("reduced_fidelity_present") is True for row in current_mesh_entries(data, manifest_path)):
+                if "## MeSH backend and fidelity evidence" not in markdown:
+                    issues.append("final audit Markdown lacks reduced-fidelity MeSH evidence section")
 
     return issues
 
@@ -2558,10 +2691,12 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
     output_path = args.output or None
     supersedes = args.supersedes or None
     output_sha256 = None
+    mesh_evidence = None
     if output_path:
         resolved_output = resolve_artifact_path(output_path, path)
         if resolved_output.is_file():
             output_sha256 = sha256_file(resolved_output)
+            mesh_evidence = derived_mesh_evidence(path, output_path)
     input_sha256: dict[str, str] = {}
     for input_value in args.input or []:
         resolved_input = resolve_artifact_path(input_value, path)
@@ -2575,26 +2710,27 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
         now = utc_now()
         entries = data["entries"]
         seq = len(entries) + 1
-        entries.append(
-            {
-                "seq": seq,
-                "timestamp_utc": now,
-                "kind": args.kind,
-                "label": args.label or "",
-                "block": args.block or "",
-                "command": args.command,
-                "output_path": output_path,
-                "count": count,
-                "supersedes": supersedes,
-                "note": args.note or "",
-                "open_decision": bool(args.open_decision),
-                "resolves_decision_seqs": sorted(set(args.resolves_decision_seq or [])),
-                "scope_version": args.scope_version,
-                "returncode": args.returncode,
-                "output_sha256": output_sha256,
-                "input_sha256": input_sha256,
-            }
-        )
+        entry = {
+            "seq": seq,
+            "timestamp_utc": now,
+            "kind": args.kind,
+            "label": args.label or "",
+            "block": args.block or "",
+            "command": args.command,
+            "output_path": output_path,
+            "count": count,
+            "supersedes": supersedes,
+            "note": args.note or "",
+            "open_decision": bool(args.open_decision),
+            "resolves_decision_seqs": sorted(set(args.resolves_decision_seq or [])),
+            "scope_version": args.scope_version,
+            "returncode": args.returncode,
+            "output_sha256": output_sha256,
+            "input_sha256": input_sha256,
+        }
+        if mesh_evidence is not None:
+            entry["mesh_evidence"] = mesh_evidence
+        entries.append(entry)
         if supersedes:
             data["superseded"].append(
                 {
@@ -2743,6 +2879,18 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
     block_coverage = derive_block_coverage(state, entries) if isinstance(state, dict) else {}
     gap_coverage = derive_block_coverage(state, entries, requirements=GAP_BLOCK_REQUIREMENTS) if isinstance(state, dict) else {}
     final_topic_count = latest_final_topic_count(entries)
+    mesh_rows = current_mesh_entries(data, path)
+    mesh_artifacts = [
+        {
+            "seq": row["entry"].get("seq"),
+            "block": row["entry"].get("block", ""),
+            "output_path": row["entry"].get("output_path"),
+            "overall_fidelity": row["evidence"].get("overall_fidelity"),
+            "reduced_fidelity_present": row["evidence"].get("reduced_fidelity_present"),
+            "status": row["evidence"].get("status"),
+        }
+        for row in mesh_rows
+    ]
 
     receipt = base_receipt("manifest-report", path, data)
     receipt.update(
@@ -2761,6 +2909,11 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "critic_rounds": state.get("critic_rounds") if isinstance(state, dict) else [],
             "revision_cycles": state.get("revision_cycles") if isinstance(state, dict) else [],
             "complete_loop_issues": complete_loop_readiness(data, path) if isinstance(state, dict) else ["build_state not initialized"],
+            "mesh_backend_evidence": {
+                "artifact_count": len(mesh_artifacts),
+                "reduced_fidelity_present": any(item["reduced_fidelity_present"] is True for item in mesh_artifacts),
+                "artifacts": mesh_artifacts,
+            },
         }
     )
     reminders = build_state_reminders(state) if isinstance(state, dict) else []
