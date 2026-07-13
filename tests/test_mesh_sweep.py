@@ -114,6 +114,17 @@ class MeshSweepTests(unittest.TestCase):
         self.assertEqual(len(result["pending"]), 8)
         self.assertEqual(set(result["pending"][0]), {"match", "label"})
 
+    def test_time_budget_preserves_unfinished_candidate_details(self):
+        self.install_fakes()
+        # The first exact unit finds a candidate; the budget expires before the second search unit.
+        mesh_tool.time = FakeClock([0.0, 0.0, 5.0])
+        result = mesh_tool.sweep("pressure ulcer", ["a"], 20, True, 40, 30, max_seconds=1.0)
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["stop_reason"], "time_budget")
+        self.assertEqual(result["pending_detail_descriptors"], ["D003668"])
+        self.assertNotIn("details", result["candidates"][0])
+
     def test_term_descriptor_lookup_budget_is_partial_and_lists_pending_lookup(self):
         self.install_fakes()
         mesh_tool.terms = lambda label, match, limit: {
