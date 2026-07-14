@@ -473,6 +473,52 @@ def protocol_binding(path: str | None, scope_version: int) -> dict[str, Any] | N
     }
 
 
+def candidate_template_binding(path: str | None, scope_version: int) -> dict[str, Any] | None:
+    """Read the compiled candidate-ledger template as protocol-binding authority."""
+    if not path:
+        return None
+    data = read_json(path)
+    if not isinstance(data, dict):
+        raise NoSeedDiscoveryError("Candidate-ledger template must be a JSON object")
+    issues, _ = candidate_ledger.validate_template(data)
+    if issues:
+        raise NoSeedDiscoveryError("Candidate-ledger template is invalid: " + "; ".join(issues))
+    if data.get("scope_version") != scope_version:
+        raise NoSeedDiscoveryError("Candidate-ledger template scope_version does not match --scope-version")
+    generated = data.get("generated_from") if isinstance(data.get("generated_from"), dict) else {}
+    return {
+        "protocol_id": str(data["protocol_id"]),
+        "protocol_sha256": str(generated["sha256"]),
+        "dsl_version": 1,
+        "protocol_path": str(generated.get("path") or path),
+    }
+
+
+def resolve_protocol_binding(
+    protocol_file: str | None,
+    candidate_template: str | None,
+    scope_version: int,
+) -> dict[str, Any] | None:
+    """Accept either DSL source or its compiled ledger template, never mismatched both."""
+    from_protocol = protocol_binding(protocol_file, scope_version)
+    from_template = candidate_template_binding(candidate_template, scope_version)
+    if from_protocol and from_template:
+        for key in ("protocol_id", "protocol_sha256", "dsl_version"):
+            if from_protocol[key] != from_template[key]:
+                raise NoSeedDiscoveryError(
+                    f"Candidate-ledger template {key} does not match the supplied protocol file"
+                )
+    return from_protocol or from_template
+
+
+def requires_protocol_binding(*artifacts: dict[str, Any]) -> bool:
+    """A bound input may not silently produce an unbound continuation artifact."""
+    return any(
+        any(key in artifact for key in ("protocol_id", "protocol_sha256", "dsl_version"))
+        for artifact in artifacts
+    )
+
+
 def load_pilots(path: str) -> list[dict[str, Any]]:
     raw = read_json(path)
     if not isinstance(raw, list) or not raw:
@@ -815,6 +861,14 @@ def adjudicate(
     recapture_undersaturated_completeness: float = RECAPTURE_UNDERSATURATED_COMPLETENESS,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     validate_volume_thresholds(sparse_volume_ceiling, bottleneck_volume_floor)
+    if binding is None and requires_protocol_binding(
+        screening,
+        provenance,
+        previous_state or {},
+    ):
+        raise NoSeedDiscoveryError(
+            "Protocol-bound no-seed artifacts require --protocol-file or --candidate-ledger-template"
+        )
     if screening.get("operation") != "orthogonal-pilot-screening" or screening.get("provenance_blinded") is not True:
         raise NoSeedDiscoveryError("Screening artifact is not a provenance-blinded orthogonal-pilot file")
     validate_bound_artifact(
@@ -1359,6 +1413,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--pilots-file", required=True)
     discover_parser.add_argument("--scope-version", type=int, required=True)
     discover_parser.add_argument("--protocol-file")
+    discover_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     discover_parser.add_argument("--round", type=int, required=True)
     discover_parser.add_argument("--previous-state")
     discover_parser.add_argument("--safety-cap-per-pilot", type=int, default=500)
@@ -1370,6 +1425,7 @@ def build_parser() -> argparse.ArgumentParser:
     adjudicate_parser.add_argument("--previous-state")
     adjudicate_parser.add_argument("--scope-version", type=int, required=True)
     adjudicate_parser.add_argument("--protocol-file")
+    adjudicate_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     adjudicate_parser.add_argument("--required-saturated-rounds", type=int, default=2)
     adjudicate_parser.add_argument("--allocation-seed", default="no-seed-orthogonal-pilots")
     adjudicate_parser.add_argument(
@@ -1394,6 +1450,7 @@ def build_parser() -> argparse.ArgumentParser:
     discriminate_parser.add_argument("--probes-file", required=True)
     discriminate_parser.add_argument("--scope-version", type=int, required=True)
     discriminate_parser.add_argument("--protocol-file")
+    discriminate_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     discriminate_parser.add_argument("--sparse-volume-ceiling", type=int, default=SPARSE_VOLUME_CEILING_DEFAULT)
     discriminate_parser.add_argument("--bottleneck-volume-floor", type=int, default=BOTTLENECK_VOLUME_FLOOR_DEFAULT)
     discriminate_parser.add_argument("--output", required=True)
@@ -1409,6 +1466,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recapture_parser.add_argument("--scope-version", type=int, required=True)
     recapture_parser.add_argument("--protocol-file")
+    recapture_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     recapture_parser.add_argument("--min-screened-in-for-estimate", type=int, default=RECAPTURE_MIN_SCREENED_IN_FOR_ESTIMATE)
     recapture_parser.add_argument("--min-screened-in-for-firm-verdict", type=int, default=RECAPTURE_MIN_SCREENED_IN_FOR_FIRM_VERDICT)
     recapture_parser.add_argument("--converged-completeness", type=float, default=RECAPTURE_CONVERGED_COMPLETENESS)
@@ -1426,6 +1484,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     harvest_parser.add_argument("--scope-version", type=int, required=True)
     harvest_parser.add_argument("--protocol-file")
+    harvest_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     harvest_parser.add_argument("--safety-cap", type=int, default=500)
     harvest_parser.add_argument("--max-per-review", type=int, default=200)
     harvest_parser.add_argument("--screening-output", required=True)
@@ -1438,6 +1497,7 @@ def build_parser() -> argparse.ArgumentParser:
     freeze_parser.add_argument("--provenance-file", help="Optional benchmark provenance file used to preserve source-quality tiers.")
     freeze_parser.add_argument("--scope-version", type=int, required=True)
     freeze_parser.add_argument("--protocol-file")
+    freeze_parser.add_argument("--candidate-ledger-template", help="Compiled candidate_ledger_template_vN.json; preserves DSL protocol binding.")
     freeze_parser.add_argument(
         "--unscreened",
         action="store_true",
@@ -1450,7 +1510,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        binding = protocol_binding(args.protocol_file, args.scope_version)
+        binding = resolve_protocol_binding(
+            args.protocol_file,
+            args.candidate_ledger_template,
+            args.scope_version,
+        )
         previous_state_path = getattr(args, "previous_state", None)
         previous = read_json(previous_state_path) if previous_state_path else None
         if previous is not None and not isinstance(previous, dict):

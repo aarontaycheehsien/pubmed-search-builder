@@ -251,6 +251,38 @@ class ManifestProtocolTests(unittest.TestCase):
         self.assertEqual(scope["history"][-1]["lock_mode"], "protocol")
         self.assertEqual(self.load()["entries"][-1]["scope_version"], 1)
 
+    def test_protocol_block_ids_reuse_display_label_evidence_without_duplicate_registration(self):
+        protocol_path, receipt_path, _, _ = self.compiled_protocol()
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 0, error)
+        labels = self.directory / "blocks.json"
+        labels.write_text(
+            json.dumps([
+                {"label": "Emergency care", "query": "emergency[tiab]"},
+                {"label": "Quasi-random allocation", "query": "allocation[tiab]"},
+            ]),
+            encoding="utf-8",
+        )
+        rc, _, error = self.state("register-blocks", "--blocks-file", labels)
+        self.assertEqual(rc, 0, error)
+        state = self.load()["build_state"]
+        self.assertEqual(set(state["blocks"]), {"emergency-care", "allocation"})
+
+        # Existing evidence and analysis artifacts use labels. They must resolve
+        # to the stable protocol IDs rather than creating a second key-space.
+        self.assertTrue(
+            manifest_tool.entry_matches_block(
+                {"block": "Emergency care"},
+                manifest_tool.registered_block_views(state)["emergency-care"]["aliases"],
+            )
+        )
+        self.assertEqual(
+            manifest_tool.resolved_artifact_block_keys(
+                [{"label": "Emergency care"}, {"label": "Quasi-random allocation"}], state
+            ),
+            {"emergency-care", "allocation"},
+        )
+
     def test_actual_compiler_nested_receipt_and_outputs_lock_end_to_end(self):
         protocol = self.lock_valid_protocol()
         source_dir = self.directory / "source"

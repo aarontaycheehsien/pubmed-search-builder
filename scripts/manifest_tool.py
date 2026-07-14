@@ -894,13 +894,14 @@ def protocol_scope_readiness(
         for item in current.get("essential_blocks", [])
         if isinstance(item, dict) and item.get("id")
     }
-    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    blocks = registered_block_views(state)
     if set(blocks) != set(expected):
         issues.append("registered essential blocks do not match the current protocol")
     for block_id, label in expected.items():
-        spec = blocks.get(block_id)
-        if not isinstance(spec, dict):
+        view = blocks.get(block_id)
+        if not isinstance(view, dict):
             continue
+        spec = view["spec"]
         if spec.get("scope_version") != current.get("scope_version"):
             issues.append(f"protocol block {block_id!r} has a stale scope version")
         if spec.get("protocol_sha256") != current.get("protocol_sha256"):
@@ -1093,17 +1094,90 @@ def normalize_block_key(value: object) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
 
-def entry_matches_block(entry: dict[str, object], block_key: str) -> bool:
+def registered_block_views(state: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return registered blocks keyed by their canonical identity.
+
+    Protocol locks seed ``build_state.blocks`` by stable ``block_id`` and retain the
+    human-facing label in ``display_label``.  Most executable evidence artifacts,
+    including older ones, identify the same concept by that label.  Treat those
+    representations as aliases while preserving unknown keys as distinct blocks so
+    the protocol-completeness check remains strict.
+    """
+    raw_blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    specs = {
+        str(key): value if isinstance(value, dict) else {}
+        for key, value in raw_blocks.items()
+    }
+    alias_targets: dict[str, set[str]] = {}
+    for key, spec in specs.items():
+        if not str(spec.get("display_label") or "").strip():
+            continue
+        for value in (key, spec.get("display_label")):
+            normalized = normalize_block_key(value)
+            if normalized:
+                alias_targets.setdefault(normalized, set()).add(key)
+
+    grouped: dict[str, list[str]] = {}
+    for key in specs:
+        targets = alias_targets.get(normalize_block_key(key), set())
+        canonical = next(iter(targets)) if len(targets) == 1 else key
+        grouped.setdefault(canonical, []).append(key)
+
+    views: dict[str, dict[str, object]] = {}
+    for canonical, members in grouped.items():
+        # Prefer the canonical protocol row, then fill any legacy fields from an
+        # alias row.  This lets an existing manifest self-heal on the next
+        # register-blocks call without discarding reasoned waivers.
+        merged = dict(specs.get(canonical, {}))
+        waivers = dict(merged.get("waivers") or {}) if isinstance(merged.get("waivers"), dict) else {}
+        aliases: set[str] = set()
+        for key in members:
+            spec = specs[key]
+            for field, value in spec.items():
+                if field != "waivers":
+                    merged.setdefault(field, value)
+            if isinstance(spec.get("waivers"), dict):
+                for requirement, reason in spec["waivers"].items():
+                    waivers.setdefault(requirement, reason)
+            for value in (key, spec.get("display_label")):
+                normalized = normalize_block_key(value)
+                if normalized:
+                    aliases.add(normalized)
+        aliases.add(normalize_block_key(canonical))
+        merged["waivers"] = waivers
+        views[canonical] = {"spec": merged, "aliases": aliases, "members": members}
+    return views
+
+
+def resolve_registered_block_key(state: dict[str, object], value: object) -> str | None:
+    """Resolve a block ID or display label to a unique registered canonical key."""
+    normalized = normalize_block_key(value)
+    if not normalized:
+        return None
+    matches = [
+        key for key, view in registered_block_views(state).items()
+        if normalized in view["aliases"]
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def entry_matches_block(entry: dict[str, object], block_key: str | set[str]) -> bool:
     """An entry is evidence for a block if it carries an explicit matching ``block`` tag, or
     (when untagged) its free-text ``label`` contains the block key. Explicit tags are canonical;
     the label fallback keeps existing labelling habits working."""
-    if not block_key:
+    aliases = (
+        {normalize_block_key(value) for value in block_key}
+        if isinstance(block_key, set)
+        else {normalize_block_key(block_key)}
+    )
+    aliases.discard("")
+    if not aliases:
         return False
     explicit = normalize_block_key(entry.get("block"))
     if explicit:
-        return explicit == block_key
+        return explicit in aliases
     label = normalize_block_key(entry.get("label"))
-    return bool(label) and block_key in label
+    return bool(label) and any(alias in label for alias in aliases)
 
 
 def entry_matches_scope(entry: dict[str, object], required_scope_version: object) -> bool:
@@ -1116,7 +1190,7 @@ def entry_matches_scope(entry: dict[str, object], required_scope_version: object
 def requirement_satisfied(
     requirement: str,
     entries: list[object],
-    block_key: str,
+    block_key: str | set[str],
     required_scope_version: object = 0,
 ) -> bool:
     """True when at least one manifest entry supplies the given evidence for the block."""
@@ -1156,18 +1230,17 @@ def derive_block_coverage(
     drifts from the actual manifest entries. ``requirements`` defaults to the mandatory
     BLOCK_REQUIREMENTS; pass GAP_BLOCK_REQUIREMENTS for the conditional Bramer gap-analysis view.
     """
-    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
     coverage: dict[str, dict[str, dict[str, str]]] = {}
-    for label, spec in blocks.items():
-        block_key = normalize_block_key(label)
-        spec = spec if isinstance(spec, dict) else {}
+    for label, view in registered_block_views(state).items():
+        spec = view["spec"]
+        aliases = view["aliases"]
         waivers = spec.get("waivers") if isinstance(spec.get("waivers"), dict) else {}
         reqs: dict[str, dict[str, str]] = {}
         for requirement in requirements:
             waiver_reason = str(waivers.get(requirement, "")).strip()
             if waiver_reason:
                 reqs[requirement] = {"status": "waived", "reason": waiver_reason}
-            elif requirement_satisfied(requirement, entries, block_key, spec.get("scope_version")):
+            elif requirement_satisfied(requirement, entries, aliases, spec.get("scope_version")):
                 reqs[requirement] = {"status": "satisfied"}
             else:
                 reqs[requirement] = {"status": "pending"}
@@ -1191,6 +1264,25 @@ def block_coverage_readiness(state: dict[str, object], entries: list[object]) ->
             if info["status"] == "pending":
                 issues.append(f"block {label!r} missing evidence: {requirement}")
     return issues
+
+
+def resolved_artifact_block_keys(items: object, state: dict[str, object]) -> set[str]:
+    """Resolve protocol IDs and display labels emitted by an analysis artifact."""
+    if not isinstance(items, list):
+        return set()
+    resolved: set[str] = set()
+    for item in items:
+        values = (
+            (item.get(field) for field in ("block_id", "concept_id", "id", "label"))
+            if isinstance(item, dict)
+            else (item,)
+        )
+        for value in values:
+            block_key = resolve_registered_block_key(state, value)
+            if block_key:
+                resolved.add(block_key)
+                break
+    return resolved
 
 
 def gap_coverage_readiness(state: dict[str, object], entries: list[object]) -> list[str]:
@@ -1490,9 +1582,10 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         )
     issues.extend(block_coverage_readiness(state, entries))
     issues.extend(gap_coverage_readiness(state, entries))
-    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    block_views = registered_block_views(state)
+    blocks = {label: view["spec"] for label, view in block_views.items()}
     for label, spec in blocks.items():
-        if not isinstance(spec, dict) or spec.get("scope_version") != scope_version:
+        if spec.get("scope_version") != scope_version:
             issues.append(f"block {label!r} is not registered against the current scope version")
 
     def operation_entries(operation: str) -> list[dict[str, object]]:
@@ -1576,13 +1669,9 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if payload.get("scope_version") != scope_version:
                 issues.append("latest concept-ablation artifact does not match the current retrieval-scope version")
             analyses = payload.get("analyses") if isinstance(payload.get("analyses"), list) else []
-            analysed_labels = {
-                normalize_block_key(item.get("label"))
-                for item in analyses
-                if isinstance(item, dict)
-            }
+            analysed_labels = resolved_artifact_block_keys(analyses, state)
             missing_labels = sorted(
-                str(label) for label in blocks if normalize_block_key(label) not in analysed_labels
+                str(label) for label in blocks if label not in analysed_labels
             )
             if missing_labels:
                 issues.append("concept-ablation does not cover registered blocks: " + ", ".join(missing_labels))
@@ -1614,12 +1703,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if payload.get("ok") is not True or payload.get("scope_version") != scope_version:
                 issues.append("latest fragility-score artifact failed or does not match the current scope version")
             concepts = payload.get("concepts") if isinstance(payload.get("concepts"), list) else []
-            scored_labels = {
-                normalize_block_key(item.get("label"))
-                for item in concepts
-                if isinstance(item, dict)
-            }
-            missing_labels = sorted(str(label) for label in blocks if normalize_block_key(label) not in scored_labels)
+            scored_labels = resolved_artifact_block_keys(concepts, state)
+            missing_labels = sorted(str(label) for label in blocks if label not in scored_labels)
             if missing_labels:
                 issues.append("fragility-score does not cover registered blocks: " + ", ".join(missing_labels))
             required_metrics = {
@@ -1673,8 +1758,9 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             excluded = payload.get("excluded_record_diagnosis") if isinstance(payload.get("excluded_record_diagnosis"), dict) else {}
             if excluded.get("used_for_proposals") is not False:
                 issues.append("excluded-record terminology was not kept diagnostic-only")
-            locked_concepts = {normalize_block_key(value) for value in payload.get("locked_concepts", [])}
-            missing_locked = sorted(str(label) for label in blocks if normalize_block_key(label) not in locked_concepts)
+            locked_concepts = resolved_artifact_block_keys(payload.get("locked_concept_ids", []), state)
+            locked_concepts.update(resolved_artifact_block_keys(payload.get("locked_concepts", []), state))
+            missing_locked = sorted(str(label) for label in blocks if label not in locked_concepts)
             if missing_locked:
                 issues.append("vocabulary learning does not preserve registered locked concepts: " + ", ".join(missing_locked))
             proposals = payload.get("proposals") if isinstance(payload.get("proposals"), list) else []
@@ -2212,10 +2298,12 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
     return issues
 
 
-def load_block_labels(path_str: str) -> list[str]:
-    """Extract block labels from a ``--blocks-file`` (the same ``[{label, query}]`` list or
-    ``{label: query}`` map used by ``recall``/``audit-scaffold``). Only labels are read, so the
-    query values — and the PowerShell ``ConvertTo-Json`` blob pitfall — are irrelevant here."""
+def load_block_specs(path_str: str) -> list[dict[str, str]]:
+    """Extract display labels and optional stable IDs from a ``--blocks-file``.
+
+    The accepted list/map formats remain compatible with ``recall`` and
+    ``audit-scaffold``. Query values are intentionally ignored here.
+    """
     path = Path(path_str)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -2225,26 +2313,61 @@ def load_block_labels(path_str: str) -> list[str]:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ManifestError(f"Blocks file is not valid JSON: {path} ({exc})") from exc
-    labels: list[str] = []
+    specs: list[dict[str, str]] = []
     if isinstance(data, dict):
-        labels = [str(key) for key in data.keys()]
+        for label, value in data.items():
+            row = value if isinstance(value, dict) else {}
+            specs.append({
+                "label": str(label),
+                "block_id": str(row.get("block_id") or row.get("concept_id") or "").strip(),
+            })
     elif isinstance(data, list):
         for item in data:
             if isinstance(item, dict) and item.get("label"):
-                labels.append(str(item["label"]))
+                specs.append({
+                    "label": str(item["label"]),
+                    "block_id": str(item.get("block_id") or item.get("concept_id") or "").strip(),
+                })
             elif isinstance(item, str) and item.strip():
-                labels.append(item.strip())
+                specs.append({"label": item.strip(), "block_id": ""})
     else:
         raise ManifestError("Blocks file must be a list of {label, query} objects or a {label: query} map.")
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for label in labels:
-        if label and label not in seen:
-            seen.add(label)
-            ordered.append(label)
+    seen: set[tuple[str, str]] = set()
+    ordered: list[dict[str, str]] = []
+    for spec in specs:
+        label = str(spec["label"]).strip()
+        block_id = str(spec["block_id"]).strip()
+        key = (block_id, label)
+        if label and key not in seen:
+            seen.add(key)
+            ordered.append({"label": label, "block_id": block_id})
     if not ordered:
         raise ManifestError("Blocks file contained no usable block labels.")
     return ordered
+
+
+def load_block_labels(path_str: str) -> list[str]:
+    """Compatibility wrapper for callers that only need display labels."""
+    return [spec["label"] for spec in load_block_specs(path_str)]
+
+
+def canonicalize_protocol_blocks(state: dict[str, object]) -> None:
+    """Persist the alias-resolved form of an existing DSL manifest registration."""
+    state["blocks"] = {key: dict(view["spec"]) for key, view in registered_block_views(state).items()}
+
+
+def registered_protocol_key(state: dict[str, object], block_id: str, label: str) -> str:
+    """Resolve a blocks-file row against the locked protocol's registered IDs."""
+    resolved = {
+        resolve_registered_block_key(state, value)
+        for value in (block_id, label)
+        if value
+    }
+    resolved.discard(None)
+    if len(resolved) != 1:
+        detail = block_id or label
+        raise ManifestError(f"Block {detail!r} is not a unique essential block in the locked protocol")
+    return next(iter(resolved))
 
 
 def cmd_state(args: argparse.Namespace) -> dict[str, object]:
@@ -2625,15 +2748,34 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             state["current_stage"] = "revision"
         elif action == "register-blocks":
             scope = state["scope"]
+            if scope.get("lock_mode") == "protocol":
+                canonicalize_protocol_blocks(state)
             blocks = state["blocks"]
-            for label in load_block_labels(args.blocks_file):
-                if label not in blocks:
-                    blocks[label] = {"waivers": {}, "scope_version": scope.get("version")}
+            for row in load_block_specs(args.blocks_file):
+                label, block_id = row["label"], row["block_id"]
+                key = (
+                    registered_protocol_key(state, block_id, label)
+                    if scope.get("lock_mode") == "protocol"
+                    else label
+                )
+                if key not in blocks:
+                    spec = {"waivers": {}, "scope_version": scope.get("version")}
+                    if scope.get("lock_mode") == "protocol":
+                        spec["display_label"] = label
+                        spec["protocol_sha256"] = scope.get("protocol_sha256")
+                    blocks[key] = spec
         elif action == "register-block":
             scope = state["scope"]
+            if scope.get("lock_mode") == "protocol":
+                canonicalize_protocol_blocks(state)
             blocks = state["blocks"]
-            if args.label not in blocks:
-                blocks[args.label] = {"waivers": {}, "scope_version": scope.get("version")}
+            key = (
+                registered_protocol_key(state, "", args.label)
+                if scope.get("lock_mode") == "protocol"
+                else args.label
+            )
+            if key not in blocks:
+                blocks[key] = {"waivers": {}, "scope_version": scope.get("version")}
         elif action == "waive-requirement":
             if args.requirement not in WAIVABLE_REQUIREMENTS:
                 raise ManifestError(
@@ -2642,16 +2784,23 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             reason = (args.reason or "").strip()
             if not reason:
                 raise ManifestError("waive-requirement requires a non-empty reason (every skipped requirement must be justified).")
+            if state["scope"].get("lock_mode") == "protocol":
+                canonicalize_protocol_blocks(state)
             blocks = state["blocks"]
-            if args.label not in blocks:
+            key = (
+                registered_protocol_key(state, "", args.label)
+                if state["scope"].get("lock_mode") == "protocol"
+                else args.label
+            )
+            if key not in blocks:
                 raise ManifestError(
                     f"Unknown block {args.label!r}; register it first with "
                     "`state register-block`/`register-blocks`."
                 )
-            block_spec = blocks[args.label]
+            block_spec = blocks[key]
             if not isinstance(block_spec, dict):
                 block_spec = {}
-                blocks[args.label] = block_spec
+                blocks[key] = block_spec
             waivers = block_spec.get("waivers")
             if not isinstance(waivers, dict):
                 waivers = {}

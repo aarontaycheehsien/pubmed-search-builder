@@ -326,7 +326,11 @@ def load_blocks(path: str) -> dict[str, dict[str, Any]]:
         label = " ".join(str(item.get("label") or item.get("name") or "").split())
         query = pubmed_tool.normalize_query(str(item.get("query") or ""))
         if label and query:
-            blocks[label.casefold()] = {"label": label, "query": query}
+            blocks[label.casefold()] = {
+                "label": label,
+                "query": query,
+                "block_id": str(item.get("block_id") or item.get("concept_id") or "").strip(),
+            }
     return blocks
 
 
@@ -495,6 +499,14 @@ def retest_learning(
         "ok": True,
         "scope_version": scope_version,
         "locked_concepts": sorted(extraction.get("locked_concepts", [])),
+        "locked_concept_ids": sorted(
+            {
+                str(blocks[str(concept).casefold()].get("block_id") or "").strip()
+                for concept in extraction.get("locked_concepts", [])
+                if str(concept).casefold() in blocks
+                and str(blocks[str(concept).casefold()].get("block_id") or "").strip()
+            }
+        ),
         "newly_included_pmids": extraction.get("newly_included_pmids", []),
         "processed_included_pmids": extraction.get("processed_included_pmids", []),
         "excluded_record_diagnosis": extraction.get("excluded_record_diagnosis", {}),
