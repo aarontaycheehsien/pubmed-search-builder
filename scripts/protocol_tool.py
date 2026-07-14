@@ -18,12 +18,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pubmed_search_builder.domain.review_profiles import compile_review_profile
 from pubmed_search_builder.domain.review_types import SCREENING_HANDLING, SYNTHESIS_TYPES, TARGET_MODES
 
 
 DSL_VERSION = 1
 ARTIFACT_VERSION = 1
+CORE_DERIVATIVE_TYPES = frozenset({
+    "concept-ledger",
+    "candidate-ledger-template",
+    "block-registry",
+    "critic-packet",
+    "audit-outline",
+})
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 PROTOCOL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 SEED_ROLES = {"discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"}
@@ -623,10 +629,6 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
         f"critic_packet_v{version}.json": critic_packet,
         f"audit_outline_v{version}.json": audit_outline,
     }
-    if isinstance(evidence_target, dict) and evidence_target.get("mode") in {"evidence-syntheses", "mixed"}:
-        profile = compile_review_profile(protocol)
-        profile["generated_from"] = {"path": source.name, "sha256": canonical_sha256(protocol)}
-        artifacts[f"review_retrieval_profile_v{version}.json"] = profile
     return artifacts
 
 
@@ -659,6 +661,8 @@ def compile_protocol(protocol_path: Path, output_dir: Path, receipt_path: Path) 
     protocol = load_json(protocol_path)
     require_valid(protocol, "lock")
     artifacts = build_artifacts(protocol, protocol_path)
+    if {artifact["artifact_type"] for artifact in artifacts.values()} != CORE_DERIVATIVE_TYPES:
+        raise ProtocolError("Protocol compiler produced artifacts outside the five-derivative contract")
     artifact_bytes = {name: pretty_bytes(value) for name, value in artifacts.items()}
     receipt_parent = receipt_path.parent.resolve()
     receipt_artifacts = []
@@ -703,7 +707,7 @@ def verify_protocol(protocol_path: Path, receipt_path: Path) -> dict[str, Any]:
         if receipt.get(key) != value:
             issues.append(f"receipt {key} does not match the protocol")
     rows = receipt.get("artifacts")
-    if not isinstance(rows, list) or len(rows) != 5:
+    if not isinstance(rows, list) or len(rows) != len(CORE_DERIVATIVE_TYPES):
         issues.append("receipt artifacts must contain the five generated derivatives")
         rows = []
     seen_types: set[str] = set()
@@ -757,8 +761,7 @@ def verify_protocol(protocol_path: Path, receipt_path: Path) -> dict[str, Any]:
         for key, value in envelope.items():
             if artifact.get(key) != value:
                 issues.append(f"generated artifact {path_value} has mismatched {key}")
-    required_types = {"concept-ledger", "candidate-ledger-template", "block-registry", "critic-packet", "audit-outline"}
-    if seen_types != required_types:
+    if seen_types != CORE_DERIVATIVE_TYPES:
         issues.append("receipt artifact types are incomplete or unexpected")
     if issues:
         raise ProtocolError("Protocol verification failed:\n- " + "\n- ".join(sorted(set(issues))))

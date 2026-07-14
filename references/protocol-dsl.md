@@ -42,6 +42,8 @@ Compilation writes deterministic workflow inputs such as:
 
 The compile receipt binds generated files to the exact protocol content. Run `verify` before resuming or handing off a build so stale or manually edited derived artifacts cannot pass as current protocol evidence.
 
+For `evidence-syntheses` and `mixed` protocols, the review-retrieval profile is intentionally not a protocol-compile derivative or receipt artifact. Generate it separately with `review_discovery.py profile --protocol`; it has its own report-retrieval artifact contract and feeds the conditional review-discovery workflow stage.
+
 ## Scope changes
 
 When evidence challenges a concept role, eligibility interpretation, date boundary, filter, or limit:
