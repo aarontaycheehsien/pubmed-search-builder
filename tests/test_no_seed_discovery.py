@@ -1,5 +1,7 @@
 import importlib.util
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,6 +25,59 @@ def pilots():
 
 
 class NoSeedDiscoveryTests(unittest.TestCase):
+    def test_candidate_template_supplies_protocol_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "candidate_ledger_template_v1.json"
+            template.write_text(
+                json.dumps(
+                    {
+                        "artifact_type": "candidate-ledger-template",
+                        "artifact_version": 1,
+                        "protocol_id": "demo",
+                        "scope_version": 1,
+                        "dsl_version": 1,
+                        "generated_from": {"path": "review_protocol_v1.json", "sha256": "abc"},
+                        "ledger_status": "template",
+                        "records": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            binding = no_seed.resolve_protocol_binding(None, str(template), 1)
+        self.assertEqual(
+            binding,
+            {
+                "protocol_id": "demo",
+                "protocol_sha256": "abc",
+                "dsl_version": 1,
+                "protocol_path": "review_protocol_v1.json",
+            },
+        )
+
+    def test_adjudicate_rejects_bound_inputs_without_binding_authority(self):
+        with self.assertRaisesRegex(no_seed.NoSeedDiscoveryError, "require --protocol-file or --candidate-ledger-template"):
+            no_seed.adjudicate(
+                {
+                    "operation": "orthogonal-pilot-screening",
+                    "scope_version": 1,
+                    "round": 1,
+                    "provenance_blinded": True,
+                    "protocol_id": "demo",
+                    "records": [],
+                },
+                {
+                    "operation": "orthogonal-pilot-provenance",
+                    "scope_version": 1,
+                    "round": 1,
+                    "protocol_id": "demo",
+                    "records": [],
+                },
+                previous_state=None,
+                scope_version=1,
+                required_saturated_rounds=2,
+                allocation_seed="test",
+            )
+
     def test_discovery_merges_pilots_and_blinds_per_record_provenance(self):
         def fake_search(client, query, retmax=0, retstart=0, sort=None):
             pmid = str(int(query.split("[")[0]) % 2 + 1)

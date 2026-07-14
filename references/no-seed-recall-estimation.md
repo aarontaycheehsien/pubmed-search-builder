@@ -38,6 +38,7 @@ Each object supplies `type` and either `query` or `anchor_pmids`. Citation/regis
 # Discover and merge candidates; provenance is written separately.
 python scripts/no_seed_discovery.py discover \
   --pilots-file orthogonal_pilots.json --scope-version 1 --round 1 \
+  --candidate-ledger-template protocol_v1/candidate_ledger_template_v1.json \
   --screening-output screening_round_1.json \
   --provenance-output provenance_round_1.json
 
@@ -45,7 +46,8 @@ python scripts/no_seed_discovery.py discover \
 python scripts/no_seed_discovery.py adjudicate \
   --screening-file screening_round_1.json \
   --provenance-file provenance_round_1.json \
-  --scope-version 1 --state-output saturation_state_1.json \
+  --scope-version 1 --candidate-ledger-template protocol_v1/candidate_ledger_template_v1.json \
+  --state-output saturation_state_1.json \
   --ledger-output candidate_ledger.json
 
 # Once saturation writes the frozen ledger, validate and record it normally.
@@ -66,12 +68,14 @@ The adjudicator therefore refuses to accept a zero-screened-in saturation until 
 # Measure broad topic volume (essentials only; no fragile/optional blocks).
 python scripts/no_seed_discovery.py discriminate \
   --probes-file volume_probes.json --scope-version 1 \
+  --candidate-ledger-template protocol_v1/candidate_ledger_template_v1.json \
   --output discrimination_round_N.json
 
 # Feed the verdict into adjudication; required whenever the screened-in set is empty.
 python scripts/no_seed_discovery.py adjudicate \
   --screening-file screening_round_N.json --provenance-file provenance_round_N.json \
-  --scope-version 1 --discrimination-file discrimination_round_N.json \
+  --scope-version 1 --candidate-ledger-template protocol_v1/candidate_ledger_template_v1.json \
+  --discrimination-file discrimination_round_N.json \
   --state-output saturation_state_N.json --ledger-output candidate_ledger.json
 ```
 

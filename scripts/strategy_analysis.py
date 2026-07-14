@@ -317,8 +317,14 @@ def concept_ablation(
         }
         block_development = known_item_comparison(client, str(block["query"]), str(block["query"]), development_pmids)
         block_holdout = known_item_comparison(client, str(block["query"]), str(block["query"]), holdout_pmids)
+        identity = {
+            key: block[key]
+            for key in ("block_id", "concept_id")
+            if str(block.get(key) or "").strip()
+        }
         analysis = {
             "label": block["label"],
+            **identity,
             "block_query": block["query"],
             "without_block_query": without_query,
             "metadata": {key: value for key, value in block.items() if key not in {"label", "query"}},
@@ -598,9 +604,15 @@ def empirical_fragility(
                 f"Concept {label!r} supplies human_override={override} but lacks override_reason"
             )
         final = override or empirical
+        identity = {
+            key: concept[key]
+            for key in ("block_id", "concept_id")
+            if str(concept.get(key) or "").strip()
+        }
         results.append(
             {
                 "label": label,
+                **identity,
                 "queries": {"mesh": mesh_query, "exact": exact_query, "descriptive": descriptive_query, "safety": safety_query},
                 "metrics": {
                     "relevant_record_count": len(relevant),
