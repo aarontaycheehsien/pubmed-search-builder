@@ -79,6 +79,7 @@
         }
       }
     },
+    "evidence_target": {"$ref": "#/$defs/evidence_target"},
     "eligibility": {
       "type": "object",
       "additionalProperties": false,
@@ -240,6 +241,35 @@
         "value": {},
         "validated_source": {"type": ["string", "null"]},
         "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidence_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["mode", "eligible_types", "protocols", "narrative_reviews", "methods_papers"],
+      "properties": {
+        "mode": {"enum": ["primary-studies", "evidence-syntheses", "mixed"]},
+        "eligible_types": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "systematic-review",
+              "meta-analysis",
+              "network-meta-analysis",
+              "scoping-review",
+              "umbrella-review",
+              "rapid-review",
+              "living-systematic-review",
+              "qualitative-evidence-synthesis",
+              "evidence-map"
+            ]
+          }
+        },
+        "protocols": {"enum": ["include", "exclude", "screen"]},
+        "narrative_reviews": {"enum": ["include", "exclude", "screen"]},
+        "methods_papers": {"enum": ["include", "exclude", "screen"]}
       }
     },
     "date_range": {

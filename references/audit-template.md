@@ -136,6 +136,23 @@ If a validated filter or focused variant was also tested:
 - **Interpretation:** [misses resolved; coverage findings; no eligible trials gives no reassurance]
 - **Limitation:** [registry check is a PubMed leak sentinel, not review-level completeness]
 
+## Evidence-synthesis retrieval (conditional)
+
+- **Evidence target:** [primary studies / completed evidence syntheses / mixed; eligible report types]
+- **Protocol/narrative/methods-paper policy:** [screening disposition]
+- **Profile and source snapshot:** [profile ID/version/hash; official source URLs and MeSH year]
+- **Profile branches:** [branch, query, source, indexing dependency, count, cap status]
+- **Candidate classification:** [complete title/abstract review; include/exclude/uncertain counts and reasons]
+- **Eligible review reports:** [PMIDs and declared report type]
+- **Final retrieval evaluation:** [topic-only count, overall and per-type relative recall, missed PMIDs, resolutions]
+- **Scope safeguard:** retrieval labels and publication types were not treated as eligibility; all candidates were screened against the locked protocol.
+
+## Prior-review benchmark provenance (if used)
+
+- **Benchmark kind / confidence:** [declared-included-study / machine-extracted candidate / screened citation / legacy; semi-independent / indicative]
+- **Source tier counts:** [declared included-study list / machine extracted pending confirmation / screened cited reference / legacy unclassified]
+- **Screening and independence caveat:** [screened against locked scope; never used for term mining; prior review scope bias]
+
 ### Active vocabulary learning
 
 - **Newly included records processed:** [PMIDs by round]

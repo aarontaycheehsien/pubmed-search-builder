@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.local/pubmed-search-builder/run-manifest-v2.schema.json",
+  "title": "PubMed Search Builder append-only run manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "skill", "skill_version", "topic_slug", "created_utc", "updated_utc", "working_dir", "events"],
+  "properties": {
+    "manifest_version": {"const": "2.0"},
+    "skill": {"const": "pubmed-search-builder"},
+    "skill_version": {"type": "string", "minLength": 1},
+    "topic_slug": {"type": "string"},
+    "created_utc": {"type": "string", "minLength": 1},
+    "updated_utc": {"type": "string", "minLength": 1},
+    "working_dir": {"type": "string", "minLength": 1},
+    "events": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/event"}
+    }
+  },
+  "$defs": {
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256", "artifact_type", "artifact_version"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string"},
+        "artifact_type": {"type": "string", "minLength": 1},
+        "artifact_version": {"type": "integer", "minimum": 1},
+        "scope_version": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["seq", "timestamp_utc", "event_type"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1},
+        "timestamp_utc": {"type": "string", "minLength": 1},
+        "event_type": {"enum": ["artifact-recorded", "artifact-superseded", "decision-recorded"]},
+        "stage": {"type": "string"},
+        "scope_version": {"type": ["integer", "null"], "minimum": 1},
+        "command": {"type": "array", "items": {"type": "string"}},
+        "inputs": {"type": "array", "items": {"$ref": "#/$defs/artifact_ref"}},
+        "outputs": {"type": "array", "items": {"$ref": "#/$defs/artifact_ref"}},
+        "decision_id": {"type": "string"},
+        "status": {"type": "string"},
+        "value": {},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}

@@ -58,6 +58,58 @@ class WarningDispositionTests(unittest.TestCase):
         self.assertNotIn("not_operator", resolved["unresolved_warning_codes"])
 
 
+class EvidenceSynthesisFilterTests(unittest.TestCase):
+    def test_systematic_subset_is_detected_as_a_filter(self):
+        result = hooks_tool.filter_check(
+            "topic AND systematic[sb]",
+            filter_decision="used",
+            no_filter_reason=None,
+            filter_source=None,
+            topic_only_count=None,
+            topic_plus_filter_count=None,
+            seed_impact=None,
+            seed_pmids=[],
+        )
+        self.assertTrue(result["requires_methodological_filter_review"])
+        self.assertIn("systematic[sb]", result["detected_filter_fragments"])
+        self.assertFalse(result["ok"])
+        self.assertIn("missing_validated_filter_source", issue_codes(result))
+
+    def test_selected_filter_fails_closed_without_comparison_evidence(self):
+        result = hooks_tool.filter_check(
+            "topic AND \"meta analysis\"[pt]",
+            filter_decision="used",
+            no_filter_reason=None,
+            filter_source="NLM publication type",
+            topic_only_count=None,
+            topic_plus_filter_count=None,
+            seed_impact=None,
+            seed_pmids=["123"],
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("missing_topic_only_count", issue_codes(result))
+        self.assertIn("missing_topic_plus_filter_count", issue_codes(result))
+        self.assertIn("missing_seed_filter_impact", issue_codes(result))
+
+    def test_documented_topical_review_language_can_use_no_filter(self):
+        result = hooks_tool.filter_check(
+            "methods for systematic reviews",
+            filter_decision="none",
+            no_filter_reason="Review terminology is the topic, not a retrieval restriction.",
+            filter_source=None,
+            topic_only_count=None,
+            topic_plus_filter_count=None,
+            seed_impact=None,
+            seed_pmids=[],
+        )
+        self.assertTrue(result["ok"])
+
+    def test_final_qa_requires_disposition_for_systematic_subset(self):
+        result = hooks_tool.final_qa("topic[tiab] AND systematic[sb]")
+        self.assertIn("review_subset_filter", issue_codes(result))
+        self.assertFalse(result["ok"])
+
+
 class ExtractLeafAtomsTests(unittest.TestCase):
     def test_recurses_into_nested_and_or_groups(self):
         query = '(PARO[tiab] OR ("Pets"[Mesh] AND (robot*[tiab] OR PARO[tiab])))'

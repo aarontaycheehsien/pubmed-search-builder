@@ -720,6 +720,8 @@ def render_relative_recall(data: dict[str, Any]) -> list[str]:
     fields = [
         ("Relative-recall check run", "check_run"),
         ("Benchmark source", "benchmark_source"),
+        ("Benchmark kind", "benchmark_kind"),
+        ("Benchmark source-tier counts", "source_tier_counts"),
         ("Benchmark size", "benchmark_size"),
         ("Relative recall", "relative_recall_percent"),
         ("Retrieved count", "retrieved_count"),
@@ -737,6 +739,63 @@ def render_relative_recall(data: dict[str, Any]) -> list[str]:
     lines.extend(["", "Misses and culprit blocks:", ""])
     lines.append(markdown_table(["PMID", "Culprit blocks", "AND interaction"], miss_rows))
     lines.extend(["", f"- **Caveat:** {compact_text(caveat)}", ""])
+    return lines
+
+
+def render_evidence_synthesis_retrieval(data: dict[str, Any]) -> list[str]:
+    """Render a separate, screen-bound account of evidence-synthesis retrieval.
+
+    This cannot be folded into seed/benchmark recall: it reports a deliberately
+    scoped report-level profile, its human classifications, and the final
+    retrieval check without treating any branch as an eligibility shortcut.
+    """
+
+    profile = as_dict(first_value(data, ["review_retrieval_profile", "review_profile"], {}))
+    discovery = as_dict(first_value(data, ["review_discovery", "review_candidates"], {}))
+    classification = as_dict(first_value(data, ["review_classification"], {}))
+    evaluation = as_dict(first_value(data, ["review_filter_evaluation", "review_retrieval_evaluation"], {}))
+    if not any((profile, discovery, classification, evaluation)):
+        return []
+    lines = ["## Evidence-synthesis retrieval", ""]
+    if profile:
+        lines.extend([
+            f"- **Profile:** {compact_text(profile.get('profile_id'), DEFAULT_STATUS)} v{compact_text(profile.get('profile_version'), DEFAULT_STATUS)}",
+            f"- **Profile hash:** {compact_text(profile.get('profile_sha256'), DEFAULT_STATUS)}",
+            f"- **Eligible synthesis types:** {compact_text(profile.get('eligible_types'), DEFAULT_STATUS)}",
+            f"- **Sources / MeSH year:** {compact_text(profile.get('sources'), DEFAULT_STATUS)} / {compact_text(profile.get('mesh_year'), DEFAULT_STATUS)}",
+            "- **Scope safeguard:** profile branches are retrieval aids only; every candidate was classified against the locked protocol.",
+            "",
+        ])
+        branch_rows = [
+            [item.get("branch_id"), item.get("kind"), item.get("indexing_dependency"), item.get("query")]
+            for item in as_list(profile.get("branches")) if isinstance(item, dict)
+        ]
+        lines.extend(["Profile branches:", "", markdown_table(["Branch", "Kind", "Indexing dependency", "Query"], branch_rows), ""])
+    if discovery:
+        lines.extend([
+            f"- **Candidate count / retrieval capped:** {compact_text(discovery.get('candidate_count'), DEFAULT_STATUS)} / {compact_text(discovery.get('retrieval_capped'), DEFAULT_STATUS)}",
+            "",
+        ])
+    if classification:
+        lines.extend([
+            f"- **Human classification counts:** {compact_text(classification.get('counts'), DEFAULT_STATUS)}",
+            f"- **Included review PMIDs:** {compact_text(classification.get('included_pmids'), 'none')}",
+            "",
+        ])
+    if evaluation:
+        type_rows = []
+        for synthesis_type, result in as_dict(evaluation.get("per_synthesis_type")).items():
+            result = as_dict(result)
+            type_rows.append([synthesis_type, result.get("eligible"), result.get("retrieved"), result.get("relative_recall"), result.get("missed_pmids")])
+        lines.extend([
+            f"- **Final retrieval evaluation:** eligible {compact_text(evaluation.get('eligible_count'), DEFAULT_STATUS)}; retrieved {compact_text(evaluation.get('retrieved_count'), DEFAULT_STATUS)}; relative recall {compact_text(evaluation.get('relative_recall'), DEFAULT_STATUS)}",
+            f"- **Missed PMIDs requiring resolution:** {compact_text(evaluation.get('missed_pmids'), 'none')}",
+            "",
+            "Retrieval by eligible synthesis type:",
+            "",
+            markdown_table(["Type", "Eligible", "Retrieved", "Relative recall", "Missed PMIDs"], type_rows),
+            "",
+        ])
     return lines
 
 
@@ -1268,6 +1327,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_revision_cycles(data))
     lines.extend(render_press_coverage(data))
     lines.extend(render_seed_validation(data))
+    lines.extend(render_evidence_synthesis_retrieval(data))
     lines.extend(render_external_registry_validation(data))
     lines.extend(render_mesh_backend_evidence(data))
     lines.extend(render_peer_review(data))

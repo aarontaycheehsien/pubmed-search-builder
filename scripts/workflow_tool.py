@@ -12,7 +12,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+ROOT_DIR = str(Path(__file__).resolve().parents[1])
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import manifest_tool
+from pubmed_search_builder.core.io import atomic_write_json
+from pubmed_search_builder.workflow.events import append_event, load_v2, new_manifest
+from pubmed_search_builder.workflow.service import migrate_manifest, run_stage as run_v2_stage, status as v2_status
 
 
 COUNT_FIELDS = ("count", "search_count", "relevant_record_count", "candidate_count", "benchmark_size")
@@ -188,8 +199,98 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_v2_parser() -> argparse.ArgumentParser:
+    """Build the contract-driven workflow-v2 interface.
+
+    The historical no-subcommand interface remains in ``build_parser`` and is
+    selected whenever the invocation starts with an option such as
+    ``--manifest``.  This lets existing agents and runbooks keep working.
+    """
+
+    parser = argparse.ArgumentParser(description="Contract-driven workflow v2 controls.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init = subparsers.add_parser("init", help="Create an empty append-only v2 run manifest.")
+    init.add_argument("--manifest", default="run_manifest_v2.json")
+    init.add_argument("--topic-slug", default="")
+    init.add_argument("--skill-version", default="2.0.0")
+
+    migrate = subparsers.add_parser("migrate", help="Write a v2 sibling from a v1.1 manifest without altering it.")
+    migrate.add_argument("--manifest", required=True, help="Existing v1.1 or v2 manifest.")
+    migrate.add_argument("--output", required=True, help="New v2 manifest path; must not exist.")
+
+    status = subparsers.add_parser("status", help="Derive workflow state and stage status from a v2 event log.")
+    status.add_argument("--manifest", default="run_manifest_v2.json")
+
+    decision = subparsers.add_parser("decision", help="Append a structured workflow decision to a v2 manifest.")
+    decision.add_argument("--manifest", default="run_manifest_v2.json")
+    decision.add_argument("--id", required=True, help="Stable decision identifier, for example framework or filter.")
+    decision.add_argument("--status", choices=["pending", "resolved", "declined"], required=True)
+    decision.add_argument("--value", default="")
+    decision.add_argument("--reason", required=True)
+
+    run = subparsers.add_parser("run", help="Run one declared stage and append validated artifact references.")
+    run.add_argument("--manifest", default="run_manifest_v2.json")
+    run.add_argument("--stage", required=True)
+    run.add_argument("--input", action="append", default=[], metavar="ROLE=PATH")
+    run.add_argument("--output", action="append", default=[], metavar="ROLE=PATH")
+    run.add_argument("--scope-version", type=int)
+    run.add_argument("--cwd", default=".")
+    run.add_argument("command_args", nargs=argparse.REMAINDER, help="Command and arguments after --.")
+    return parser
+
+
+def main_v2(argv: list[str]) -> int:
+    args = build_v2_parser().parse_args(argv)
+    try:
+        if args.command == "init":
+            path = Path(args.manifest)
+            if path.exists():
+                raise WorkflowRunError(f"Refusing to overwrite existing v2 manifest: {path}")
+            atomic_write_json(path, new_manifest(args.topic_slug, skill_version=args.skill_version))
+            receipt: dict[str, Any] = {
+                "ok": True,
+                "operation": "workflow-manifest-init",
+                "manifest": str(path),
+                "manifest_version": "2.0",
+            }
+        elif args.command == "migrate":
+            receipt = migrate_manifest(Path(args.manifest), Path(args.output))
+        elif args.command == "status":
+            receipt = v2_status(Path(args.manifest))
+        elif args.command == "decision":
+            event = append_event(
+                Path(args.manifest),
+                {
+                    "event_type": "decision-recorded",
+                    "decision_id": args.id,
+                    "status": args.status,
+                    "value": args.value,
+                    "reason": args.reason,
+                },
+            )
+            receipt = {"ok": True, "operation": "workflow-decision-record", "event": event}
+        else:
+            receipt = run_v2_stage(
+                manifest=Path(args.manifest),
+                stage_name=args.stage,
+                inputs=args.input,
+                outputs=args.output,
+                command=args.command_args,
+                cwd=Path(args.cwd).resolve(),
+                scope_version=args.scope_version,
+            )
+    except (OSError, ValueError, WorkflowRunError, json.JSONDecodeError) as exc:
+        receipt = {"ok": False, "operation": f"workflow-{args.command}", "error": str(exc)}
+    print(json.dumps(receipt, indent=2, ensure_ascii=False))
+    return 0 if receipt.get("ok") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    values = list(argv) if argv is not None else sys.argv[1:]
+    if values and values[0] in {"init", "migrate", "status", "decision", "run"}:
+        return main_v2(values)
+    args = build_parser().parse_args(values)
     try:
         receipt = run_stage(args)
     except (WorkflowRunError, manifest_tool.ManifestError, OSError, json.JSONDecodeError) as exc:

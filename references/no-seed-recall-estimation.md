@@ -139,7 +139,7 @@ python scripts/no_seed_discovery.py benchmark-harvest \
 # 2. Screen benchmark_screening.json against the locked scope (decision/title_abstract_reviewed/eligibility_reason),
 #    then freeze the screened-in set as a labelled benchmark.
 python scripts/no_seed_discovery.py benchmark-freeze \
-  --screening-file benchmark_screening.json --scope-version 1 \
+  --screening-file benchmark_screening.json --provenance-file benchmark_provenance.json --scope-version 1 \
   --output prior_review_benchmark.json
 
 # 3. Run relative recall against it. The source label flows into the audit.
@@ -148,7 +148,7 @@ python scripts/pubmed_tool.py recall --query-file strategy.txt \
   --output recall_prior_review.json
 ```
 
-`benchmark-harvest` merges two sources — the cited references of the review PMIDs (via the `refs` elink) and any user-supplied included-study PMID list — excludes the review PMIDs themselves, and writes a provenance-blinded screening artifact on a track separate from discovery. `benchmark-freeze` keeps only screened-in `include` records and labels the artifact `prior-review-semi-independent` with `confidence: semi-independent`. A safety-capped harvest cannot be frozen as a benchmark: complete or narrow the harvest first. Passing `--unscreened` freezes every fully harvested candidate as `confidence: indicative` (it then also imports citation noise) — use it only as a quick smoke test.
+`benchmark-harvest` merges two sources — the cited references of the review PMIDs (via the `refs` elink) and any user-supplied included-study PMID list — excludes the review PMIDs themselves, and writes a provenance-blinded screening artifact on a track separate from discovery. Its provenance records a source tier: declared included-study list, machine-extracted pending confirmation, screened cited reference, or legacy unclassified. Pass the provenance file to `benchmark-freeze` so the frozen benchmark retains its source-quality counts. `benchmark-freeze` keeps only screened-in `include` records and labels the artifact `prior-review-semi-independent` with `confidence: semi-independent`. A safety-capped harvest cannot be frozen as a benchmark: complete or narrow the harvest first. Passing `--unscreened` freezes every fully harvested candidate as `confidence: indicative` (it then also imports citation noise) — use it only as a quick smoke test.
 
 Interpret the result **asymmetrically**, exactly like every other no-seed recall signal: low recall against the benchmark is a real leak signal (inspect and screen the missed records, then route lexical gaps to block revision and structural gaps to scope re-entry); high recall is weak positive evidence only. A prior-review benchmark is *less* strategy-adjacent than a seed-expansion benchmark, so it flatters recall less, but it still cannot prove absolute sensitivity. Record the outcome with `manifest_tool.py state resolve-recall-offer done`.
 

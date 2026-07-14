@@ -209,6 +209,19 @@ python scripts/manifest_tool.py report --manifest run_manifest.json
 
 `workflow_tool.py` snapshots declared inputs before launch and registers a stage only when the process succeeds, its JSON output does not report `ok: false`, inputs remain unchanged, and a pre-existing output was actually refreshed (unless explicitly allowed). The complete-loop gate parses validation and final-QA artifacts, verifies cross-artifact hashes, and requires an evidence-backed version-2 critic.
 
+### Contract-driven workflow v2
+
+New builds can use the append-only v2 manifest, whose stage state is derived from typed artifact references rather than command labels or mutable checklist fields:
+
+```bash
+python scripts/workflow_tool.py init --manifest run_manifest_v2.json --topic-slug demo
+python scripts/workflow_tool.py decision --manifest run_manifest_v2.json --id question --status resolved --value "Review question" --reason "Independently supplied"
+python scripts/workflow_tool.py run --manifest run_manifest_v2.json --stage scope-lock --input protocol=review_protocol_v1.json --output scope=protocol_v1/protocol_compile_v1.json --scope-version 1 -- python scripts/protocol_tool.py compile review_protocol_v1.json --output-dir protocol_v1 --receipt protocol_v1/protocol_compile_v1.json
+python scripts/workflow_tool.py status --manifest run_manifest_v2.json
+```
+
+Use `workflow_tool.py migrate --manifest run_manifest.json --output run_manifest_v2.json` to create a v2 sibling from a v1.1 manifest; it never changes the source manifest. Existing `manifest_tool.py` and generic `workflow_tool.py --kind …` commands remain supported for legacy runs. The generated [`workflow contract`](references/workflow-contracts.md) is the executable source for v2 stage roles and conditional branches.
+
 ---
 
 ## Workflow

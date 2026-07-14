@@ -6,13 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter, defaultdict
@@ -24,16 +20,18 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+ROOT_DIR = str(Path(__file__).resolve().parents[1])
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from mesh_evidence import build_mesh_evidence, is_mesh_artifact
+from pubmed_search_builder.infrastructure.services import ncbi_eutils_policy
+from pubmed_search_builder.infrastructure.transport import StdlibTransport, TransportError, decode_json
 
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_EMAIL = ""
 DEFAULT_TOOL = "codex-search-strategy-check"
-REQUEST_TIMEOUT_SECONDS = 30
-REQUEST_RETRIES = 3
-REQUEST_BACKOFF_SECONDS = 1.0
-TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 INLINE_QUERY_WARNING_LENGTH = 1400
 HUGE_RETMAX_WARNING = 1000
 QUERY_TRANSLATION_MAX_ISSUES = 5
@@ -295,16 +293,6 @@ BOUNDARY_NOISE_TOKENS = {
 
 class PubMedError(Exception):
     pass
-
-
-def retry_delay(attempt: int) -> float:
-    # exponential backoff with light jitter to avoid synchronized retries during sweeps
-    base = REQUEST_BACKOFF_SECONDS * (2 ** attempt)
-    return base + random.uniform(0, REQUEST_BACKOFF_SECONDS)
-
-
-def transient_http_error(exc: urllib.error.HTTPError) -> bool:
-    return exc.code in TRANSIENT_HTTP_STATUS
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -853,7 +841,7 @@ def attach_hook(data: dict[str, object], hook: dict[str, object]) -> dict[str, o
 
 
 class NcbiClient:
-    def __init__(self) -> None:
+    def __init__(self, transport: StdlibTransport | None = None) -> None:
         self.email = read_env("NCBI_EMAIL", DEFAULT_EMAIL)
         self.tool = read_env("NCBI_TOOL", DEFAULT_TOOL)
         self.api_key = read_env("NCBI_API_KEY", "")
@@ -861,6 +849,7 @@ class NcbiClient:
         self.min_interval = 1.0 / self.rate_limit_per_second
         self._last_request = 0.0
         self.retries_performed = 0  # transient NCBI retries this run, surfaced in metadata()
+        self._transport = transport or StdlibTransport()
 
     def common_params(self) -> dict[str, str]:
         params = {
@@ -873,57 +862,27 @@ class NcbiClient:
         return params
 
     def request(self, endpoint: str, params: dict[str, str], *, method: str = "GET") -> bytes:
-        elapsed = time.monotonic() - self._last_request
-        if elapsed < self.min_interval:
-            time.sleep(self.min_interval - elapsed)
-
         url = f"{BASE_URL}/{endpoint}"
         merged = self.common_params()
         merged.update(params)
-        encoded = urllib.parse.urlencode(merged).encode("utf-8")
-
-        if method == "POST":
-            req = urllib.request.Request(url, data=encoded, method="POST")
-        else:
-            req = urllib.request.Request(f"{url}?{encoded.decode('utf-8')}", method="GET")
 
         user_agent = f"{self.tool}/1.0"
         if self.email:
             user_agent = f"{user_agent} ({self.email})"
-        req.add_header("User-Agent", user_agent)
-
-        for attempt in range(REQUEST_RETRIES + 1):
-            try:
-                with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-                    data = response.read()
-                self._last_request = time.monotonic()
-                return data
-            except urllib.error.HTTPError as exc:
-                if not transient_http_error(exc) or attempt == REQUEST_RETRIES:
-                    body = exc.read().decode("utf-8", errors="replace")[:2000]
-                    raise PubMedError(
-                        f"NCBI HTTP {exc.code} after {attempt + 1} attempt(s): {body}"
-                    ) from exc
-            except urllib.error.URLError as exc:
-                if attempt == REQUEST_RETRIES:
-                    raise PubMedError(
-                        f"NCBI request failed after {attempt + 1} attempt(s): {exc.reason}"
-                    ) from exc
-            except TimeoutError as exc:
-                if attempt == REQUEST_RETRIES:
-                    raise PubMedError(
-                        f"NCBI request timed out after {attempt + 1} attempt(s): {exc}"
-                    ) from exc
-            except OSError as exc:
-                if attempt == REQUEST_RETRIES:
-                    raise PubMedError(
-                        f"NCBI request failed after {attempt + 1} attempt(s): {exc}"
-                    ) from exc
-            # Reaching here means a transient error was caught and another attempt follows.
-            self.retries_performed += 1
-            time.sleep(retry_delay(attempt))
-
-        raise PubMedError("NCBI request failed: retries exhausted.")
+        try:
+            response = self._transport.request(
+                service="ncbi-eutils",
+                url=url,
+                params=merged,
+                method=method,
+                headers={"User-Agent": user_agent},
+                policy=ncbi_eutils_policy(float(self.rate_limit_per_second)),
+            )
+        except TransportError as exc:
+            raise PubMedError(str(exc)) from exc
+        self.retries_performed += response.retries
+        self._last_request = time.monotonic()
+        return response.body
 
     def metadata(self) -> dict[str, object]:
         return {
@@ -933,6 +892,23 @@ class NcbiClient:
             "rate_limit_per_second": self.rate_limit_per_second,
             "retries_performed": self.retries_performed,
         }
+
+
+def parse_eutils_json(raw: bytes, *, allow_literal_control_characters: bool = False) -> dict[str, object]:
+    """Decode one NCBI JSON response with endpoint-specific strictness.
+
+    eLink is the documented exception: it occasionally places literal control
+    characters inside string values.  Other E-utilities endpoints remain strict
+    so a malformed response cannot silently become evidence.
+    """
+
+    try:
+        value = decode_json(raw, strict=not allow_literal_control_characters)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise PubMedError(f"NCBI returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise PubMedError("NCBI JSON response root must be an object")
+    return value
 
 
 def esearch(client: NcbiClient, query: str, retmax: int, retstart: int, sort: str | None) -> dict[str, object]:
@@ -947,7 +923,7 @@ def esearch(client: NcbiClient, query: str, retmax: int, retstart: int, sort: st
         params["sort"] = sort
 
     raw = client.request("esearch.fcgi", params, method="POST" if len(query) > 1400 else "GET")
-    data = json.loads(raw.decode("utf-8"))
+    data = parse_eutils_json(raw)
     result = data.get("esearchresult", {})
     query_translation = result.get("querytranslation", "")
     translations = result.get("translationset", [])
@@ -1311,7 +1287,7 @@ def elink_neighbors(client: NcbiClient, seed_pmid: str, linkname: str) -> list[d
     if linkname == "pubmed_pubmed":
         params["cmd"] = "neighbor_score"
     raw = client.request("elink.fcgi", params, method="GET")
-    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    payload = parse_eutils_json(raw, allow_literal_control_characters=True)
     neighbors: list[dict[str, object]] = []
     for linkset in payload.get("linksets", []) or []:
         for linksetdb in linkset.get("linksetdbs", []) or []:

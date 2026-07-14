@@ -143,6 +143,8 @@ systematic review[pt]
 
 `systematic[sb]` is broader than only `systematic review[pt]` because it uses a search strategy as well as publication type logic. Do not assume they are equivalent.
 
+For a protocol that actually targets systematic reviews, meta-analyses, scoping reviews, or other evidence-synthesis reports, `systematic[sb]` is only one possible systematic-review component. It is not a universal evidence-synthesis hedge and must not be used as semantic proof that a record is eligible. Use the scoped profile, branch provenance, and human classification procedure in `references/evidence-synthesis-retrieval.md`. Do not add methods-topic headings such as `Meta-Analysis as Topic` to a completed-review retrieval profile by default.
+
 ## ISSG Search Filters Resource
 
 The ISSG Search Filters Resource is a discovery and appraisal source for methodological filters.
