@@ -674,6 +674,18 @@ class PriorReviewBenchmarkTests(unittest.TestCase):
         self.assertEqual(artifact["benchmark_source_label"], "prior-review-semi-independent")
         self.assertEqual(artifact["benchmark_size"], 2)
 
+    def test_freeze_preserves_benchmark_source_quality_tiers(self):
+        provenance = {
+            "records": [
+                {"pmid": "1", "source_evidence": [{"source": "included-study-list", "source_tier": "declared-included-study-list"}]},
+                {"pmid": "3", "source_evidence": [{"source": "prior-review-refs", "source_tier": "screened-cited-reference"}]},
+            ]
+        }
+        artifact = no_seed.freeze_benchmark(self._screened(), scope_version=1, screened=True, provenance=provenance)
+        self.assertEqual(artifact["benchmark_kind"], "screened-citation-benchmark")
+        self.assertEqual(artifact["source_tier_counts"], {"declared-included-study-list": 1, "screened-cited-reference": 1})
+        self.assertEqual(artifact["source_evidence"]["1"][0]["source_tier"], "declared-included-study-list")
+
     def test_freeze_screened_rejects_unreviewed_record(self):
         screening = self._screened()
         screening["records"][0]["title_abstract_reviewed"] = False

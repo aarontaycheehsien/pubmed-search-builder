@@ -18,6 +18,8 @@ run_manifest.json
 audit_*.json
 audit_*.md
 /pubmed_*
+!/pubmed_search_builder/
+!/pubmed_search_builder/**
 search_work/
 strategy_*.txt
 *_strategy_*.txt

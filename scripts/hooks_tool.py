@@ -543,7 +543,10 @@ def add_layer_balance_issues(issues: list[dict[str, str]], text: str) -> None:
 def detect_methodological_intents(text: str) -> list[str]:
     patterns = {
         "randomized-trial": r"\b(randomi[sz]ed|random allocation|clinical trial|controlled trial|rct)\b",
-        "systematic-review": r"\b(systematic review|meta-analysis|metaanalysis|evidence synthesis|scoping review)\b",
+        "evidence-synthesis": (
+            r"\b(?:systematic|rapid|living|scoping|umbrella|mapping|integrative|qualitative)\s+review(?:s)?\b"
+            r"|\bmeta[\s-]?analys(?:is|es)\b|\bmeta[\s-]?synthes(?:is|es)\b|\bevidence synthesis\b"
+        ),
         "qualitative": r"\b(qualitative|interview|focus group|ethnograph|grounded theory|thematic analysis)\b",
         "diagnostic": r"\b(diagnostic accuracy|sensitivity and specificity|specificity|receiver operating|roc curve|diagnos[ei]s)\b",
         "prognostic": r"\b(prognos|prediction model|predictive model|risk model|survival|mortality risk)\b",
@@ -559,8 +562,9 @@ def detect_methodological_intents(text: str) -> list[str]:
 
 def detect_filter_fragments(text: str) -> list[str]:
     patterns = [
-        r"\b(randomized controlled trial|controlled clinical trial|clinical trial|meta-analysis|systematic review)\[pt\]",
-        r"\b(review|case reports|observational study|clinical trial)\[pt\]",
+        r"(?:\"?(?:randomized controlled trial|controlled clinical trial|clinical trial|meta[\s-]?analysis|network meta[\s-]?analysis|systematic review|scoping review)\"?)\s*\[(?:pt|publication type)\]",
+        r"(?:\"?(?:review|case reports|observational study|clinical trial)\"?)\s*\[(?:pt|publication type)\]",
+        r"\bsystematic\s*\[\s*sb\s*\]",
         r"\bclinical queries\b",
         r"\bcochrane hsss\b",
         r"\bmcMaster\b",
@@ -628,6 +632,7 @@ def final_qa(strategy: str, warning_dispositions: dict[str, str] | None = None) 
         "species_limit": r"\b(?:humans?|animals?)\s*\[(?:mesh|mesh terms|mh)\]",
         "age_limit": r"\b(?:adult|child|adolescent|aged|infant)\s*\[(?:mesh|mesh terms|mh)\]",
         "publication_type_filter": r"\[(?:pt|publication type)\]",
+        "review_subset_filter": r"\bsystematic\s*\[\s*sb\s*\]",
         "full_text_filter": r"\b(?:free full text|full text)\[sb\]",
     }
     for code, pattern in limit_patterns.items():
@@ -717,12 +722,13 @@ def filter_check(
     filters = detect_filter_fragments(text)
     review_needed = bool(intents or filters)
     no_filter_used = filter_decision == "none"
-    validated_filter_review_needed = review_needed and (not no_filter_used or bool(filters))
+    filter_used = filter_decision == "used"
+    validated_filter_review_needed = filter_used or (review_needed and (not no_filter_used or bool(filters)))
 
     if no_filter_used and filters:
         add_issue(
             issues,
-            "warning",
+            "error",
             "filter_fragments_conflict_with_none",
             "The text appears to contain methodological filter fragments, but filter decision is 'none'; verify that no filter was actually applied.",
             ", ".join(filters),
@@ -730,23 +736,30 @@ def filter_check(
     if no_filter_used and review_needed and not no_filter_reason:
         add_issue(
             issues,
-            "warning",
+            "error",
             "missing_no_filter_reason",
             "State why no methodological filter was applied even though diagnostic, prognostic, or other evidence-type language was detected.",
         )
-    if review_needed and not no_filter_used and not filter_source:
+    if filter_decision == "undecided" and review_needed:
         add_issue(
             issues,
-            "warning",
+            "error",
+            "methodological_filter_decision_required",
+            "Record whether a methodological filter was used or intentionally not used before handoff.",
+        )
+    if filter_used and not filter_source:
+        add_issue(
+            issues,
+            "error",
             "missing_validated_filter_source",
             "State the validated filter or hedge source, version, interface, and any adaptation.",
         )
-    if review_needed and not no_filter_used and topic_only_count is None:
-        add_issue(issues, "warning", "missing_topic_only_count", "Test and report the topic-only PubMed count before adding the filter.")
-    if review_needed and not no_filter_used and topic_plus_filter_count is None:
-        add_issue(issues, "warning", "missing_topic_plus_filter_count", "Test and report the topic-plus-filter PubMed count.")
-    if review_needed and not no_filter_used and seed_pmids and not seed_impact:
-        add_issue(issues, "warning", "missing_seed_filter_impact", "Check whether the methodological filter loses any supplied seed PMIDs.")
+    if filter_used and topic_only_count is None:
+        add_issue(issues, "error", "missing_topic_only_count", "Test and report the topic-only PubMed count before adding the filter.")
+    if filter_used and topic_plus_filter_count is None:
+        add_issue(issues, "error", "missing_topic_plus_filter_count", "Test and report the topic-plus-filter PubMed count.")
+    if filter_used and seed_pmids and not seed_impact:
+        add_issue(issues, "error", "missing_seed_filter_impact", "Check whether the methodological filter loses any supplied seed PMIDs.")
 
     required_actions = []
     if review_needed and no_filter_used:
@@ -754,7 +767,7 @@ def filter_check(
             "Document that the detected evidence-type language is part of the topical concept rather than a methodological search filter.",
             "Report that no methodological filter or hedge was applied and give the reason.",
         ]
-    elif review_needed:
+    elif filter_used or review_needed:
         required_actions = [
             "Read references/validated-methodological-filters-and-hedges.md before finalizing the filter.",
             "Prefer a validated PubMed/interface-appropriate filter over ad hoc construction.",

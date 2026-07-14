@@ -17,6 +17,7 @@ RUNTIME_GLOBS = {
     "references": ("*.md",),
     "schemas": ("*.json",),
     "scripts": ("*.py",),
+    "pubmed_search_builder": ("**/*.py",),
 }
 
 
@@ -71,7 +72,9 @@ def package_skill(source: Path, output: Path, *, replace: bool = False) -> dict[
             if not src.is_file():
                 continue
             relative = src.relative_to(source)
-            shutil.copy2(src, output / relative)
+            destination = output / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, destination)
             copied.append(relative.as_posix())
 
     receipt = {

@@ -14,6 +14,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from pubmed_search_builder.domain.review_profiles import compile_review_profile
+from pubmed_search_builder.domain.review_types import SCREENING_HANDLING, SYNTHESIS_TYPES, TARGET_MODES
+
 
 DSL_VERSION = 1
 ARTIFACT_VERSION = 1
@@ -29,9 +36,9 @@ ROOT_KEYS = {
     "dsl_version", "protocol_id", "scope_version", "version_change", "review",
     "eligibility", "searchable_scope", "screening_only", "filters_and_limits",
     "date_boundaries", "seeds", "priorities", "focused_variants",
-    "information_source_mode", "external_validation",
+    "information_source_mode", "external_validation", "evidence_target",
 }
-REQUIRED_ROOT_KEYS = ROOT_KEYS - {"information_source_mode", "external_validation"}
+REQUIRED_ROOT_KEYS = ROOT_KEYS - {"information_source_mode", "external_validation", "evidence_target"}
 
 
 class ProtocolError(ValueError):
@@ -220,6 +227,33 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
             issues.append("$.external_validation.status must be enabled in pubmed-plus-external-validation mode")
     elif isinstance(external, dict) and external.get("status") == "enabled":
         issues.append("$.external_validation cannot be enabled in pubmed-only mode")
+
+    target = data.get("evidence_target")
+    if target is not None:
+        target = _object(
+            target,
+            "$.evidence_target",
+            {"mode", "eligible_types", "protocols", "narrative_reviews", "methods_papers"},
+            {"mode", "eligible_types", "protocols", "narrative_reviews", "methods_papers"},
+            issues,
+        )
+        target_mode = target.get("mode")
+        if target_mode not in TARGET_MODES:
+            issues.append("$.evidence_target.mode must be primary-studies, evidence-syntheses, or mixed")
+        raw_types = _array(target.get("eligible_types"), "$.evidence_target.eligible_types", issues)
+        target_types = [_text(value, f"$.evidence_target.eligible_types[{index}]", issues, lock=lock) for index, value in enumerate(raw_types)]
+        if len(target_types) != len(set(target_types)):
+            issues.append("$.evidence_target.eligible_types must contain unique values")
+        for value in target_types:
+            if value and value not in SYNTHESIS_TYPES:
+                issues.append(f"$.evidence_target.eligible_types contains unsupported type {value!r}")
+        if lock and target_mode in {"evidence-syntheses", "mixed"} and not target_types:
+            issues.append("$.evidence_target.eligible_types must not be empty when targeting evidence syntheses")
+        if target_mode == "primary-studies" and target_types:
+            issues.append("$.evidence_target.eligible_types must be empty in primary-studies mode")
+        for key in ("protocols", "narrative_reviews", "methods_papers"):
+            if target.get(key) not in SCREENING_HANDLING:
+                issues.append(f"$.evidence_target.{key} must be include, exclude, or screen")
 
     review = _object(data.get("review"), "$.review", {"question", "framework"}, {"question", "framework"}, issues)
     _text(review.get("question"), "$.review.question", issues, lock=lock)
@@ -420,6 +454,13 @@ def new_protocol() -> dict[str, Any]:
         "scope_version": 1,
         "version_change": {"previous_scope_version": None, "reason": "", "decision_source": ""},
         "review": {"question": "", "framework": {"name": "", "rationale": "", "slots": []}},
+        "evidence_target": {
+            "mode": "primary-studies",
+            "eligible_types": [],
+            "protocols": "screen",
+            "narrative_reviews": "screen",
+            "methods_papers": "screen",
+        },
         "eligibility": {"inclusion": [], "exclusion": []},
         "searchable_scope": {"concepts": []},
         "screening_only": {"properties": []},
@@ -461,6 +502,7 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
     concepts = protocol["searchable_scope"]["concepts"]
     seeds = protocol["seeds"]["records"]
     decisions = protocol["filters_and_limits"]["decisions"]
+    evidence_target = protocol.get("evidence_target")
 
     concept_ledger = {
         **_envelope(protocol, source, "concept-ledger"),
@@ -509,6 +551,7 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
             "review-question", "scope-version-change", "eligibility-vs-searchable-scope", "concept-structure",
             "screening-only-properties", "filters-and-limits", "date-boundaries",
             "seed-roles", "recall-and-workload", "focused-variants", "information-source-mode",
+            *(["evidence-target"] if isinstance(evidence_target, dict) else []),
         ],
         "protocol_summary": {
             "version_change": protocol["version_change"],
@@ -526,6 +569,7 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
                 "external_validation",
                 {"status": "not-applicable", "purpose": "pubmed-leak-detection", "sources": []},
             ),
+            "evidence_target": evidence_target,
         },
     }
     conditional_sections: list[dict[str, Any]] = []
@@ -539,6 +583,8 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
         conditional_sections.append({"id": "focused-variants", "title": "Focused variants", "required": True, "source_refs": ["focused_variants"]})
     if protocol.get("information_source_mode", "pubmed-only") == "pubmed-plus-external-validation":
         conditional_sections.append({"id": "external-validation", "title": "External trial-registry validation", "required": True, "source_refs": ["external_validation"]})
+    if isinstance(evidence_target, dict) and evidence_target.get("mode") in {"evidence-syntheses", "mixed"}:
+        conditional_sections.append({"id": "evidence-synthesis-retrieval", "title": "Evidence-synthesis retrieval profile", "required": True, "source_refs": ["evidence_target"]})
     audit_outline = {
         **_envelope(protocol, source, "audit-outline"),
         "sections": [
@@ -570,13 +616,18 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
             *conditional_sections,
         ],
     }
-    return {
+    artifacts = {
         f"concept_ledger_v{version}.json": concept_ledger,
         f"candidate_ledger_template_v{version}.json": candidate_template,
         f"block_registry_v{version}.json": block_registry,
         f"critic_packet_v{version}.json": critic_packet,
         f"audit_outline_v{version}.json": audit_outline,
     }
+    if isinstance(evidence_target, dict) and evidence_target.get("mode") in {"evidence-syntheses", "mixed"}:
+        profile = compile_review_profile(protocol)
+        profile["generated_from"] = {"path": source.name, "sha256": canonical_sha256(protocol)}
+        artifacts[f"review_retrieval_profile_v{version}.json"] = profile
+    return artifacts
 
 
 def _atomic_write_many(files: dict[Path, bytes]) -> None:

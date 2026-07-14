@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -50,6 +51,41 @@ class FakeClient:
 
 
 class RelatedTests(unittest.TestCase):
+    def test_ncbi_client_delegates_to_shared_transport(self):
+        class FakeTransport:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(body=b"payload", retries=2)
+
+        transport = FakeTransport()
+        client = pubmed_tool.NcbiClient(transport=transport)
+
+        self.assertEqual(client.request("elink.fcgi", {"id": "1"}), b"payload")
+        self.assertEqual(client.retries_performed, 2)
+        self.assertEqual(transport.calls[0]["service"], "ncbi-eutils")
+        self.assertEqual(transport.calls[0]["params"]["id"], "1")
+        self.assertIn("User-Agent", transport.calls[0]["headers"])
+
+    def test_elink_neighbors_accepts_raw_control_character_in_json_string(self):
+        payload = elink_payload("1", "pubmed_pubmed", [("10", 99)])
+        payload["linksets"][0]["diagnostic"] = "unexpected\x1fcontrol"
+        raw = json.dumps(payload).replace("\\u001f", "\x1f").encode("utf-8")
+
+        class RawResponseClient:
+            def request(self, endpoint, params, *, method="GET"):
+                return raw
+
+        neighbors = pubmed_tool.elink_neighbors(RawResponseClient(), "1", "pubmed_pubmed")
+
+        self.assertEqual(neighbors, [{"pmid": "10", "score": 99}])
+
+    def test_other_eutils_json_endpoints_remain_strict(self):
+        with self.assertRaises(pubmed_tool.PubMedError):
+            pubmed_tool.parse_eutils_json(b'{"message":"unexpected\x1fcontrol"}')
+
     def test_dedup_provenance_and_overlap_ranking(self):
         # PMID 100 is a neighbor of both seeds (overlap 2); 200 only of seed 1.
         responses = {

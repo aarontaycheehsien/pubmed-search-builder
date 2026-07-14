@@ -117,6 +117,33 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn("67890", markdown)
         self.assertIn("not a review-level completeness estimate", markdown)
 
+    def test_evidence_synthesis_retrieval_keeps_profile_and_screening_distinct(self):
+        data = sample_data()
+        data["review_retrieval_profile"] = {
+            "profile_id": "pubmed-evidence-synthesis-1", "profile_version": 1, "profile_sha256": "profile-hash",
+            "eligible_types": ["systematic-review", "meta-analysis"], "mesh_year": 2026, "sources": ["NLM"],
+            "branches": [{"branch_id": "systematic-subset", "kind": "official-subset", "indexing_dependency": "mixed", "query": "systematic[sb]"}],
+        }
+        data["review_classification"] = {"counts": {"include": 1, "exclude": 1}, "included_pmids": ["123"]}
+        data["review_filter_evaluation"] = {
+            "eligible_count": 1, "retrieved_count": 1, "relative_recall": 1.0, "missed_pmids": [],
+            "per_synthesis_type": {"systematic-review": {"eligible": 1, "retrieved": 1, "relative_recall": 1.0, "missed_pmids": []}},
+        }
+        markdown = audit_markdown.render_audit_markdown(data)
+        self.assertIn("## Evidence-synthesis retrieval", markdown)
+        self.assertIn("profile branches are retrieval aids only", markdown)
+        self.assertIn("systematic[sb]", markdown)
+
+    def test_relative_recall_renders_prior_review_source_tiers(self):
+        data = sample_data()
+        data["relative_recall"] = {
+            "benchmark_source": "prior-review-semi-independent", "benchmark_kind": "declared-included-study-benchmark",
+            "source_tier_counts": {"declared-included-study-list": 4}, "benchmark_size": 4,
+        }
+        markdown = audit_markdown.render_audit_markdown(data)
+        self.assertIn("declared-included-study-benchmark", markdown)
+        self.assertIn("declared-included-study-list", markdown)
+
     def test_protocol_outline_generates_bound_headings(self):
         data = sample_data()
         data.update({

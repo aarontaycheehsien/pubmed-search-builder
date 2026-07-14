@@ -8,17 +8,18 @@ Track the detailed stages in `run_manifest.json`, but show users only four conci
 
 1. `intake` - confirm the plain-language question, build/review mode, and optional seed status.
 2. `scope-lock` - validate, compile, and lock review protocol version 1 before record evidence is mined.
-3. `candidate-discovery` - fetch supplied seeds and discover pilot/related/prior-review candidates.
-4. `candidate-screening` - screen candidates and freeze discovery/holdout roles.
-5. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
-6. `block-testing` - build blocks and run reversible counts, samples, gaps, variants, and filter comparisons.
-7. `validation` - test held-out records, or label reused-seed/heuristic checks as non-independent.
+3. `review-discovery` - conditional on an explicit evidence-synthesis target: compile the report-retrieval profile, retain branch provenance, classify every candidate, and evaluate final retrieval by eligible report type.
+4. `candidate-discovery` - fetch supplied seeds and discover pilot/related/prior-review candidates.
+5. `candidate-screening` - screen candidates and freeze discovery/holdout roles.
+6. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
+7. `block-testing` - build blocks and run reversible counts, samples, gaps, variants, and filter comparisons.
+8. `validation` - test held-out records, or label reused-seed/heuristic checks as non-independent.
    When protocol-enabled, run the separate external trial-registry sentinel after PubMed vocabulary and strategy development; registry records never enter term mining.
-8. `critic-review` - run a fresh-context PRESS-informed critic against the current artifacts.
-9. `revision` - route findings, reopen scope when structural, and rerun affected evidence.
-10. `final-qa` - confirm PubMed translation, syntax, hygiene, and final counts.
-11. `audit-output` - render the audit and append every final artifact to the manifest.
-12. `peer-review-handoff` - deliver the draft for human PRESS peer review.
+9. `critic-review` - run a fresh-context PRESS-informed critic against the current artifacts.
+10. `revision` - route findings, reopen scope when structural, and rerun affected evidence.
+11. `final-qa` - confirm PubMed translation, syntax, hygiene, and final counts.
+12. `audit-output` - render the audit and append every final artifact to the manifest.
+13. `peer-review-handoff` - deliver the draft for human PRESS peer review.
 
 Stages 5-9 form a loop. Do not proceed to final QA until a critic round passes with no open actionable finding.
 

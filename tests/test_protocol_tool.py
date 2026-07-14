@@ -126,6 +126,20 @@ class ProtocolValidationTests(unittest.TestCase):
         protocol = valid_protocol()
         self.assertEqual(protocol_tool.validate_protocol(protocol, "lock"), [])
 
+    def test_evidence_synthesis_target_requires_types_and_valid_screening_policy(self):
+        protocol = valid_protocol()
+        protocol["evidence_target"] = {
+            "mode": "evidence-syntheses",
+            "eligible_types": [],
+            "protocols": "exclude",
+            "narrative_reviews": "screen",
+            "methods_papers": "screen",
+        }
+        issues = protocol_tool.validate_protocol(protocol, "lock")
+        self.assertTrue(any("eligible_types must not be empty" in issue for issue in issues))
+        protocol["evidence_target"]["eligible_types"] = ["systematic-review", "meta-analysis"]
+        self.assertEqual(protocol_tool.validate_protocol(protocol, "lock"), [])
+
     def test_external_validation_mode_requires_enabled_source_configuration(self):
         protocol = valid_protocol()
         protocol["information_source_mode"] = "pubmed-plus-external-validation"
@@ -229,6 +243,27 @@ class ProtocolCompilationTests(unittest.TestCase):
             result = protocol_tool.verify_protocol(source, receipt_path)
             self.assertTrue(result["ok"])
             self.assertEqual(result["artifact_count"], 5)
+
+    def test_evidence_synthesis_protocol_compiles_a_bound_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            protocol = valid_protocol()
+            protocol["evidence_target"] = {
+                "mode": "evidence-syntheses",
+                "eligible_types": ["systematic-review", "meta-analysis", "scoping-review"],
+                "protocols": "exclude",
+                "narrative_reviews": "screen",
+                "methods_papers": "exclude",
+            }
+            source = self.write_protocol(directory, protocol)
+            receipt_path = directory / "protocol_compile_v1.json"
+            receipt = protocol_tool.compile_protocol(source, directory, receipt_path)
+            self.assertEqual(len(receipt["artifacts"]), 6)
+            profile = json.loads((directory / "review_retrieval_profile_v1.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["artifact_type"], "review-retrieval/profile")
+            self.assertIn("systematic[sb]", profile["query"])
+            self.assertIn('"meta-analysis"[pt]', profile["query"])
+            self.assertEqual(profile["screening_policy"]["protocols"], "exclude")
 
     def test_compile_is_deterministic_and_refuses_different_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:

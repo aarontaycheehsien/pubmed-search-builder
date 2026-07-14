@@ -15,6 +15,8 @@ Build a recall-first PubMed strategy and a reproducible audit trail. Keep three 
 
 Never let a seed set, candidate set, existing Boolean strategy, or retrieval count silently redefine eligibility.
 
+When the protocol explicitly targets evidence syntheses, separately define eligible completed report types and the handling of protocols, narrative reviews, and methods papers. Read `references/evidence-synthesis-retrieval.md`; its profile branches are retrieval aids, never eligibility evidence, and every report candidate needs human classification against the locked protocol.
+
 The default operating mode is `pubmed-only`: make no external registry calls and do not claim review-level completeness. When intervention trials are eligible and the protocol enables `pubmed-plus-external-validation`, read `references/external-trial-registry-validation.md` and run the registry sentinel only as an external PubMed leak check. Registry records never feed PubMed term mining.
 
 When a structured review protocol is supplied, read `references/protocol-dsl.md`. Validate it in lock mode and compile it before any record or PubMed evidence is inspected. Treat the versioned protocol as the scope authority; generated ledgers and packets are derived artifacts, not alternate places to edit scope.
@@ -36,7 +38,7 @@ Do not search PubMed or the web to answer the substantive evidence question. The
 ## Canonical Loop
 
 1. **Lock conceptual scope.** Read `references/framework-selection.md`, `references/concept-analysis-and-gating.md`, and `references/anti-patterns.md`. Author, validate, and compile a versioned review-protocol DSL file before mining records. It is the locked source for essential `AND` blocks, within-block term families, screening-only elements, optional/focused concepts, filters, date boundaries, seed roles, priorities, and resolved decisions. Import a legacy retrieval-scope JSON only through `protocol_tool.py migrate-scope`.
-2. **Build a candidate evidence set.** Read `references/candidate-screening.md` and, when seeds exist, `references/seed-pmid-validation.md`. Discover candidates only after scope version 1 is locked. Prescreen candidates as include/exclude/uncertain before they can drive term mining. Keep user-confirmed seeds, screened-in discovery records, held-out validation records, and unscreened heuristic neighbors distinct.
+2. **Build a candidate evidence set.** Read `references/candidate-screening.md` and, when seeds exist, `references/seed-pmid-validation.md`. Discover candidates only after scope version 1 is locked. Prescreen candidates as include/exclude/uncertain before they can drive term mining. When evidence syntheses are eligible, also compile the scoped review-retrieval profile, classify every report candidate, and evaluate the final strategy by eligible report type. Keep user-confirmed seeds, screened-in discovery records, held-out validation records, review-report candidates, and unscreened heuristic neighbors distinct.
 3. **Build and probe.** Read `references/workflow.md` and load the tool, MeSH, title/abstract, wildcard, gap-analysis, filter, and no-seed references only when their stage is reached. After screening, run active vocabulary learning only within locked concepts; diagnose excluded records separately and route new concepts or eligibility interpretations through scope re-entry. Retest every accepted term against the frozen holdout when available and differential samples. Mine accepted discovery records, sweep MeSH, inspect PubMed translation, construct blocks, and run reversible diagnostic comparisons. When screened relevant records exist, calculate empirical fragility metrics for every block; preserve any human override only with a reason. Run automatic leave-one-block-out concept ablation for every strategy with two or more proposed `AND` blocks. Objective terms are candidates, not automatic additions.
 4. **Critique, revise, and retest.** Read `references/press-critic.md` and `references/no-harm-revisions.md`. Freeze the critic inputs with `critic_tool.py --build-bundle`, then run a fresh-context PRESS-informed critic against that evidence bundle. Use critic contract version 2: explicit evidence-referenced verdicts for every PRESS domain and stable finding IDs carried across rounds until resolved. Route lexical findings to the affected `OR` block; structural findings back through `AND`-block admission; scope findings to the user/protocol; filter findings to topic-only versus filtered comparison; and syntax findings to repair. Before adoption, prove the named defect is fixed, held-out retrieval is preserved, required blocks remain justified, syntax/translation is stable, scope is unchanged or explicitly versioned, and before/after workload is recorded. Automatically keep the baseline authoritative when any check fails; retain a failing change only as a labelled experimental variant. Re-probe every affected branch. Repeat until no actionable finding remains open.
 5. **Validate and hand off.** Validate against held-out relevant records when available; otherwise label reused-seed or heuristic checks as non-independent. If external validation is enabled, screen registry trials separately, link publications, and test only eligible linked PubMed PMIDs against the final strategy. For fragile topics, deliver a recall-first main strategy and a focused prioritization strategy by default; never let the focused strand replace the main search. Estimate screening burden from reproducible stratified labels and use it only to choose among variants that already meet the independent held-out recall requirement. Run final PubMed translation/hygiene checks, render the Markdown audit, save `run_manifest.json`, and flag the strategy for external human PRESS peer review.
@@ -64,6 +66,7 @@ When the user names adjacent or prior systematic reviews (the `name-adjacent-rev
 - Treat related-record and pilot-expansion recall as heuristic, never as absolute sensitivity.
 - Do not overfit to seeds, pilots, filters, low counts, or PRESS-critic suggestions.
 - Record scope changes explicitly; never mutate the meaning of a block under the same scope version.
+- A report-level profile is not a validated universal filter: preserve its NLM source snapshot, branch indexing limitations, human classifications, and per-type retrieval misses.
 
 ## Completion Gate
 
@@ -78,12 +81,15 @@ Run `scripts/manifest_tool.py show --validate --check-files --require-complete-l
 
 In `pubmed-plus-external-validation` mode, also require completed/declined/unavailable status for every enabled registry source, complete trial screening and publication linking, evaluation of all eligible linked PubMed PMIDs, and resolution of every PubMed miss. In `pubmed-only` mode, no registry artifact is required; the audit must state that review-level completeness was not assessed.
 
+When `evidence_target.mode` is `evidence-syntheses` or `mixed`, the conditional review-discovery gate additionally requires the profile, report candidates, complete classifications, and review retrieval evaluation before handoff.
+
 Use `references/audit-template.md` and `scripts/audit_markdown.py` for the report. Do not imply that automated PRESS-informed QA is human PRESS peer review.
 
 ## Reference Routing
 
 - `references/protocol-dsl.md` - versioned review-protocol authoring, validation, compilation, verification, and legacy migration.
 - `references/workflow.md` - canonical loop, re-entry paths, stop criteria, and artifact sequence.
+- `references/workflow-contracts.md` - generated stage aliases, typed input/output roles, and executable conditions.
 - `references/framework-selection.md` - question type and framework selection.
 - `references/concept-analysis-and-gating.md` - scope artifact, concept roles, fragility, and `AND`-block admission.
 - `references/empirical-fragility.md` - measured fragility dimensions, classification, and reasoned human overrides.
@@ -97,6 +103,7 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 - `references/tiab-expansion.md` - title/abstract expansion and objective term ranking.
 - `references/bramer-reciprocal-gap-analysis.md` - reciprocal controlled-vocabulary/text-word gap checks.
 - `references/validated-methodological-filters-and-hedges.md` - validated PubMed filters and translation safeguards.
+- `references/evidence-synthesis-retrieval.md` - scope-bound systematic-review/meta-analysis retrieval, classification, source snapshots, and benchmark tiers.
 - `references/seed-pmid-validation.md` - seeded discovery and validation.
 - `references/no-seed-recall-estimation.md` - optional pilot-expansion heuristic.
 - `references/external-trial-registry-validation.md` - optional registry sentinel for external PubMed leak detection.

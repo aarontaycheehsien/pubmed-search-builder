@@ -1091,6 +1091,12 @@ BENCHMARK_INTEGRITY_NOTE = (
     "for relative recall; benchmark records must not feed term mining. Interpret asymmetrically - low recall "
     "is a real leak signal, high recall is weak positive evidence."
 )
+BENCHMARK_SOURCE_TIERS = {
+    "declared-included-study-list",
+    "machine-extracted-pending-confirmation",
+    "screened-cited-reference",
+    "legacy-unclassified",
+}
 
 
 def _pmid_sort_key(pmid: str) -> tuple[int, str]:
@@ -1107,6 +1113,7 @@ def harvest_benchmark(
     safety_cap: int,
     max_per_review: int,
     binding: dict[str, Any] | None = None,
+    included_source_evidence: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Harvest a screenable benchmark-candidate set from named adjacent reviews.
 
@@ -1118,9 +1125,10 @@ def harvest_benchmark(
     """
     review_set = {str(value) for value in review_pmids}
     sources: dict[str, list[str]] = {}
+    source_evidence: dict[str, list[dict[str, str]]] = {}
     order: list[str] = []
 
-    def add(pmid: Any, source: str) -> None:
+    def add(pmid: Any, source: str, source_tier: str) -> None:
         text = str(pmid).strip()
         if not text or text in review_set:
             return
@@ -1129,9 +1137,19 @@ def harvest_benchmark(
             order.append(text)
         if source not in sources[text]:
             sources[text].append(source)
+        evidence = {"source": source, "source_tier": source_tier}
+        if evidence not in source_evidence.setdefault(text, []):
+            source_evidence[text].append(evidence)
 
     for pmid in included_pmids:
-        add(pmid, "included-study-list")
+        add(pmid, "included-study-list", "declared-included-study-list")
+    for item in included_source_evidence or []:
+        if not isinstance(item, dict):
+            raise NoSeedDiscoveryError("Included-study evidence rows must be objects")
+        tier = str(item.get("source_tier") or "").strip()
+        if tier not in BENCHMARK_SOURCE_TIERS - {"screened-cited-reference", "legacy-unclassified"}:
+            raise NoSeedDiscoveryError(f"Unsupported included-study source_tier {tier!r}")
+        add(item.get("pmid"), "included-study-evidence", tier)
     cap_reached = False
     if review_set:
         related = pubmed_tool.related_pmids(
@@ -1144,7 +1162,7 @@ def harvest_benchmark(
         cap_reached = int(related.get("candidate_count_before_cap", 0) or 0) > safety_cap
         for item in related.get("candidate_pmids", []):
             if isinstance(item, dict) and item.get("pmid"):
-                add(item["pmid"], "prior-review-refs")
+                add(item["pmid"], "prior-review-refs", "screened-cited-reference")
 
     candidates = pubmed_tool.dedup_preserving_order(order)
     fetched = pubmed_tool.efetch(client, candidates) if candidates else {"records": []}
@@ -1173,11 +1191,18 @@ def harvest_benchmark(
             }
         )
         provenance_records.append(
-            {"candidate_id": candidate_id, "pmid": pmid, "benchmark_sources": sources[pmid]}
+            {
+                "candidate_id": candidate_id,
+                "pmid": pmid,
+                "benchmark_sources": sources[pmid],
+                "source_evidence": source_evidence[pmid],
+            }
         )
     source_reviews = sorted(review_set, key=_pmid_sort_key)
     screening = {
         "operation": "prior-review-benchmark-screening",
+        "artifact_type": "prior-review-benchmark/evidence",
+        "artifact_version": 1,
         "scope_version": scope_version,
         "benchmark_candidate": True,
         "source_reviews": source_reviews,
@@ -1193,6 +1218,8 @@ def harvest_benchmark(
     }
     provenance = {
         "operation": "prior-review-benchmark-provenance",
+        "artifact_type": "prior-review-benchmark/evidence",
+        "artifact_version": 1,
         "scope_version": scope_version,
         "source_reviews": source_reviews,
         "records": provenance_records,
@@ -1210,6 +1237,7 @@ def freeze_benchmark(
     scope_version: int,
     screened: bool,
     binding: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze a screened (or, tiered, unscreened) prior-review benchmark artifact.
 
@@ -1247,8 +1275,33 @@ def freeze_benchmark(
         pmids = [str(record.get("pmid")) for record in records if record.get("pmid")]
         status, confidence = "unscreened", "indicative"
     pmids = pubmed_tool.dedup_preserving_order(pmids)
+    provenance_by_pmid: dict[str, list[dict[str, str]]] = {}
+    if provenance is not None:
+        rows = provenance.get("records") if isinstance(provenance, dict) else None
+        if not isinstance(rows, list):
+            raise NoSeedDiscoveryError("Benchmark provenance must contain a records list")
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("pmid"):
+                continue
+            evidence = row.get("source_evidence")
+            if not isinstance(evidence, list):
+                evidence = [{"source": value, "source_tier": "legacy-unclassified"} for value in row.get("benchmark_sources", [])]
+            provenance_by_pmid[str(row["pmid"])] = [item for item in evidence if isinstance(item, dict)]
+    frozen_evidence = {pmid: provenance_by_pmid.get(pmid, []) for pmid in pmids}
+    tiers = [str(item.get("source_tier") or "legacy-unclassified") for values in frozen_evidence.values() for item in values]
+    tier_counts = {tier: tiers.count(tier) for tier in sorted(set(tiers))}
+    if not tiers:
+        benchmark_kind = "legacy-unclassified-benchmark"
+    elif all(tier == "declared-included-study-list" for tier in tiers):
+        benchmark_kind = "declared-included-study-benchmark"
+    elif any(tier == "machine-extracted-pending-confirmation" for tier in tiers):
+        benchmark_kind = "machine-extracted-candidate-benchmark"
+    else:
+        benchmark_kind = "screened-citation-benchmark"
     artifact = {
         "operation": "prior-review-benchmark",
+        "artifact_type": "prior-review-benchmark/evidence",
+        "artifact_version": 1,
         "ok": True,
         "scope_version": scope_version,
         "benchmark_source_label": BENCHMARK_SOURCE_LABEL,
@@ -1258,6 +1311,9 @@ def freeze_benchmark(
         "source_reviews": screening.get("source_reviews", []),
         "benchmark_size": len(pmids),
         "pmids": pmids,
+        "benchmark_kind": benchmark_kind,
+        "source_tier_counts": tier_counts,
+        "source_evidence": frozen_evidence,
         "integrity_note": BENCHMARK_INTEGRITY_NOTE,
     }
     if binding:
@@ -1272,6 +1328,28 @@ def load_pmid_list(path: str) -> list[str]:
     if not isinstance(data, list):
         raise NoSeedDiscoveryError("Included-PMIDs file must be a JSON list or an object with a 'pmids' list")
     return [str(value).strip() for value in data if str(value).strip()]
+
+
+def load_included_source_evidence(path: str) -> list[dict[str, Any]]:
+    """Load human-declared or machine-extracted included-study candidate provenance."""
+
+    data = read_json(path)
+    if isinstance(data, dict):
+        data = data.get("records") or data.get("included_studies") or []
+    if not isinstance(data, list):
+        raise NoSeedDiscoveryError("Included-study evidence file must contain a records list")
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(data, start=1):
+        if not isinstance(item, dict):
+            raise NoSeedDiscoveryError(f"Included-study evidence row {index} must be an object")
+        pmid = str(item.get("pmid") or "").strip()
+        tier = str(item.get("source_tier") or "").strip()
+        if not pmid.isdigit():
+            raise NoSeedDiscoveryError(f"Included-study evidence row {index} requires a numeric PMID")
+        if tier not in {"declared-included-study-list", "machine-extracted-pending-confirmation"}:
+            raise NoSeedDiscoveryError(f"Included-study evidence row {index} has unsupported source_tier {tier!r}")
+        rows.append({"pmid": pmid, "source_tier": tier})
+    return rows
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1342,6 +1420,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     harvest_parser.add_argument("--review-pmids", nargs="+", default=[], help="Adjacent/prior systematic review PMIDs; their cited references are harvested via the refs elink.")
     harvest_parser.add_argument("--included-pmids-file", help="JSON list (or {'pmids': [...]}) of the review's included-study PMIDs.")
+    harvest_parser.add_argument(
+        "--included-study-evidence-file",
+        help="JSON records with PMID and source_tier (declared-included-study-list or machine-extracted-pending-confirmation).",
+    )
     harvest_parser.add_argument("--scope-version", type=int, required=True)
     harvest_parser.add_argument("--protocol-file")
     harvest_parser.add_argument("--safety-cap", type=int, default=500)
@@ -1353,6 +1435,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Freeze a screened prior-review benchmark (screened-in only) into a labelled semi-independent benchmark JSON.",
     )
     freeze_parser.add_argument("--screening-file", required=True)
+    freeze_parser.add_argument("--provenance-file", help="Optional benchmark provenance file used to preserve source-quality tiers.")
     freeze_parser.add_argument("--scope-version", type=int, required=True)
     freeze_parser.add_argument("--protocol-file")
     freeze_parser.add_argument(
@@ -1414,9 +1497,10 @@ def main(argv: list[str] | None = None) -> int:
             }
         elif args.command == "benchmark-harvest":
             included = load_pmid_list(args.included_pmids_file) if args.included_pmids_file else []
+            included_evidence = load_included_source_evidence(args.included_study_evidence_file) if args.included_study_evidence_file else []
             review_pmids = [str(value) for value in (args.review_pmids or [])]
-            if not review_pmids and not included:
-                raise NoSeedDiscoveryError("benchmark-harvest requires --review-pmids and/or --included-pmids-file")
+            if not review_pmids and not included and not included_evidence:
+                raise NoSeedDiscoveryError("benchmark-harvest requires --review-pmids, --included-pmids-file, and/or --included-study-evidence-file")
             screening, provenance = harvest_benchmark(
                 pubmed_tool.NcbiClient(),
                 review_pmids=review_pmids,
@@ -1425,6 +1509,7 @@ def main(argv: list[str] | None = None) -> int:
                 safety_cap=max(1, args.safety_cap),
                 max_per_review=max(1, args.max_per_review),
                 binding=binding,
+                included_source_evidence=included_evidence,
             )
             write_json(args.screening_output, screening)
             write_json(args.provenance_output, provenance)
@@ -1450,6 +1535,7 @@ def main(argv: list[str] | None = None) -> int:
                 scope_version=args.scope_version,
                 screened=not args.unscreened,
                 binding=binding,
+                provenance=(read_json(args.provenance_file) if args.provenance_file else None),
             )
             write_json(args.output, artifact)
             receipt = {

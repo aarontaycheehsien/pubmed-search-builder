@@ -33,7 +33,12 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+ROOT_DIR = str(Path(__file__).resolve().parents[1])
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from mesh_evidence import build_mesh_evidence
+from pubmed_search_builder.infrastructure.transport import decode_json
 
 
 # Keep the real wall clock available even when sweep tests replace the module-level ``time``
@@ -816,7 +821,9 @@ def parse_json_response(raw: bytes) -> object:
     if not raw:
         raise TransientResponseError("empty JSON response body")
     try:
-        return json.loads(raw.decode("utf-8"))
+        # Keep MeSH payloads strict.  Only the documented eLink exception uses
+        # a tolerant decoder in the PubMed adapter.
+        return decode_json(raw, strict=True)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise TransientResponseError(f"invalid JSON response: {exc}") from exc
 
