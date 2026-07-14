@@ -815,13 +815,7 @@ def validate_protocol_compile(
         generated_paths[artifact_type] = artifact_value
         generated_hashes[artifact_type] = artifact_hash
 
-    required_types = {
-        "concept-ledger",
-        "candidate-ledger-template",
-        "block-registry",
-        "critic-packet",
-        "audit-outline",
-    }
+    required_types = set(protocol_tool.CORE_DERIVATIVE_TYPES)
     if set(generated_paths) != required_types:
         raise ManifestError("protocol compile receipt artifact types are incomplete or unexpected")
     protocol_blocks = {

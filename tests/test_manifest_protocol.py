@@ -76,6 +76,7 @@ class ManifestProtocolTests(unittest.TestCase):
         concepts=None,
         seed_records=None,
         filter_decisions=None,
+        evidence_target=None,
     ):
         concepts = concepts or [
             {"id": "emergency-care", "label": "Emergency care", "role": "essential"},
@@ -131,6 +132,8 @@ class ManifestProtocolTests(unittest.TestCase):
                 },
             },
         })
+        if evidence_target is not None:
+            protocol["evidence_target"] = evidence_target
         protocol_tool.require_valid(protocol, "lock")
         protocol_path = self.directory / f"protocol_v{version}.json"
         protocol_path.write_bytes(protocol_tool.pretty_bytes(protocol))
@@ -266,6 +269,33 @@ class ManifestProtocolTests(unittest.TestCase):
         self.assertEqual(set(state["blocks"]), {"condition", "intervention"})
         self.assertEqual(state["scope"]["protocol_sha256"], protocol_tool.canonical_sha256(protocol))
         self.assertTrue(all(not Path(row["path"]).is_absolute() for row in receipt["artifacts"]))
+
+    def _assert_review_target_protocol_locks_and_revalidates(self, mode):
+        evidence_target = {
+            "mode": mode,
+            "eligible_types": ["systematic-review", "meta-analysis"],
+            "protocols": "exclude",
+            "narrative_reviews": "screen",
+            "methods_papers": "exclude",
+        }
+        protocol_path, receipt_path, _, receipt = self.compiled_protocol(evidence_target=evidence_target)
+
+        self.assertTrue(protocol_tool.verify_protocol(protocol_path, receipt_path)["ok"])
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 0, error)
+        self.assertEqual(
+            set(self.load()["build_state"]["scope"]["generated_paths"]),
+            protocol_tool.CORE_DERIVATIVE_TYPES,
+        )
+        issues = manifest_tool.complete_loop_readiness(self.load(), self.manifest)
+        self.assertFalse(any("current protocol verification failed" in issue for issue in issues))
+        self.assertEqual(len(receipt["artifacts"]), 5)
+
+    def test_evidence_synthesis_protocol_locks_and_completion_revalidates(self):
+        self._assert_review_target_protocol_locks_and_revalidates("evidence-syntheses")
+
+    def test_mixed_protocol_locks_and_completion_revalidates(self):
+        self._assert_review_target_protocol_locks_and_revalidates("mixed")
 
     def test_external_validation_requires_source_status_and_resolved_benchmark(self):
         protocol = self.lock_valid_protocol()
