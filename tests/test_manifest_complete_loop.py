@@ -73,6 +73,23 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         payload = dict(payload)
         payload["critic_version"] = 2
         payload["evidence_bundle"] = bundle.name
+        payload["critic_execution"] = {
+            "mode": "fresh-context-child-agent",
+            "runner": "codex-cli",
+            "requested_model": "test-model",
+            "reasoning_effort": "high",
+            "sandbox": "read-only",
+            "ephemeral": True,
+            "user_config_ignored": True,
+            "rules_ignored": True,
+            "network_use_authorized": False,
+            "disabled_features": list(critic_tool.DISABLED_CHILD_FEATURES),
+            "source_bundle_sha256": critic_tool.sha256_file(bundle),
+            "staged_bundle_sha256": "0" * 64,
+            "prompt_sha256": "1" * 64,
+            "event_stream_sha256": "2" * 64,
+            "completed_utc": "2026-07-16T00:00:00Z",
+        }
         payload["domain_verdicts"] = [
             {
                 "domain": domain,

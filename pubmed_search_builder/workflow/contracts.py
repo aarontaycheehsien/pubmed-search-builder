@@ -163,7 +163,13 @@ def artifact_type_for_operation(operation: str) -> str:
         return "registry/evidence"
     if normalized in {"concept-ablation", "fragility-score", "two-strand"} or normalized.startswith("screening-burden"):
         return "strategy-analysis/evidence"
-    if normalized in {"revision-no-harm", "critic-artifact-validate", "critic-bundle-build", "selftest"} or normalized.startswith("hooks-"):
+    if normalized in {
+        "revision-no-harm",
+        "critic-artifact-validate",
+        "critic-bundle-build",
+        "critic-independent-run",
+        "selftest",
+    } or normalized.startswith("hooks-"):
         return "qa/evidence"
     if normalized.startswith("mesh-") or normalized in {"lookup", "details", "terms", "tree", "sweep", "sparql"}:
         return "mesh/evidence"

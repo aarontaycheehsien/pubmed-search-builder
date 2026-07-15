@@ -152,7 +152,7 @@ Never hand off a final strategy with an unexplained missed in-scope holdout, see
 
 ## 7. Run the critic and revise
 
-Read `references/press-critic.md`. Build a hashed evidence bundle, save a version-2 `critic_round_<N>.json`, validate it with `scripts/critic_tool.py`, and record it with `manifest_tool.py state record-critic`. A later round must carry every previously open finding ID forward as resolved, accepted-risk, not-applicable, or still open.
+Read `references/press-critic.md`. Build a hashed evidence bundle, run `scripts/critic_tool.py --run-independent` to create a fresh-context version-2 `critic_round_<N>.json`, validate it with `scripts/critic_tool.py`, and record it with `manifest_tool.py state record-critic`. Same-context or manually authored rounds do not satisfy handoff. A later round must carry every previously open finding ID forward as resolved, accepted-risk, not-applicable, or still open.
 
 Route findings:
 

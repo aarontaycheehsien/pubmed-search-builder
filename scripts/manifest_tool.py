@@ -1994,6 +1994,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             issues.append("latest critic round was not run after the latest empirical analysis/discovery artifact")
         if latest.get("critic_version") != 2:
             issues.append("latest critic round does not use the evidence-backed critic_version 2 contract")
+        if latest.get("independent_execution") is not True:
+            issues.append("latest critic round was not produced by a validated fresh-context child-agent execution")
         for key, label in (("artifact", "critic"), ("validation_artifact", "critic validation")):
             path_value = str(latest.get(key) or "")
             if not path_value:
@@ -2678,6 +2680,11 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                 raise ManifestError("; ".join(binding_issues))
             if summary.get("critic_version") != 2:
                 raise ManifestError("recorded critic rounds must use critic_version 2 with a hashed evidence bundle")
+            if summary.get("independent_execution") is not True:
+                raise ManifestError(
+                    "recorded critic rounds must come from critic_tool.py --run-independent "
+                    "and pass fresh-context execution validation"
+                )
             rounds = state["critic_rounds"]
             expected_round = len(rounds) + 1
             if summary.get("round") != expected_round:

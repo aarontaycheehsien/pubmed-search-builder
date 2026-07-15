@@ -8,7 +8,7 @@ This is an automated, PRESS-informed internal self-review. It does not constitut
 
 ## Independence
 
-Run the critic in fresh context when possible. Give it the raw artifacts needed to review the draft, not the generator's intended answer or preferred fix:
+Run the critic in fresh context through the bundled child-agent command. Give it the raw artifacts needed to review the draft, not the generator's intended answer or preferred fix:
 
 - plain-language review question and protocol decisions;
 - current locked review protocol and generated critic packet;
@@ -24,9 +24,13 @@ Freeze exactly those inputs before review:
 
 ```bash
 python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence critic_packet=critic_packet_v1.json --evidence ledger=candidate_ledger.json --evidence probes=probe_summary.json --output critic_evidence_1.json
+python scripts/critic_tool.py --run-independent --bundle critic_evidence_1.json --round 1 --output critic_round_1.json
+python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
 ```
 
-The bundle hashes every file. A critic receipt fails if evidence changes after review.
+The independent runner verifies every bundle hash, copies only those artifacts into a temporary workspace, ignores user configuration and repository rules, disables plugins, apps, browser/computer use, image generation, and multi-agent delegation, uses an ephemeral read-only Codex child, requires schema-constrained JSON, rebinds the result to the original strategy and bundle, and validates it before writing the critic artifact. The critic artifact records execution and bundle hashes. A critic receipt fails if evidence changes after review or if the fresh-context execution evidence is absent or invalid.
+
+Use `--model` and `--reasoning-effort` when a run needs an explicit model configuration; the default reasoning effort is `high`. Use `--scope-version` only when the bundle lacks a protocol-bound critic packet. If Codex is unavailable or the child run fails, stop and report that the independent critic is incomplete. Do not substitute a same-context hand-authored JSON round: the completion gate rejects it.
 
 ## Required review domains
 
@@ -109,7 +113,7 @@ Read-only diagnostic probes may run before the user chooses a final narrowing de
 
 For each round:
 
-1. Validate and record the critic artifact in the manifest.
+1. Run the independent child critic, validate its artifact, and record it in the manifest.
 2. Route every finding and record its disposition.
 3. Save a new strategy or scope version for material changes; never overwrite silently.
 4. Rerun every required probe named by the finding.
