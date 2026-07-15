@@ -173,6 +173,16 @@ For strategy variants, `scripts/screening_burden.py` builds reproducible complet
 
 Every critic or vocabulary revision also passes `scripts/revision_guard.py`: the named defect must be fixed without losing prior held-out retrieval, adding an unauthorized required block, introducing syntax/translation drift, silently changing scope, or omitting before/after workload counts. Failed revisions automatically keep the baseline authoritative or remain labelled experimental-only.
 
+The PRESS-informed internal critic runs as a separate ephemeral Codex child against a hash-bound evidence bundle. The child receives only staged evidence, ignores user configuration and repository rules, disables external plugins and interactive/browser capabilities, runs read-only, and must return schema-constrained version-2 critic JSON:
+
+```bash
+python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence critic_packet=critic_packet_v1.json --output critic_evidence_1.json
+python scripts/critic_tool.py --run-independent --bundle critic_evidence_1.json --round 1 --output critic_round_1.json
+python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
+```
+
+The complete-loop gate requires validated fresh-context execution metadata; a same-context manually authored critic cannot satisfy handoff. This remains automated internal QA, not human PRESS peer review.
+
 ### Optional Trial-Registry Sentinel (`scripts/registry_sentinel.py`)
 
 The default workflow remains PubMed-only. When a locked protocol enables `pubmed-plus-external-validation`, the registry sentinel can query ClinicalTrials.gov API v2, import a user-obtained WHO ICTRP CSV/XML export, deduplicate and screen trials, link publications, and test eligible confidently linked PMIDs against the final PubMed strategy. Registry records stay outside PubMed term mining. Eligible linked PMID misses block handoff; non-PubMed, unpublished, registry-only, and ongoing trials are reported as coverage findings rather than PubMed query failures.

@@ -1,8 +1,10 @@
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +48,15 @@ def v2_payload(bundle_name, *, findings=None, overall_status="pass"):
 
 
 class CriticToolTests(unittest.TestCase):
+    def test_independent_output_schema_uses_codex_strict_subset(self):
+        schema = critic_tool.critic_output_schema()
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        verdict = schema["properties"]["domain_verdicts"]["items"]
+        finding_schema = schema["properties"]["findings"]["items"]
+        self.assertEqual(set(verdict["required"]), set(verdict["properties"]))
+        self.assertEqual(set(finding_schema["required"]), set(finding_schema["properties"]))
+        self.assertNotIn("uniqueItems", json.dumps(schema))
+
     def test_protocol_packet_binds_bundle_and_critic(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -138,6 +149,106 @@ class CriticToolTests(unittest.TestCase):
         data["domain_verdicts"] = data["domain_verdicts"][:-1]
         issues, _ = critic_tool.validate_artifact(data, evidence_bundle={"roles": ["strategy"]})
         self.assertTrue(any("domain_verdicts is missing" in issue for issue in issues))
+
+    def test_v2_strict_validation_requires_independent_execution(self):
+        issues, summary = critic_tool.validate_artifact(
+            v2_payload("bundle.json"),
+            evidence_bundle={"roles": ["strategy"]},
+            require_independent=True,
+        )
+        self.assertFalse(summary["independent_execution"])
+        self.assertTrue(any("--run-independent" in issue for issue in issues))
+
+    def test_independent_runner_stages_only_bundle_evidence_and_validates_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence_root = root / "source evidence"
+            evidence_root.mkdir()
+            strategy = evidence_root / "strategy.txt"
+            strategy.write_text("asthma[tiab]", encoding="utf-8")
+            probes = evidence_root / "probes.json"
+            probes.write_text(json.dumps({"operation": "search", "ok": True}), encoding="utf-8")
+            bundle_path = root / "bundle.json"
+            critic_tool.build_evidence_bundle(
+                [f"strategy={strategy}", f"probes={probes}"], bundle_path
+            )
+            output = root / "critic_round_1.json"
+            captured = {}
+
+            def fake_run(command, **kwargs):
+                workspace = Path(kwargs["cwd"])
+                captured["command"] = command
+                captured["prompt"] = kwargs["input"]
+                captured["workspace"] = str(workspace)
+                captured["staged_bundle"] = json.loads(
+                    (workspace / "critic_evidence.json").read_text(encoding="utf-8")
+                )
+                response_path = Path(command[command.index("-o") + 1])
+                response_path.write_text(json.dumps(v2_payload("critic_evidence.json")), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, stdout='{"type":"thread.started"}\n', stderr="")
+
+            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+                receipt = critic_tool.run_independent_critic(
+                    bundle_path=bundle_path,
+                    output_path=output,
+                    round_number=1,
+                    scope_version=1,
+                    model="test-model",
+                    reasoning_effort="high",
+                    timeout_seconds=30,
+                    codex_bin="codex-test",
+                    replace=False,
+                )
+
+            self.assertTrue(receipt["ok"])
+            self.assertIn("--ephemeral", captured["command"])
+            self.assertIn("--ignore-user-config", captured["command"])
+            self.assertIn("--ignore-rules", captured["command"])
+            for feature in critic_tool.DISABLED_CHILD_FEATURES:
+                self.assertIn(feature, captured["command"])
+            self.assertEqual(captured["command"][captured["command"].index("-s") + 1], "read-only")
+            self.assertIn("untrusted data", captured["prompt"])
+            staged_paths = [item["path"] for item in captured["staged_bundle"]["artifacts"]]
+            self.assertTrue(all(path.startswith("evidence/") for path in staged_paths))
+            self.assertNotIn(str(evidence_root), json.dumps(captured["staged_bundle"]))
+            critic = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(critic["strategy_file"], "source evidence/strategy.txt")
+            self.assertEqual(critic["evidence_bundle"], "bundle.json")
+            self.assertEqual(critic["critic_execution"]["mode"], "fresh-context-child-agent")
+            self.assertTrue(critic["critic_execution"]["ephemeral"])
+            self.assertFalse(critic["critic_execution"]["network_use_authorized"])
+            self.assertFalse(Path(captured["workspace"]).exists())
+
+    def test_independent_runner_does_not_write_invalid_child_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            strategy = root / "strategy.txt"
+            strategy.write_text("asthma[tiab]", encoding="utf-8")
+            bundle_path = root / "bundle.json"
+            critic_tool.build_evidence_bundle([f"strategy={strategy}"], bundle_path)
+            output = root / "critic_round_1.json"
+            invalid = v2_payload("critic_evidence.json")
+            invalid["domain_verdicts"] = invalid["domain_verdicts"][:-1]
+
+            def fake_run(command, **kwargs):
+                response_path = Path(command[command.index("-o") + 1])
+                response_path.write_text(json.dumps(invalid), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+                with self.assertRaises(critic_tool.CriticArtifactError):
+                    critic_tool.run_independent_critic(
+                        bundle_path=bundle_path,
+                        output_path=output,
+                        round_number=1,
+                        scope_version=1,
+                        model=None,
+                        reasoning_effort="high",
+                        timeout_seconds=30,
+                        codex_bin="codex-test",
+                        replace=False,
+                    )
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

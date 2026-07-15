@@ -366,6 +366,7 @@ python scripts/manifest_tool.py state lock-protocol --protocol-file review_proto
 python scripts/candidate_ledger.py candidate_ledger.json --output candidate_ledger_validation.json
 python scripts/manifest_tool.py state record-candidate-screen --ledger-file candidate_ledger.json --validation-file candidate_ledger_validation.json
 python scripts/critic_tool.py --build-bundle --evidence strategy=strategy_v1.txt --evidence critic_packet=critic_packet_v1.json --output critic_evidence_1.json
+python scripts/critic_tool.py --run-independent --bundle critic_evidence_1.json --round 1 --output critic_round_1.json
 python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
 python scripts/manifest_tool.py state record-critic --critic-file critic_round_1.json --validation-file critic_round_1_validation.json
 python scripts/manifest_tool.py state check-complete
