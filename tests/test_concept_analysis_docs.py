@@ -152,6 +152,26 @@ class CandidateEvidenceTests(unittest.TestCase):
             self.assertIn(phrase, doc)
         self.assertIn("do not feed a related-record set directly to `term-rank`", doc)
 
+    def test_screening_decisions_require_verifiable_evidence(self):
+        doc = read_doc("references/candidate-screening.md").lower()
+        for phrase in (
+            "scripts/screening_tool.py",
+            "quotation appears verbatim in that field of the hash-bound record",
+            "`yes`, `no`, `unclear`, or `not_reported`",
+        ):
+            self.assertIn(phrase, doc)
+        # Absent information must never become a silent exclusion.
+        self.assertIn("forces `uncertain`", doc)
+
+    def test_rule_only_screening_cannot_supply_evidence_roles(self):
+        doc = read_doc("references/candidate-screening.md").lower()
+        for phrase in (
+            "`human`, `model`, `rule`, or `human_verified_model`",
+            "cannot take `discovery`, `holdout`, or `both`",
+            "a rule alone cannot finalise the records the evidence base is built from",
+        ):
+            self.assertIn(phrase, doc)
+
     def test_seed_evidence_cannot_precede_scope_lock(self):
         doc = read_doc("references/seed-pmid-validation.md").lower()
         self.assertIn("use them only after retrieval scope version 1 is locked", doc)

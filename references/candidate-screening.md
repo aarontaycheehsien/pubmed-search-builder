@@ -16,10 +16,60 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 1. Validate, compile, and lock `review_protocol_v1.json` before fetching or mining candidate records. Instantiate its `candidate_ledger_template_v1.json` before screening protocol-declared seeds.
 2. Collect candidate PMIDs from supplied seeds, PubMed similar articles, citation links, or independently identified prior-review included studies. With no seeds, use the six orthogonal pilots below rather than one defining pilot.
 3. Fetch candidate metadata to saved JSON. Inspect titles and abstracts where available; receipt-only stdout is not screening evidence.
-4. Classify every candidate as `include`, `exclude`, or `uncertain` against the locked scope. Give a short eligibility reason.
+4. Compile the screening rubric from the locked protocol and screen every candidate with `scripts/screening_tool.py` (below) as `include`, `exclude`, or `uncertain` against the locked scope. Each decision records a verdict per criterion, quoted evidence supporting it, and how the decision was made.
 5. Assign one use role: `discovery`, `holdout`, `both`, `heuristic`, or `neither`.
 6. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`. When roles have not already been frozen, use `--allocate-holdout --ledger-output <path>` for a deterministic allocation.
 7. Mine only records that the validator marks eligible for discovery.
+
+## Screening against a frozen rubric
+
+Screening is the pivot of the workflow — only included records teach the search new vocabulary, and a subset becomes the held-out set the strategy is measured against. A decision plus a reason string only demonstrates that the form was filled in. `scripts/screening_tool.py` requires the decision to be supported by the record.
+
+```bash
+# Freeze the protocol's eligibility criteria as an immutable, hash-bound rubric.
+python scripts/screening_tool.py compile-rubric --protocol review_protocol_v1.json \
+  --scope-version 1 --output screening_rubric_v1.json
+
+# One pending assessment per criterion per record, bound to each record's content hash.
+python scripts/screening_tool.py prepare --rubric screening_rubric_v1.json \
+  --records-file candidate_records.json --scope-version 1 --round 1 --output screening_worksheet_1.json
+
+# After screening: verify verdicts, quoted evidence, and decision consistency.
+python scripts/screening_tool.py validate screening_worksheet_1.json --rubric screening_rubric_v1.json \
+  --records-file candidate_records.json --scope-version 1 --output screening_validation_1.json
+
+python scripts/screening_tool.py to-ledger screening_worksheet_1.json --rubric screening_rubric_v1.json \
+  --records-file candidate_records.json --scope-version 1 \
+  --candidate-ledger-template protocol_v1/candidate_ledger_template_v1.json --output candidate_ledger.json
+```
+
+Each criterion takes one of four verdicts: `yes`, `no`, `unclear`, or `not_reported`. `unclear` and `not_reported` are distinct and both meaningful: the record is ambiguous, versus the record never addresses the criterion.
+
+Evidence is a quotation plus the field it came from (`title`, `abstract`, `keywords`, `mesh_headings`). The validator checks the quotation appears verbatim in that field of the hash-bound record, so an unsupported quotation is no easier to write than an unsupported reason was. Whitespace and casing are normalised; invented text is not accepted.
+
+Decisions must follow from the verdicts, and evidence requirements are criterion-specific:
+
+- **include** — every required-inclusion criterion is `yes` *and* carries supporting evidence, and no decisive exclusion applies.
+- **exclude** — at least one decisive failure (a decisive exclusion `yes`, or a required inclusion `no`) with supporting evidence. Only the failure the decision rests on needs evidence.
+- **uncertain** — everything else. Any required criterion left `unclear` or `not_reported` forces `uncertain`, so absent information can never become a silent exclusion.
+
+### Decision provenance and rule-based screening
+
+Every decision records `decided_by`: `human`, `model`, `rule`, or `human_verified_model`. A hardcoded PMID list is a legitimate way to encode decisions a reviewer already made — what matters is that the artifact preserves how they were reached.
+
+Rules may prioritise, triage, and pre-fill. They may not be the final authority for records that carry evidence roles: a `rule` decision with no `adjudicated_by` cannot take `discovery`, `holdout`, or `both`. `to-ledger` demotes such a record to `heuristic`, and `candidate_ledger.py` refuses a ledger that forces one into an evidence role.
+
+This is the guardrail against circular screening. A lexicon that excludes records lacking already-known vocabulary suppresses exactly the unfamiliar terminology vocabulary learning exists to find. The restriction is not that rules mention search terms — legitimate eligibility criteria overlap with search vocabulary by nature — but that a rule alone cannot finalise the records the evidence base is built from.
+
+### Agreement check
+
+```bash
+python scripts/screening_tool.py sample screening_worksheet_1.json --fraction 0.15 --output screening_sample_1.json
+python scripts/screening_tool.py agreement screening_worksheet_1.json --replicate screening_worksheet_1_replicate.json \
+  --output screening_agreement_1.json
+```
+
+The sample is stratified by decision. A simple random sample of a screening set is mostly obvious excludes and measures very little; stratifying puts includes and uncertains — where errors actually cost recall — into the check. The report gives raw agreement and a confusion matrix alongside Cohen's κ, because κ alone hides which cell the disagreements fall in. Route every disagreement to adjudication and regenerate the ledger from the adjudicated worksheet.
 
 After screening, use `active-vocabulary-learning.md`. Only newly included `discovery`/`both` records may generate proposals. Excluded records receive a separate diagnostic and never supply proposed search terms. Assign every included record to existing locked concepts before extraction; an unknown concept or changed eligibility interpretation requires scope re-entry.
 
@@ -39,13 +89,24 @@ For no-seed discovery, use `no_seed_discovery.py` and screen the generated file 
       "decision": "include",
       "title_abstract_reviewed": true,
       "eligibility_reason": "Matches the locked population and intervention scope.",
-      "use": "holdout"
+      "use": "holdout",
+      "screening": {
+        "rubric_sha256": "<hash of the frozen rubric criteria>",
+        "record_sha256": "<hash of the record content that was read>",
+        "decided_by": "model",
+        "adjudicated_by": "",
+        "evidence_backed": true,
+        "rule_only": false,
+        "criterion_verdicts": {"inc_population": "yes", "inc_intervention": "yes", "exc_design": "no"}
+      }
     }
   ]
 }
 ```
 
 Allowed provenance values are `user-seed`, `pilot-anchor`, `similar`, `citedin`, `reference`, `prior-review`, and `other`.
+
+`screening_tool.py to-ledger` writes the `screening` block. Ledgers screened before it existed have no such block and still validate, but the validation summary reports them under `screening_provenance.evidence_roles_without_screening_provenance`, and the completion gate requires the block on every `discovery`, `holdout`, or `both` record. Re-screen those records rather than hand-writing the block.
 
 Use roles mean:
 

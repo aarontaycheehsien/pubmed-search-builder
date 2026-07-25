@@ -155,7 +155,7 @@ def artifact_type_for_operation(operation: str) -> str:
         return "prior-review-benchmark/evidence"
     if normalized.startswith("protocol-"):
         return "protocol/receipt"
-    if normalized.startswith("candidate-ledger"):
+    if normalized.startswith("candidate-ledger") or normalized.startswith("screening-"):
         return "candidate-ledger/receipt"
     if normalized.startswith("orthogonal-pilot") or normalized.startswith("internal-convergence"):
         return "discovery/evidence"

@@ -19,6 +19,11 @@ TEMPLATE_DECISIONS = DECISIONS | {"pending"}
 USES = {"discovery", "holdout", "both", "heuristic", "neither"}
 DISCOVERY_USES = {"discovery", "both"}
 VALIDATION_USES = {"holdout", "both"}
+EVIDENCE_USES = DISCOVERY_USES | {"holdout"}
+
+# How a screening decision was reached, mirroring screening_tool.py.
+DECIDED_BY = {"human", "model", "rule", "human_verified_model"}
+ADJUDICATED_BY = {"human", "model", "human_verified_model"}
 
 
 class CandidateLedgerError(ValueError):
@@ -133,6 +138,38 @@ def instantiate_template(data: dict[str, Any], template_path: Path) -> dict[str,
     return ledger
 
 
+def screening_provenance_issues(prefix: str, record: dict[str, Any], use: str) -> list[str]:
+    """Check a record's screening provenance, when it carries any.
+
+    Records screened before ``screening_tool.py`` existed have no ``screening`` block and are
+    validated as before. Once the block is present it is held to the rule that matters: a
+    decision reached by a mechanical rule alone, with nobody having read the record, cannot
+    supply a discovery or holdout record. Rules may triage and prioritise; they cannot be the
+    final authority for the records that teach the search its vocabulary or measure its recall.
+    """
+    screening = record.get("screening")
+    if not isinstance(screening, dict):
+        return []
+    issues: list[str] = []
+    decided_by = str(screening.get("decided_by") or "").strip()
+    if decided_by not in DECIDED_BY:
+        issues.append(f"{prefix} screening.decided_by must be one of: {', '.join(sorted(DECIDED_BY))}")
+    adjudicated_by = str(screening.get("adjudicated_by") or "").strip()
+    if adjudicated_by and adjudicated_by not in ADJUDICATED_BY:
+        issues.append(f"{prefix} screening.adjudicated_by must be one of: {', '.join(sorted(ADJUDICATED_BY))}")
+    if use in EVIDENCE_USES:
+        if decided_by == "rule" and not adjudicated_by:
+            issues.append(
+                f"{prefix} was decided by rule alone and cannot take {use} use; adjudicate it with a "
+                "human or model review, or keep it as a heuristic record"
+            )
+        if not str(screening.get("rubric_sha256") or "").strip():
+            issues.append(f"{prefix} {use} use requires screening.rubric_sha256 binding the decision to a rubric")
+        if not str(screening.get("record_sha256") or "").strip():
+            issues.append(f"{prefix} {use} use requires screening.record_sha256 binding the decision to record content")
+    return issues
+
+
 def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     issues: list[str] = protocol_binding_issues(data)
     if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
@@ -158,10 +195,12 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     seen: set[str] = set()
     decision_counts: Counter[str] = Counter()
     use_counts: Counter[str] = Counter()
+    decided_by_counts: Counter[str] = Counter()
     discovery_pmids: list[str] = []
     holdout_pmids: list[str] = []
     both_pmids: list[str] = []
     heuristic_pmids: list[str] = []
+    unevidenced_evidence_roles: list[str] = []
 
     for index, record in enumerate(records, start=1):
         prefix = f"record {index}"
@@ -213,6 +252,12 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
                 issues.append(f"{prefix} {use} use requires a non-empty eligibility_reason")
         if decision in {"exclude", "uncertain"} and reviewed is True and not reason:
             issues.append(f"{prefix} screened {decision} records require an eligibility_reason")
+        issues.extend(screening_provenance_issues(prefix, record, use))
+        screening = record.get("screening")
+        if isinstance(screening, dict):
+            decided_by_counts[str(screening.get("decided_by") or "unset")] += 1
+        elif pmid and use in EVIDENCE_USES:
+            unevidenced_evidence_roles.append(pmid)
 
         if pmid and decision == "include" and reviewed is True and reason:
             if use in DISCOVERY_USES:
@@ -236,6 +281,13 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         "non_independent_validation_pmids": both_pmids,
         "heuristic_pmids": heuristic_pmids,
         "independent_holdout_available": bool(holdout_pmids),
+        "screening_provenance": {
+            "decided_by_counts": dict(sorted(decided_by_counts.items())),
+            # Records driving vocabulary or validation that carry no screening provenance at all.
+            # Legacy ledgers report a non-empty list here; the audit should say so.
+            "evidence_roles_without_screening_provenance": unevidenced_evidence_roles,
+            "all_evidence_roles_screened_with_evidence": not unevidenced_evidence_roles,
+        },
     }
     return issues, summary
 

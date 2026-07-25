@@ -184,6 +184,25 @@ python scripts/hooks_tool.py final-qa --strategy-file my_strategy.txt
 python scripts/hooks_tool.py filter-check --text-file protocol.txt
 ```
 
+### Candidate screening (`scripts/screening_tool.py`)
+
+Screening decides which records teach the search new vocabulary and which become the held-out
+set it is measured against, so every downstream claim inherits it. This tool makes each decision
+verifiable rather than merely present.
+
+```bash
+python scripts/screening_tool.py compile-rubric --protocol review_protocol_v1.json --scope-version 1 --output screening_rubric_v1.json
+python scripts/screening_tool.py prepare --rubric screening_rubric_v1.json --records-file candidate_records.json --scope-version 1 --output screening_worksheet_1.json
+python scripts/screening_tool.py validate screening_worksheet_1.json --rubric screening_rubric_v1.json --records-file candidate_records.json --scope-version 1
+python scripts/screening_tool.py to-ledger screening_worksheet_1.json --rubric screening_rubric_v1.json --records-file candidate_records.json --scope-version 1 --output candidate_ledger.json
+```
+
+- The rubric is compiled from the locked protocol's eligibility criteria and hash-bound before screening starts.
+- Each criterion takes `yes`, `no`, `unclear`, or `not_reported`, with evidence quoted verbatim from a named field of the hash-bound record. A quotation that does not appear in the record is rejected.
+- An include needs affirmative evidence on every required criterion; an exclude needs evidence for at least one decisive failure; anything unresolved is forced to `uncertain`, so missing information never becomes a silent exclusion.
+- Decisions record `decided_by` (`human`, `model`, `rule`, `human_verified_model`). Rules may triage, but a rule-only decision cannot supply a `discovery` or `holdout` record without adjudication — that is what stops a lexicon screener from excluding records for lacking the unfamiliar vocabulary the search is meant to discover.
+- `sample` draws a decision-stratified re-adjudication set and `agreement` reports raw agreement and a confusion matrix alongside Cohen's κ, routing disagreements to adjudication.
+
 ### Concept ablation and strategy strands (`scripts/strategy_analysis.py`)
 
 Test every proposed `AND` block by removing it, measuring known-item and workload effects, and fetching differential samples. For fragile topics, compare an authoritative recall-first strategy with a reasoned focused prioritization strand.
@@ -381,7 +400,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/workflow.md](references/workflow.md)**: Detailed step-by-step workflow
 - **[references/framework-selection.md](references/framework-selection.md)**: Question-type-to-framework selection (PICO, PECO, PIRD, PCC, SPIDER, etc.)
 - **[references/concept-analysis-and-gating.md](references/concept-analysis-and-gating.md)**: Concept-analysis ledger, AND-block admission test, and the concept gate
-- **[references/candidate-screening.md](references/candidate-screening.md)**: Candidate-study screening, discovery/holdout roles, and evidence-set integrity
+- **[references/candidate-screening.md](references/candidate-screening.md)**: Criterion-level evidence-backed screening, decision provenance, discovery/holdout roles, and evidence-set integrity
 - **[references/press-critic.md](references/press-critic.md)**: PRESS-informed internal critic schema, routing, and pass criteria
 - **[references/goal-tracking.md](references/goal-tracking.md)**: Goal tracking state rules, pre-goal intake, blockers, and completion audit
 - **[references/mesh-and-pubmed-tools.md](references/mesh-and-pubmed-tools.md)**: Tool usage and the tool-to-stage map

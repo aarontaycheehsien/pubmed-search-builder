@@ -1563,6 +1563,26 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 issues.append("candidate ledger changed after its validation receipt was recorded")
         elif screening_status == "complete":
             issues.append("candidate screening lacks a ledger hash bound to its validation receipt")
+        # Records that teach the search its vocabulary or measure its recall must carry screening
+        # provenance. A reason string alone proves the form was filled in, not that anyone read the
+        # record: re-screen with `screening_tool.py` so each decision is bound to a rubric, a record
+        # hash, and quoted evidence.
+        ledger_payload = read_manifest_output_json(manifest_path, screening.get("artifact")) or {}
+        ledger_records = ledger_payload.get("records") if isinstance(ledger_payload.get("records"), list) else []
+        unevidenced = sorted(
+            str(record.get("pmid"))
+            for record in ledger_records
+            if isinstance(record, dict)
+            and str(record.get("use") or "") in {"discovery", "holdout", "both"}
+            and not isinstance(record.get("screening"), dict)
+        )
+        if unevidenced:
+            shown = ", ".join(unevidenced[:5]) + (" ..." if len(unevidenced) > 5 else "")
+            issues.append(
+                f"{len(unevidenced)} discovery/holdout records carry no screening provenance ({shown}); "
+                "re-screen them with screening_tool.py so each decision is bound to the rubric, the "
+                "record content, and quoted evidence"
+            )
     if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
         issues.append("candidate-screening not-applicable status lacks a reason")
 

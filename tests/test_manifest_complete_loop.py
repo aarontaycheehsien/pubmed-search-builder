@@ -467,6 +467,60 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(any("vocabulary learning" in issue or "vocabulary-learning" in issue for issue in receipt["issues"]), receipt["issues"])
 
+    def _screening_gate_issues(self, ledger_records):
+        self.resolve_base_gates_and_scope()
+        ledger = self.write_json("candidate_ledger.json", {"scope_version": 1, "records": ledger_records})
+        validation = self.write_json("candidate_ledger_validation.json", {"operation": "candidate-ledger-validate", "ok": True})
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["build_state"]["candidate_screening"] = {
+            "status": "complete",
+            "artifact": str(ledger),
+            "artifact_sha256": manifest_tool.sha256_file(Path(ledger)),
+            "validation_artifact": str(validation),
+            "summary": {"independent_holdout_available": False},
+            "reason": "",
+        }
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        _rc, receipt = self.state("check-complete")
+        return receipt["issues"]
+
+    def test_gate_rejects_discovery_records_without_screening_provenance(self):
+        issues = self._screening_gate_issues(
+            [
+                {
+                    "pmid": "12345678", "provenance": "user-seed", "decision": "include", "use": "discovery",
+                    "title_abstract_reviewed": True, "eligibility_reason": "in scope",
+                }
+            ]
+        )
+        self.assertTrue(any("carry no screening provenance" in issue for issue in issues), issues)
+
+    def test_gate_accepts_discovery_records_screened_with_evidence(self):
+        issues = self._screening_gate_issues(
+            [
+                {
+                    "pmid": "12345678", "provenance": "user-seed", "decision": "include", "use": "discovery",
+                    "title_abstract_reviewed": True, "eligibility_reason": "in scope",
+                    "screening": {
+                        "rubric_sha256": "a" * 64, "record_sha256": "b" * 64,
+                        "decided_by": "model", "adjudicated_by": "", "evidence_backed": True, "rule_only": False,
+                    },
+                }
+            ]
+        )
+        self.assertFalse([issue for issue in issues if "screening provenance" in issue], issues)
+
+    def test_gate_ignores_heuristic_records_without_screening_provenance(self):
+        issues = self._screening_gate_issues(
+            [
+                {
+                    "pmid": "12345678", "provenance": "other", "decision": "uncertain", "use": "heuristic",
+                    "title_abstract_reviewed": True, "eligibility_reason": "unclear from abstract",
+                }
+            ]
+        )
+        self.assertFalse([issue for issue in issues if "screening provenance" in issue], issues)
+
     def _vocabulary_payload(self, **overrides):
         payload = {
             "operation": "vocabulary-learning",
