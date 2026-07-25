@@ -859,6 +859,41 @@ def build_response_cache(*, enabled: bool = True, directory: str | None = None) 
     )
 
 
+EUTILS_ERROR_RETRIES = 3
+EUTILS_ERROR_BACKOFF_SECONDS = 1.0
+
+
+def eutils_hard_error(raw: bytes) -> str | None:
+    """Detect an E-utilities failure delivered inside an HTTP 200 response.
+
+    E-utilities reports backend failures in the payload rather than the status line, e.g.
+    ``{"esearchresult": {"ERROR": "Search Backend failed: ..."}}`` with a 200. The transport
+    sees a success, and a caller reading ``count`` off that payload gets 0 -- a transient
+    outage silently becomes "this query retrieves nothing". Both consequences matter here: a
+    zero would be published as a measurement, and the cache would hold the failure for its
+    whole TTL.
+
+    Distinct from ``esearchresult.errorlist``, which lists individual phrases PubMed could not
+    match. That is ordinary, useful output and is left alone.
+    """
+    if not raw or not raw.lstrip()[:1] == b"{":
+        return None  # efetch XML and other non-JSON payloads carry no such envelope
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for node in (payload, payload.get("esearchresult"), payload.get("elinkresult")):
+        if isinstance(node, dict):
+            message = node.get("ERROR") or node.get("error")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+            if isinstance(message, list) and message:
+                return "; ".join(str(item) for item in message)
+    return None
+
+
 class NcbiClient:
     def __init__(
         self,
@@ -892,26 +927,43 @@ class NcbiClient:
 
         cached = self.cache.get(endpoint, merged)
         if cached is not None:
-            return cached
+            # A pre-existing poisoned entry must not be served either.
+            if eutils_hard_error(cached) is None:
+                return cached
 
         user_agent = f"{self.tool}/1.0"
         if self.email:
             user_agent = f"{user_agent} ({self.email})"
-        try:
-            response = self._transport.request(
-                service="ncbi-eutils",
-                url=url,
-                params=merged,
-                method=method,
-                headers={"User-Agent": user_agent},
-                policy=ncbi_eutils_policy(float(self.rate_limit_per_second)),
-            )
-        except TransportError as exc:
-            raise PubMedError(str(exc)) from exc
-        self.retries_performed += response.retries
-        self._last_request = time.monotonic()
-        self.cache.put(endpoint, merged, response.body)
-        return response.body
+
+        # E-utilities delivers backend failures as HTTP 200 with an error in the body, so the
+        # transport's retry never sees them. They are as transient as a 503 and are retried here
+        # rather than surfacing a whole-topic failure on a momentary NCBI hiccup.
+        failure = ""
+        for attempt in range(EUTILS_ERROR_RETRIES + 1):
+            try:
+                response = self._transport.request(
+                    service="ncbi-eutils",
+                    url=url,
+                    params=merged,
+                    method=method,
+                    headers={"User-Agent": user_agent},
+                    policy=ncbi_eutils_policy(float(self.rate_limit_per_second)),
+                )
+            except TransportError as exc:
+                raise PubMedError(str(exc)) from exc
+            self.retries_performed += response.retries
+            self._last_request = time.monotonic()
+            detected = eutils_hard_error(response.body)
+            if detected is None:
+                self.cache.put(endpoint, merged, response.body)
+                return response.body
+            failure = detected
+            self.retries_performed += 1
+            if attempt < EUTILS_ERROR_RETRIES:
+                time.sleep(EUTILS_ERROR_BACKOFF_SECONDS * (2**attempt))
+        # Never cached: a cached outage would answer this query for its whole TTL. Raised rather
+        # than returned so it cannot be read as an empty result.
+        raise PubMedError(f"NCBI {endpoint} reported an error after {EUTILS_ERROR_RETRIES} retries: {failure}")
 
     def metadata(self) -> dict[str, object]:
         return {

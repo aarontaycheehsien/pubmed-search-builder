@@ -67,6 +67,19 @@ The source protocol remains authoritative. Compilation creates deterministic con
 
 The canonical workflow and high-sensitivity search model live in [`references/workflow.md`](references/workflow.md). In short, the toolkit combines controlled vocabulary, title/abstract terms, proximity expressions, and wildcard candidates for each essential concept, then tests the resulting blocks for recall and noise.
 
+### Measured recall
+
+Claims about sensitivity are checked against gold-standard fixtures rather than argued. Run
+`python evals/run_suite.py --markdown evals/RESULTS.md`; current numbers are in
+[`evals/RESULTS.md`](evals/RESULTS.md).
+
+As of the latest run, 10 of 20 bundled fixtures are scorable. The other 10 ship unrefined
+placeholder protocols and are refused rather than scored. Read the `source` column before the
+recall column: only `generated` rows measure the skill itself, and no `generated` runs have been
+recorded yet. `naive` is a deterministic floor compiled from each fixture's own protocol, with no
+MeSH layer, no expansion and no critic loop — useful as a comparison point, not as the skill's
+recall. See [`evals/README.md`](evals/README.md).
+
 ### PRESS Peer Review
 
 All strategies produced by this toolkit are drafts. They must be peer-reviewed by a second information specialist using the **PRESS** framework (McGowan et al., 2016, *J Clin Epidemiol*) before being run as a final search.
