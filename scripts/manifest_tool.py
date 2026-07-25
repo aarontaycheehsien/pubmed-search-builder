@@ -75,7 +75,12 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+ROOT_DIR = str(Path(__file__).resolve().parents[1])
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_artifact, mesh_evidence_issues
+from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
 
 MANIFEST_VERSION = "1.1"
 SKILL_NAME = "pubmed-search-builder"
@@ -2824,7 +2829,12 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
 
 
 def cmd_init(args: argparse.Namespace) -> dict[str, object]:
-    base = Path(args.manifest)
+    base = prepare_workspace(getattr(args, "workspace", None), args.manifest)
+    guard_run_workspace(
+        base,
+        allow_skill_root=getattr(args, "allow_skill_root", False),
+        what="a run manifest",
+    )
     with manifest_lock(base):
         path = resolve_existing_path(base, args.if_exists)
         data = new_manifest(args.topic_slug, args.skill_version)
@@ -3080,6 +3090,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser("init", help="Create a new run manifest with top-level metadata.")
     init_parser.add_argument("--manifest", default="run_manifest.json", help="Manifest path (default: %(default)s).")
+    init_parser.add_argument(
+        "--workspace",
+        help="Run workspace directory, created if needed; --manifest resolves inside it. "
+        "Run the rest of the build from this directory so its artifacts stay isolated.",
+    )
+    init_parser.add_argument(
+        "--allow-skill-root",
+        action="store_true",
+        help="Permit creating build state directly in the skill installation directory.",
+    )
     init_parser.add_argument("--topic-slug", default="", help="Short topic slug for this build.")
     init_parser.add_argument("--skill-version", default=DEFAULT_SKILL_VERSION, help="Skill version (default: %(default)s).")
     init_parser.add_argument(
@@ -3286,8 +3306,12 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {"init": cmd_init, "add": cmd_add, "show": cmd_show, "report": cmd_report, "state": cmd_state}
     try:
         receipt = handlers[args.subcommand](args)
-    except ManifestError as exc:
+    except (ManifestError, WorkspaceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # An unusable --workspace/--manifest path is a user error, not a crash.
+        print(f"error: could not write manifest path: {exc}", file=sys.stderr)
         return 1
     write_json(receipt)
     return 0 if receipt.get("ok", True) else 1

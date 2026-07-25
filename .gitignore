@@ -36,9 +36,13 @@ evals/results/
 evals/.cache/
 *.xlsx
 
-# Skill-run working artifacts (scripts/*.py write intermediate/compiled outputs into
-# the current working directory; when a build is run from the repo root these clutter
-# `git status`). Real content lives under evals/, scripts/, references/, schemas/, etc.
+# Run workspaces. `manifest_tool.py init --workspace runs/<slug>` is the supported way to
+# start a build; everything a run writes stays inside its own directory.
+/runs/
+
+# Legacy skill-run working artifacts. `manifest_tool.py init` now refuses to create build
+# state in the repository root, so new builds cannot add to this list. The patterns stay
+# until the artifacts already sitting in the root are cleared out.
 blocks.json
 focused_blocks.json
 two_strand.json

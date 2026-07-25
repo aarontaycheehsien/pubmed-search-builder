@@ -37,6 +37,7 @@ sys.path.insert(0, str(SKILL_DIR))
 
 import run_eval  # noqa: E402
 from drivers import codex  # noqa: E402
+from pubmed_search_builder.core.workspace import resolve_within  # noqa: E402
 from tools import package_skill  # noqa: E402
 
 DEFAULT_TOOL = SKILL_DIR / "scripts" / "pubmed_tool.py"
@@ -105,9 +106,11 @@ def candidate_evidence_pmids(run_dir: Path) -> tuple[set[str], set[str]]:
         screening = state.get("candidate_screening") if isinstance(state, dict) else None
         artifact = screening.get("artifact") if isinstance(screening, dict) else None
         if artifact:
-            candidate = Path(str(artifact))
-            selected_path = candidate if candidate.is_absolute() else manifest_path.parent / candidate
-            break
+            # Anchored to the run tree: an artifact reference that only resolves outside
+            # this run belongs to another build and must not supply its evidence roles.
+            selected_path = resolve_within(run_dir, str(artifact))
+            if selected_path is not None:
+                break
     candidates = [selected_path] if selected_path is not None else sorted(run_dir.rglob("candidate_ledger*.json"))
     parsed_candidates: list[tuple[int, Path, dict]] = []
     for path in candidates:
@@ -150,7 +153,12 @@ def candidate_evidence_pmids(run_dir: Path) -> tuple[set[str], set[str]]:
 
 
 def first_critic_strategy(run_dir: Path) -> Path | None:
-    """Resolve the strategy snapshot reviewed in critic round 1 for before/after scoring."""
+    """Resolve the strategy snapshot reviewed in critic round 1 for before/after scoring.
+
+    Every reference is resolved inside ``run_dir``. A bare filename must not fall back to
+    the process working directory: a leftover ``critic_round_1.json`` from an unrelated
+    build would otherwise be scored as this run's pre-critic strategy.
+    """
     manifest = run_dir / "run_manifest.json"
     try:
         data = json.loads(manifest.read_text(encoding="utf-8-sig"))
@@ -158,20 +166,18 @@ def first_critic_strategy(run_dir: Path) -> Path | None:
         artifact_value = str(rounds[0]["artifact"])
     except (OSError, json.JSONDecodeError, KeyError, IndexError, TypeError):
         return None
-    artifact = Path(artifact_value)
-    if not artifact.is_file():
-        candidates = list(run_dir.rglob(artifact.name))
-        artifact = candidates[0] if candidates else artifact
+    artifact = resolve_within(run_dir, artifact_value)
+    if artifact is None:
+        return None
     try:
         critic = json.loads(artifact.read_text(encoding="utf-8-sig"))
         strategy_value = str(critic["strategy_file"])
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
         return None
-    strategy = Path(strategy_value)
-    if not strategy.is_file():
-        candidates = list(run_dir.rglob(strategy.name))
-        strategy = candidates[0] if candidates else strategy
-    return strategy if strategy.is_file() and strategy.read_text(encoding="utf-8").strip() else None
+    strategy = resolve_within(run_dir, strategy_value)
+    if strategy is None or not strategy.is_file():
+        return None
+    return strategy if strategy.read_text(encoding="utf-8").strip() else None
 
 
 def resolve_fixture(arg: str) -> Path:
@@ -241,6 +247,8 @@ def build_legacy_prompt(fixture: dict, run_dir: Path) -> str:
         f"  - If you can, also save your concept blocks as a JSON list of objects with",
         f'      "label" and "query" keys to: {run_posix}/final_blocks.json',
         f"  - Write any audit Markdown and run_manifest.json into: {run_posix}",
+        f"    Initialise the manifest with `--workspace {run_posix}` and run the build from",
+        "    there; the tools refuse to create build state in the skill directory itself.",
         "  - Run the manifest complete-loop gate and do not finish unless it passes.",
         "",
         "When finished, reply with the final PubMed result count and confirm the path you",
@@ -323,6 +331,8 @@ def build_prompt(fixture: dict, run_dir: Path) -> str:
         "  - If you can, also save concept blocks as a JSON list of objects with",
         f'      "label" and "query" keys to: {run_posix}/final_blocks.json',
         f"  - Write any audit Markdown and run_manifest.json into: {run_posix}",
+        f"    Initialise the manifest with `--workspace {run_posix}` and run the build from",
+        "    there; the tools refuse to create build state in the skill directory itself.",
         "  - Run the manifest complete-loop gate and do not finish unless it passes.",
         "",
         "When finished, reply with the final PubMed result count and confirm the path you",
@@ -339,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--effort", default="medium", help="model_reasoning_effort (default: medium).")
     parser.add_argument("--timeout", type=int, default=1800, help="Driver timeout seconds (default: 1800).")
     parser.add_argument("--pubmed-tool", default=str(DEFAULT_TOOL))
+    parser.add_argument(
+        "--allow-zero-recall",
+        action="store_true",
+        help="Treat a scorecard that retrieved no gold PMIDs as a result rather than a harness fault.",
+    )
     args = parser.parse_args(argv)
 
     fixture_path = resolve_fixture(args.fixture)
@@ -442,6 +457,17 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + run_eval.render(card))
     print(f"\nscorecard JSON: {run_dir / 'scorecard.json'}")
     print(f"generated strategy: {strategy_file}")
+
+    if card["sanity"]["zero_recall"] and not args.allow_zero_recall:
+        # The scorecard is still written -- it is this run's record and the fastest way to
+        # diagnose the cause -- but the run does not report success on a number this shape.
+        print(
+            "\n[generate] SUSPECT: the generated strategy retrieved none of the gold set.\n"
+            "Inspect the scored query in scorecard.json (strategy_query) before reporting\n"
+            "this as a recall measurement. Re-run with --allow-zero-recall to accept it.",
+            file=sys.stderr,
+        )
+        return 4
     return 0
 
 

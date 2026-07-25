@@ -1,5 +1,7 @@
+import hashlib
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 import warnings
@@ -150,6 +152,94 @@ class EvalHarnessTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(generate.first_critic_strategy(run_dir), snapshot)
+
+    def test_first_critic_strategy_ignores_same_named_files_in_the_working_directory(self):
+        """A leftover build in the CWD must not be scored as this run's pre-critic strategy."""
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cwd:
+            decoy_dir = Path(cwd)
+            (decoy_dir / "main_strategy.txt").write_text("unrelated[tiab]", encoding="utf-8")
+            (decoy_dir / "critic_round_1.json").write_text(
+                json.dumps({"strategy_file": "main_strategy.txt"}), encoding="utf-8"
+            )
+            run_dir = Path(td)
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps({"build_state": {"critic_rounds": [{"artifact": "critic_round_1.json"}]}}),
+                encoding="utf-8",
+            )
+            previous = os.getcwd()
+            os.chdir(cwd)
+            try:
+                self.assertIsNone(generate.first_critic_strategy(run_dir))
+            finally:
+                os.chdir(previous)
+
+    def test_candidate_evidence_ignores_a_ledger_outside_the_run(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as other:
+            stray = Path(other) / "candidate_ledger.json"
+            stray.write_text(
+                json.dumps({"records": [{"pmid": "999", "title_abstract_reviewed": True}]}),
+                encoding="utf-8",
+            )
+            run_dir = Path(td)
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps({"build_state": {"candidate_screening": {"artifact": str(stray)}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(generate.candidate_evidence_pmids(run_dir), (set(), set()))
+
+    def _score(self, base: Path, retrieved: list[str], strategy_text: str = "x[tiab]") -> dict:
+        fixture = base / "fixture.json"
+        fixture.write_text(
+            json.dumps(
+                {"id": "opaque", "suite": "test", "question": "Question", "evaluation_gold_pmids": [1, 2, 3]}
+            ),
+            encoding="utf-8",
+        )
+        strategy = base / "strategy.txt"
+        strategy.write_text(strategy_text, encoding="utf-8")
+        recall = {
+            "retrieved_pmids": retrieved,
+            "missed_pmids": [p for p in ("1", "2", "3") if p not in retrieved],
+            "block_recall": [],
+            "miss_diagnosis": [],
+        }
+        with (
+            mock.patch.object(run_eval, "resolve_in_pubmed", return_value={"1", "2", "3"}),
+            mock.patch.object(run_eval, "run_recall", return_value=recall),
+            mock.patch.object(run_eval, "strategy_total_count", return_value=100),
+        ):
+            return run_eval.score(fixture, ROOT / "scripts" / "pubmed_tool.py", strategy_override=strategy)
+
+    def test_scorecard_embeds_the_scored_query_and_its_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            card = self._score(Path(td), ["1", "2"], strategy_text="asthma[tiab]")
+            self.assertEqual(card["strategy_query"], "asthma[tiab]")
+            self.assertEqual(
+                card["strategy_sha256"],
+                hashlib.sha256("asthma[tiab]".encode("utf-8")).hexdigest(),
+            )
+            self.assertFalse(card["sanity"]["zero_recall"])
+
+    def test_zero_recall_is_flagged_as_suspect(self):
+        with tempfile.TemporaryDirectory() as td:
+            card = self._score(Path(td), [])
+            self.assertTrue(card["sanity"]["zero_recall"])
+            self.assertTrue(card["sanity"]["warnings"])
+
+    def test_zero_recall_scorecard_is_not_persisted_without_the_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            card = self._score(base, [])
+            out = base / "scorecard.json"
+            with mock.patch.object(run_eval, "score", return_value=card):
+                code = run_eval.main([str(base / "fixture.json"), "--output", str(out)])
+            self.assertEqual(code, 4)
+            self.assertFalse(out.exists())
+
+            with mock.patch.object(run_eval, "score", return_value=card):
+                code = run_eval.main([str(base / "fixture.json"), "--output", str(out), "--allow-zero-recall"])
+            self.assertEqual(code, 0)
+            self.assertTrue(out.exists())
 
 
 if __name__ == "__main__":

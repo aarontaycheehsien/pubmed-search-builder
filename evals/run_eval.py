@@ -29,6 +29,7 @@ A fixture is a JSON object:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -99,6 +100,25 @@ def strategy_total_count(tool: Path, strategy_file: Path) -> int:
     return int(data.get("count") or 0)
 
 
+def sanity_review(card: dict) -> dict:
+    """Flag scorecards that almost always mean a harness fault rather than a measurement.
+
+    A strategy that retrieves none of the gold set is far more often a mis-resolved or
+    stale strategy file than a genuinely empty search, so the number is not persisted as
+    an ordinary result without an explicit opt-in.
+    """
+    warnings_out: list[str] = []
+    zero_recall = bool(card.get("gold_in_pubmed")) and not card.get("retrieved")
+    if zero_recall:
+        warnings_out.append(
+            f"strategy retrieved 0 of {card['gold_in_pubmed']} reachable gold PMIDs; "
+            "verify the scored strategy is the intended one before trusting this result"
+        )
+    if not card.get("gold_in_pubmed"):
+        warnings_out.append("no gold PMID resolved in PubMed; recall is undefined")
+    return {"zero_recall": zero_recall, "warnings": warnings_out}
+
+
 def run_recall(tool: Path, strategy_file: Path, gold: list[str], blocks_file: Path | None) -> dict:
     out = _write_temp("")  # reuse temp path machinery for the --output file
     args = [
@@ -153,6 +173,12 @@ def score(
     if not strategy_file.exists():
         raise SystemExit(f"strategy_file not found: {strategy_file}")
 
+    # Embed the scored query itself. `strategy_file` is often a temporary path (the GUI
+    # writes pasted strategies to one), so a path alone leaves the result unreproducible
+    # the moment that file is cleaned up or overwritten.
+    strategy_query = strategy_file.read_text(encoding="utf-8-sig")
+    strategy_sha256 = hashlib.sha256(strategy_query.encode("utf-8")).hexdigest()
+
     in_pubmed = resolve_in_pubmed(tool, gold)
     unreachable = [p for p in gold if p not in in_pubmed]
 
@@ -197,7 +223,7 @@ def score(
         if isinstance(m, dict) and m.get("and_interaction") and str(m.get("pmid")) in in_pubmed
     ]
 
-    return {
+    card = {
         "id": fixture.get("id"),
         "suite": fixture.get("suite"),
         "question": fixture.get("question"),
@@ -231,7 +257,12 @@ def score(
         "and_interaction_misses": and_interaction,
         "fixture": str(fixture_path),
         "strategy_file": str(strategy_file),
+        "strategy_sha256": strategy_sha256,
+        "strategy_query": strategy_query,
+        "blocks_file": str(blocks_file) if blocks_file else None,
     }
+    card["sanity"] = sanity_review(card)
+    return card
 
 
 def render(card: dict) -> str:
@@ -283,6 +314,12 @@ def render(card: dict) -> str:
     if unreachable:
         lines.append("")
         lines.append(f"unreachable gold PMIDs: {', '.join(unreachable)}")
+    for warning in (card.get("sanity") or {}).get("warnings") or []:
+        lines.append("")
+        lines.append(f"!! {warning}")
+    if card.get("strategy_sha256"):
+        lines.append("")
+        lines.append(f"scored strategy sha256 ..... {card['strategy_sha256'][:16]}")
     return "\n".join(lines)
 
 
@@ -294,6 +331,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Print the scorecard JSON to stdout instead of the table.")
     parser.add_argument("--strategy-file", help="Score this strategy instead of the fixture's baseline strategy_file.")
     parser.add_argument("--blocks-file", help="Concept blocks JSON for per-block diagnosis (use with --strategy-file).")
+    parser.add_argument(
+        "--allow-zero-recall",
+        action="store_true",
+        help="Persist a scorecard that retrieved no gold PMIDs (normally a harness fault, not a result).",
+    )
     args = parser.parse_args(argv)
 
     fixture_path = resolve_fixture(args.fixture)
@@ -308,7 +350,9 @@ def main(argv: list[str] | None = None) -> int:
         blocks_override=args.blocks_file,
     )
 
-    if args.output:
+    blocked = card["sanity"]["zero_recall"] and not args.allow_zero_recall
+
+    if args.output and not blocked:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(card, indent=2), encoding="utf-8")
@@ -317,8 +361,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(card, indent=2))
     else:
         print(render(card))
-        if args.output:
+        if args.output and not blocked:
             print(f"\nscorecard JSON: {args.output}")
+
+    if blocked:
+        print(
+            "\nNOT SAVED: this strategy retrieved none of the gold set, which is nearly always a\n"
+            "wrong or stale strategy file rather than a real measurement. Check the scored query\n"
+            f"(sha256 {card['strategy_sha256'][:16]}) against the topic, then re-run with\n"
+            "--allow-zero-recall if the zero really is the result.",
+            file=sys.stderr,
+        )
+        return 4
     return 0
 
 

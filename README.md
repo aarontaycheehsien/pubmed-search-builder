@@ -210,12 +210,23 @@ Maintain a canonical `run_manifest.json` provenance ledger for a build - an
 append-only record of every successful command, its output path and hash, input
 hashes, scope version, date, result count, and any superseded file. No network access.
 
+Start every build in its own **run workspace**. The bundled scripts write their
+`--output` artifacts relative to the working directory, so a build run from the skill
+directory scatters its state across the installation, where a later run can pick it up
+as evidence. `init` therefore refuses to create a manifest directly in the skill
+directory; `--workspace` creates the run directory and puts the manifest inside it.
+
 ```bash
-python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug demo
-python scripts/workflow_tool.py --manifest run_manifest.json --kind search --output search.json --input q.txt --scope-version 1 -- python scripts/pubmed_tool.py search --query-file q.txt --retmax 0 --output search.json
-python scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files --require-complete-loop
-python scripts/manifest_tool.py report --manifest run_manifest.json
+python scripts/manifest_tool.py init --workspace runs/demo --topic-slug demo
+cd runs/demo   # run the rest of the build here so its artifacts stay isolated
+python scripts/workflow_tool.py --manifest run_manifest.json --kind search --output search.json --input q.txt --scope-version 1 -- python ../../scripts/pubmed_tool.py search --query-file q.txt --retmax 0 --output search.json
+python ../../scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files --require-complete-loop
+python ../../scripts/manifest_tool.py report --manifest run_manifest.json
 ```
+
+Pass `--allow-skill-root` (or set `PUBMED_SEARCH_BUILDER_ALLOW_SKILL_ROOT=1`) to override
+the guard. Every other command is unchanged: they take paths as before and resolve them
+against the working directory.
 
 `workflow_tool.py` snapshots declared inputs before launch and registers a stage only when the process succeeds, its JSON output does not report `ok: false`, inputs remain unchanged, and a pre-existing output was actually refreshed (unless explicitly allowed). The complete-loop gate parses validation and final-QA artifacts, verifies cross-artifact hashes, and requires an evidence-backed version-2 critic.
 
@@ -224,7 +235,7 @@ python scripts/manifest_tool.py report --manifest run_manifest.json
 New builds can use the append-only v2 manifest, whose stage state is derived from typed artifact references rather than command labels or mutable checklist fields:
 
 ```bash
-python scripts/workflow_tool.py init --manifest run_manifest_v2.json --topic-slug demo
+python scripts/workflow_tool.py init --workspace runs/demo --topic-slug demo
 python scripts/workflow_tool.py decision --manifest run_manifest_v2.json --id question --status resolved --value "Review question" --reason "Independently supplied"
 python scripts/workflow_tool.py run --manifest run_manifest_v2.json --stage scope-lock --input protocol=review_protocol_v1.json --output scope=protocol_v1/protocol_compile_v1.json --scope-version 1 -- python scripts/protocol_tool.py compile review_protocol_v1.json --output-dir protocol_v1 --receipt protocol_v1/protocol_compile_v1.json
 python scripts/workflow_tool.py status --manifest run_manifest_v2.json

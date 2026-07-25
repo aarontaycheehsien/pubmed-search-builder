@@ -22,6 +22,7 @@ if ROOT_DIR not in sys.path:
 
 import manifest_tool
 from pubmed_search_builder.core.io import atomic_write_json
+from pubmed_search_builder.core.workspace import guard_run_workspace, prepare_workspace
 from pubmed_search_builder.workflow.events import append_event, load_v2, new_manifest
 from pubmed_search_builder.workflow.service import migrate_manifest, run_stage as run_v2_stage, status as v2_status
 
@@ -212,6 +213,16 @@ def build_v2_parser() -> argparse.ArgumentParser:
 
     init = subparsers.add_parser("init", help="Create an empty append-only v2 run manifest.")
     init.add_argument("--manifest", default="run_manifest_v2.json")
+    init.add_argument(
+        "--workspace",
+        help="Run workspace directory, created if needed; --manifest resolves inside it. "
+        "Run the rest of the build from this directory so its artifacts stay isolated.",
+    )
+    init.add_argument(
+        "--allow-skill-root",
+        action="store_true",
+        help="Permit creating build state directly in the skill installation directory.",
+    )
     init.add_argument("--topic-slug", default="")
     init.add_argument("--skill-version", default="2.0.0")
 
@@ -244,7 +255,8 @@ def main_v2(argv: list[str]) -> int:
     args = build_v2_parser().parse_args(argv)
     try:
         if args.command == "init":
-            path = Path(args.manifest)
+            path = prepare_workspace(args.workspace, args.manifest)
+            guard_run_workspace(path, allow_skill_root=args.allow_skill_root, what="a run manifest")
             if path.exists():
                 raise WorkflowRunError(f"Refusing to overwrite existing v2 manifest: {path}")
             atomic_write_json(path, new_manifest(args.topic_slug, skill_version=args.skill_version))
@@ -252,6 +264,7 @@ def main_v2(argv: list[str]) -> int:
                 "ok": True,
                 "operation": "workflow-manifest-init",
                 "manifest": str(path),
+                "workspace": str(path.parent.resolve()),
                 "manifest_version": "2.0",
             }
         elif args.command == "migrate":

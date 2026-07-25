@@ -82,6 +82,16 @@ carry a baseline `strategy_file` (currently `CD011926`). Fixtures without one
   lost by the full strategy (points at `NOT`, filters, or proximity, not a weak
   block).
 
+Every scorecard also carries `strategy_query` and `strategy_sha256` — the exact text
+that was scored, not just a path to it. `strategy_file` is often a temporary path (the
+GUI writes a pasted strategy to one), so a result identified only by path stops being
+reproducible as soon as that file is cleaned up.
+
+A scorecard that retrieves **none** of the reachable gold set is treated as a harness
+fault rather than a measurement: it is flagged in `sanity`, `run_eval.py` refuses to
+write it to `--output`, and both runners exit `4`. Confirm `strategy_query` is the
+strategy you meant to score, then pass `--allow-zero-recall` if the zero is real.
+
 ### Caveat: one run is a smoke test
 
 Scoring a fixed strategy is deterministic, so score-only mode is stable. But a

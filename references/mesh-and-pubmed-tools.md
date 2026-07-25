@@ -340,8 +340,15 @@ Stdin input (`python scripts/audit_markdown.py - ...`) is acceptable only for ti
 
 Use `scripts/manifest_tool.py` to maintain a canonical `run_manifest.json` provenance ledger for the build. It makes no network calls and is the single machine-readable record of every material command run, its output path, the date, the PubMed result count where relevant, and any superseded file. Only the agent can maintain it, because the PubMed and MeSH tools stream JSON to stdout and never see agent-written artifacts such as concept-block `.txt` files or `audit_*.md`.
 
+Start the build in its own run workspace. Because every tool writes its `--output`
+artifacts relative to the working directory, a build run from the skill directory leaves
+run state in the installation where a later build can resolve it as evidence. `init`
+refuses that location; `--workspace` creates the run directory and places the manifest in
+it. Run the remaining commands from inside that directory (`--allow-skill-root` or
+`PUBMED_SEARCH_BUILDER_ALLOW_SKILL_ROOT=1` overrides the guard).
+
 ```bash
-python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug pressure-ulcer
+python scripts/manifest_tool.py init --workspace runs/pressure-ulcer --topic-slug pressure-ulcer
 python scripts/workflow_tool.py --manifest run_manifest.json --kind search --label "main strategy" --output final_search.json --input full_strategy.txt --scope-version 1 -- python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0 --output final_search.json
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0" --count 192246 --label "main strategy" --note "final topic-only count"
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind sample --command "python scripts/pubmed_tool.py sample --query-file draft_strategy.txt --retmax 5 --output sample.json" --output sample.json --label "draft sample"
