@@ -61,7 +61,7 @@ When the user names adjacent or prior systematic reviews (the `name-adjacent-rev
 
 - No reviewed JSON, no decision: inspect saved `fetch`, `mine`, `sample`, candidate-ledger, and critic artifacts before using them as evidence.
 - Use only screened-in discovery records for objective term mining.
-- A screening decision must be supported by the record, not merely accompanied by a reason string. Every discovery/holdout record carries a rubric hash, a record-content hash, quoted evidence, and how the decision was made.
+- A screening decision must be supported by the record, not merely accompanied by a reason string. Every discovery/holdout record carries a rubric hash, a record-content hash, quoted evidence, and how the decision was made. Verified quotation shows the text exists, not that it supports the verdict, so an independent re-screening of a decision-stratified sample is required and its disagreements and evidence divergences must be adjudicated.
 - Allocate discovery and holdout roles deterministically in the candidate ledger before mining. Use ledger-native inputs so holdout records cannot flow into discovery commands. If reuse is unavoidable, state that validation is non-independent.
 - Register executable stages through `scripts/workflow_tool.py`; it records return codes, scope versions, input/output hashes, and counts only after successful commands.
 - Treat related-record and pilot-expansion recall as heuristic, never as absolute sensitivity.

@@ -58,7 +58,8 @@
         "do not feed a related-record set directly to `term-rank`",
         "scripts/candidate_ledger.py",
         "scripts/screening_tool.py",
-        "quotation appears verbatim in that field of the hash-bound record"
+        "quotation appears verbatim in that field of the hash-bound record",
+        "evidence_divergence"
       ],
       "pointer_locations": [
         "SKILL.md",

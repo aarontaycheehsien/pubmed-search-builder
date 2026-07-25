@@ -59,6 +59,39 @@ EVIDENCE_FIELDS = ("title", "abstract", "keywords", "mesh_headings")
 REQUIRED_INCLUSION = "required-inclusion"
 DECISIVE_EXCLUSION = "decisive-exclusion"
 
+# Verifying that a quotation exists in the record does not establish that it *supports* the
+# verdict it is attached to -- a screener could cite a real but irrelevant sentence. Nothing
+# mechanical settles semantic support, but the cheap ways of faking evidence are checkable:
+# a contentless fragment, a whole-abstract dump that points at nothing in particular, and a
+# second reader whose evidence for the same conclusion has nothing in common with the first's.
+MIN_EVIDENCE_CONTENT_TOKENS = 1
+MAX_EVIDENCE_WORDS = 60
+
+# Research boilerplate that carries no eligibility information on its own. A quotation made
+# only of these words cites nothing, however genuinely it appears in the record.
+NON_EVIDENTIAL_TOKENS = frozenset(
+    {
+        "a", "an", "the", "this", "that", "these", "those", "and", "or", "but", "not",
+        "of", "in", "on", "at", "to", "for", "from", "with", "by", "as", "is", "are",
+        "was", "were", "be", "been", "we", "our", "they", "their", "it", "its",
+        "study", "studies", "trial", "trials", "paper", "article", "report", "reports",
+        "reported", "research", "results", "result", "methods", "method", "conclusion",
+        "conclusions", "background", "objective", "objectives", "purpose", "aim", "aims",
+        "introduction", "discussion", "findings", "data", "analysis", "present", "presents",
+        "using", "used", "use", "based", "however", "therefore", "thus", "also", "may",
+    }
+)
+
+
+def content_tokens(text: str) -> list[str]:
+    """Substantive words in a quotation: >=4 letters and not research boilerplate."""
+    tokens: list[str] = []
+    for raw in normalize_for_quote(text).split():
+        word = "".join(character for character in raw if character.isalnum())
+        if len(word) >= 4 and word not in NON_EVIDENTIAL_TOKENS:
+            tokens.append(word)
+    return tokens
+
 
 class ScreeningError(ValueError):
     pass
@@ -132,6 +165,28 @@ def quote_supported(record: dict[str, Any], field: str, quote: str) -> bool:
     if not needle:
         return False
     return needle in normalize_for_quote(field_text(record, field))
+
+
+def evidence_span_issue(record: dict[str, Any], field: str, quote: str) -> str | None:
+    """Reject a quotation that cannot function as evidence, or ``None`` when it can.
+
+    Existing in the record is necessary but not sufficient. A fragment of pure boilerplate
+    cites nothing, and a span the length of the whole abstract points at nothing in
+    particular; both are ways to satisfy an evidence requirement without reading anything.
+    """
+    if field not in EVIDENCE_FIELDS:
+        return f"evidence field must be one of: {', '.join(EVIDENCE_FIELDS)}"
+    if not quote_supported(record, field, quote):
+        return f"quotes text absent from {field}: {quote[:60]!r}"
+    words = normalize_for_quote(quote).split()
+    if len(words) > MAX_EVIDENCE_WORDS:
+        return (
+            f"quotes {len(words)} words from {field}; an evidence span over {MAX_EVIDENCE_WORDS} "
+            "words points at nothing in particular -- cite the sentence that decides the criterion"
+        )
+    if len(content_tokens(quote)) < MIN_EVIDENCE_CONTENT_TOKENS:
+        return f"quotes only boilerplate from {field} and cites no substantive content: {quote[:60]!r}"
+    return None
 
 
 # -- rubric -----------------------------------------------------------------------------
@@ -329,6 +384,8 @@ def validate_worksheet(
     provenance_counts: Counter[str] = Counter()
     verdict_counts: Counter[str] = Counter()
     evidence_spans = 0
+    distinct_spans = 0
+    single_span_records: list[str] = []
     rule_only: list[str] = []
     seen: set[str] = set()
 
@@ -360,6 +417,7 @@ def validate_worksheet(
             continue
         verdicts: dict[str, str] = {}
         evidenced: set[str] = set()
+        record_spans: set[str] = set()
         for item in assessments:
             if not isinstance(item, dict):
                 issues.append(f"{prefix} assessment entries must be objects")
@@ -387,20 +445,22 @@ def validate_worksheet(
                     continue
                 field = str(span.get("field") or "")
                 quote = str(span.get("quote") or "")
-                if field not in EVIDENCE_FIELDS:
-                    issues.append(
-                        f"{prefix} criterion {criterion_id} evidence field must be one of: {', '.join(EVIDENCE_FIELDS)}"
-                    )
-                    continue
-                if not quote_supported(record, field, quote):
-                    issues.append(
-                        f"{prefix} criterion {criterion_id} quotes text absent from {field}: {quote[:60]!r}"
-                    )
+                problem = evidence_span_issue(record, field, quote)
+                if problem:
+                    issues.append(f"{prefix} criterion {criterion_id} {problem}")
                     continue
                 supported += 1
+                record_spans.add(normalize_for_quote(quote))
             evidence_spans += supported
             if supported:
                 evidenced.add(criterion_id)
+
+        distinct_spans += len(record_spans)
+        # One span reused as the sole evidence for three or more criteria is the signature of a
+        # quotation pasted once rather than read per criterion. Reported, not rejected: a single
+        # dense sentence can legitimately settle two criteria at once.
+        if len(record_spans) == 1 and len(evidenced) >= 3:
+            single_span_records.append(pmid)
 
         missing = sorted(criterion_ids - set(verdicts))
         if missing:
@@ -463,11 +523,14 @@ def validate_worksheet(
         "verdict_counts": dict(sorted(verdict_counts.items())),
         "decided_by_counts": dict(sorted(provenance_counts.items())),
         "verified_evidence_spans": evidence_spans,
+        "distinct_evidence_spans": distinct_spans,
+        "single_span_records": sorted(single_span_records, key=int),
         "rule_only_pmids": sorted(rule_only, key=int),
         "rule_only_count": len(rule_only),
         "note": (
             "Rule-only decisions may prioritise or triage, but cannot supply discovery or holdout "
-            "records until a human or model adjudicates them."
+            "records until a human or model adjudicates them. Verified spans exist in the record; "
+            "whether they support their verdict is settled by the agreement check, not here."
         ),
     }
     return issues, summary
@@ -476,12 +539,48 @@ def validate_worksheet(
 # -- ledger ------------------------------------------------------------------------------
 
 
+def agreement_block(agreement_artifact: dict[str, Any], worksheet: dict[str, Any]) -> dict[str, Any]:
+    """Summarise the agreement check and confirm everything it flagged was adjudicated."""
+    if agreement_artifact.get("operation") != "screening-agreement":
+        raise ScreeningError("--agreement expects a screening-agreement artifact")
+    if agreement_artifact.get("rubric_sha256") != worksheet.get("rubric_sha256"):
+        raise ScreeningError("agreement artifact was produced against a different rubric version")
+    adjudicated = {
+        str(row.get("pmid"))
+        for row in worksheet.get("records", [])
+        if isinstance(row, dict) and str(row.get("adjudicated_by") or "").strip()
+    }
+    flagged = [str(pmid) for pmid in agreement_artifact.get("adjudication_pmids", [])]
+    unresolved = sorted(set(flagged) - adjudicated, key=int)
+    if unresolved:
+        raise ScreeningError(
+            "the agreement check flagged records that this worksheet does not adjudicate: "
+            + ", ".join(unresolved[:10])
+            + ". Re-screen them and set adjudicated_by before building the ledger."
+        )
+    compared = int(agreement_artifact.get("compared_records") or 0)
+    screened = len([row for row in worksheet.get("records", []) if isinstance(row, dict)])
+    return {
+        "compared_records": compared,
+        "screened_records": screened,
+        "coverage": round(compared / screened, 4) if screened else None,
+        "raw_agreement": agreement_artifact.get("raw_agreement"),
+        "cohen_kappa": agreement_artifact.get("cohen_kappa"),
+        "confusion_matrix": agreement_artifact.get("confusion_matrix"),
+        "disagreement_count": len(agreement_artifact.get("disagreements") or []),
+        "evidence_divergence_count": len(agreement_artifact.get("evidence_divergence") or []),
+        "adjudicated_pmids": sorted(set(flagged), key=int),
+        "unresolved_adjudications": [],
+    }
+
+
 def to_ledger(
     worksheet: dict[str, Any],
     rubric: dict[str, Any],
     records: list[dict[str, Any]],
     *,
     template: dict[str, Any] | None = None,
+    agreement_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert a validated worksheet into a candidate ledger the rest of the workflow consumes."""
     issues, _summary = validate_worksheet(worksheet, rubric, records)
@@ -535,6 +634,7 @@ def to_ledger(
             "rubric_sha256": worksheet["rubric_sha256"],
             "worksheet_sha256": digest(worksheet),
             "round": worksheet.get("round"),
+            "agreement": agreement_block(agreement_artifact, worksheet) if agreement_artifact else None,
         },
         "records": ledger_records,
     }
@@ -593,6 +693,49 @@ def cohen_kappa(matrix: dict[str, dict[str, int]], labels: list[str]) -> float |
     return round((observed - expected) / (1 - expected), 4)
 
 
+def evidence_tokens_by_criterion(worksheet: dict[str, Any]) -> dict[str, dict[str, set[str]]]:
+    """Content tokens each screening cited, per record per criterion."""
+    result: dict[str, dict[str, set[str]]] = {}
+    for row in worksheet.get("records", []):
+        if not isinstance(row, dict):
+            continue
+        per_criterion: dict[str, set[str]] = {}
+        for item in row.get("assessments", []):
+            if not isinstance(item, dict):
+                continue
+            tokens: set[str] = set()
+            for span in item.get("evidence") or []:
+                if isinstance(span, dict):
+                    tokens.update(content_tokens(str(span.get("quote") or "")))
+            if tokens:
+                per_criterion[str(item.get("criterion_id"))] = tokens
+        result[str(row.get("pmid"))] = per_criterion
+    return result
+
+
+def evidence_divergence(original: dict[str, Any], replicate: dict[str, Any], agreed_pmids: list[str]) -> list[dict[str, Any]]:
+    """Find records where both screenings agreed but rested the decision on unrelated text.
+
+    This is the check a decision-level comparison cannot make. If two readers reach the same
+    conclusion about the same record and cite evidence with no substantive word in common, at
+    least one of them is pointing at text that is not the reason -- which is exactly the failure
+    that survives verbatim-quotation checking.
+    """
+    first = evidence_tokens_by_criterion(original)
+    second = evidence_tokens_by_criterion(replicate)
+    findings: list[dict[str, Any]] = []
+    for pmid in agreed_pmids:
+        left, right = first.get(pmid, {}), second.get(pmid, {})
+        diverged = sorted(
+            criterion
+            for criterion in set(left) & set(right)
+            if not (left[criterion] & right[criterion])
+        )
+        if diverged:
+            findings.append({"pmid": pmid, "criteria": diverged})
+    return findings
+
+
 def agreement(original: dict[str, Any], replicate: dict[str, Any]) -> dict[str, Any]:
     """Compare two independent screenings of the same records."""
     if original.get("rubric_sha256") != replicate.get("rubric_sha256"):
@@ -606,13 +749,17 @@ def agreement(original: dict[str, Any], replicate: dict[str, Any]) -> dict[str, 
     labels = ["include", "exclude", "uncertain"]
     matrix = {row: {column: 0 for column in labels} for row in labels}
     disagreements: list[dict[str, str]] = []
+    agreed_pmids: list[str] = []
     for pmid in shared:
         a, b = first[pmid], second[pmid]
         if a in labels and b in labels:
             matrix[a][b] += 1
         if a != b:
             disagreements.append({"pmid": pmid, "original": a, "replicate": b})
+        else:
+            agreed_pmids.append(pmid)
 
+    diverged = evidence_divergence(original, replicate, agreed_pmids)
     agreed = sum(matrix[label][label] for label in labels)
     counted = sum(matrix[row][column] for row in labels for column in labels)
     return {
@@ -626,10 +773,18 @@ def agreement(original: dict[str, Any], replicate: dict[str, Any]) -> dict[str, 
         "confusion_matrix": matrix,
         "confusion_matrix_note": "rows are the original screening decision, columns the replicate",
         "disagreements": disagreements,
-        "adjudication_required": bool(disagreements),
+        "evidence_divergence": diverged,
+        "evidence_divergence_note": (
+            "Same decision, no shared substantive word between the two evidence bases. Verbatim "
+            "quotation checking cannot catch a real but irrelevant quote; a second reader can."
+        ),
+        "adjudication_required": bool(disagreements) or bool(diverged),
+        "adjudication_pmids": sorted(
+            {item["pmid"] for item in disagreements} | {item["pmid"] for item in diverged}, key=int
+        ),
         "note": (
-            "Kappa alone hides which cell disagreements fall in. Route every disagreement to "
-            "adjudication and re-run to-ledger from the adjudicated worksheet."
+            "Kappa alone hides which cell disagreements fall in. Adjudicate every disagreement and "
+            "every evidence divergence, then re-run to-ledger from the adjudicated worksheet."
         ),
     }
 
@@ -666,6 +821,11 @@ def build_parser() -> argparse.ArgumentParser:
     ledger.add_argument("--records-file", required=True)
     ledger.add_argument("--scope-version", type=int, required=True)
     ledger.add_argument("--candidate-ledger-template")
+    ledger.add_argument(
+        "--agreement",
+        help="screening-agreement artifact. Records it flagged must be adjudicated in the worksheet, "
+        "and its summary is carried into the ledger for the completion gate.",
+    )
     ledger.add_argument("--output", required=True)
 
     sample = sub.add_parser("sample", help="Select a decision-stratified re-adjudication sample.")
@@ -736,7 +896,11 @@ def main(argv: list[str] | None = None) -> int:
             rubric = load_rubric(args.rubric, scope_version=args.scope_version)
             worksheet = read_json(args.worksheet)
             template = read_json(args.candidate_ledger_template) if args.candidate_ledger_template else None
-            result = to_ledger(worksheet, rubric, records_from_file(args.records_file), template=template)
+            agreement_artifact = read_json(args.agreement) if args.agreement else None
+            result = to_ledger(
+                worksheet, rubric, records_from_file(args.records_file),
+                template=template, agreement_artifact=agreement_artifact,
+            )
             ledger_issues, ledger_summary = candidate_ledger.validate_ledger(result)
             if ledger_issues:
                 raise ScreeningError("generated ledger failed validation: " + "; ".join(ledger_issues[:5]))

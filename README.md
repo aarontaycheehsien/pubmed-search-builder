@@ -201,7 +201,8 @@ python scripts/screening_tool.py to-ledger screening_worksheet_1.json --rubric s
 - Each criterion takes `yes`, `no`, `unclear`, or `not_reported`, with evidence quoted verbatim from a named field of the hash-bound record. A quotation that does not appear in the record is rejected.
 - An include needs affirmative evidence on every required criterion; an exclude needs evidence for at least one decisive failure; anything unresolved is forced to `uncertain`, so missing information never becomes a silent exclusion.
 - Decisions record `decided_by` (`human`, `model`, `rule`, `human_verified_model`). Rules may triage, but a rule-only decision cannot supply a `discovery` or `holdout` record without adjudication — that is what stops a lexicon screener from excluding records for lacking the unfamiliar vocabulary the search is meant to discover.
-- `sample` draws a decision-stratified re-adjudication set and `agreement` reports raw agreement and a confusion matrix alongside Cohen's κ, routing disagreements to adjudication.
+- An independent re-screening of at least 15% of records is **required** before handoff. Checking a quotation exists cannot show it supports the verdict; only a second reader can. `sample` draws the decision-stratified set, and `agreement` reports raw agreement and a confusion matrix alongside Cohen's κ.
+- `agreement` also reports **evidence divergence**: records where both screenings reached the same decision but cited evidence sharing no substantive word. κ is blind to this — it is the only mechanical signal that a real quotation may still be the wrong one. `to-ledger --agreement` refuses to build a ledger until every flagged record is adjudicated.
 
 ### Concept ablation and strategy strands (`scripts/strategy_analysis.py`)
 

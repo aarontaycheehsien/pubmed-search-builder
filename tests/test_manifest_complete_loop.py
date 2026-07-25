@@ -467,9 +467,26 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(any("vocabulary learning" in issue or "vocabulary-learning" in issue for issue in receipt["issues"]), receipt["issues"])
 
-    def _screening_gate_issues(self, ledger_records):
+    AGREEMENT = {
+        "compared_records": 3,
+        "screened_records": 10,
+        "coverage": 0.3,
+        "raw_agreement": 1.0,
+        "cohen_kappa": 1.0,
+        "disagreement_count": 0,
+        "evidence_divergence_count": 0,
+        "adjudicated_pmids": [],
+        "unresolved_adjudications": [],
+    }
+
+    def _screening_gate_issues(self, ledger_records, agreement="default"):
         self.resolve_base_gates_and_scope()
-        ledger = self.write_json("candidate_ledger.json", {"scope_version": 1, "records": ledger_records})
+        payload = {"scope_version": 1, "records": ledger_records}
+        if agreement == "default":
+            agreement = dict(self.AGREEMENT)
+        if agreement is not None:
+            payload["screening_provenance"] = {"agreement": agreement}
+        ledger = self.write_json("candidate_ledger.json", payload)
         validation = self.write_json("candidate_ledger_validation.json", {"operation": "candidate-ledger-validate", "ok": True})
         manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
         manifest["build_state"]["candidate_screening"] = {
@@ -520,6 +537,32 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             ]
         )
         self.assertFalse([issue for issue in issues if "screening provenance" in issue], issues)
+
+    def _evidenced_record(self):
+        return {
+            "pmid": "12345678", "provenance": "user-seed", "decision": "include", "use": "discovery",
+            "title_abstract_reviewed": True, "eligibility_reason": "in scope",
+            "screening": {
+                "rubric_sha256": "a" * 64, "record_sha256": "b" * 64,
+                "decided_by": "model", "adjudicated_by": "", "evidence_backed": True, "rule_only": False,
+            },
+        }
+
+    def test_gate_requires_an_agreement_check_even_when_evidence_is_verified(self):
+        issues = self._screening_gate_issues([self._evidenced_record()], agreement=None)
+        self.assertTrue(any("no agreement check" in issue for issue in issues), issues)
+
+    def test_gate_requires_minimum_independent_rescreening_coverage(self):
+        issues = self._screening_gate_issues(
+            [self._evidenced_record()], agreement={**self.AGREEMENT, "coverage": 0.05}
+        )
+        self.assertTrue(any("must be independently re-screened" in issue for issue in issues), issues)
+
+    def test_gate_rejects_unresolved_adjudications(self):
+        issues = self._screening_gate_issues(
+            [self._evidenced_record()], agreement={**self.AGREEMENT, "unresolved_adjudications": ["12345678"]}
+        )
+        self.assertTrue(any("unresolved adjudications" in issue for issue in issues), issues)
 
     def _vocabulary_payload(self, **overrides):
         payload = {

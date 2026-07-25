@@ -185,6 +185,64 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(any("record content changed after screening" in issue for issue in issues))
 
 
+class EvidenceQualityTests(unittest.TestCase):
+    """Existing in the record is necessary but not sufficient to function as evidence."""
+
+    def _with_quote(self, field, quote):
+        worksheet = worksheet_for()
+        set_row(
+            worksheet["records"][0],
+            {"inc_population": "yes", "inc_intervention": "no", "exc_design": "no"},
+            {"inc_intervention": [{"field": field, "quote": quote}]},
+            "exclude",
+        )
+        return validate(worksheet)[0]
+
+    def test_a_contentless_quotation_is_rejected(self):
+        issues = self._with_quote("abstract", "with an")
+        self.assertTrue(any("cites no substantive content" in issue for issue in issues), issues)
+
+    def test_a_whole_field_dump_is_rejected(self):
+        long_record = {**RECORD, "abstract": " ".join(f"word{index}" for index in range(200))}
+        worksheet = screening.prepare_worksheet(
+            rubric_for(), [long_record], scope_version=1, round_number=1, records_path="r.json"
+        )
+        set_row(
+            worksheet["records"][0],
+            {"inc_population": "yes", "inc_intervention": "no", "exc_design": "no"},
+            {"inc_intervention": [{"field": "abstract", "quote": " ".join(f"word{index}" for index in range(70))}]},
+            "exclude",
+        )
+        issues, _summary = validate(worksheet, records=(long_record,))
+        self.assertTrue(any("points at nothing in particular" in issue for issue in issues), issues)
+
+    def test_a_substantive_quotation_is_accepted(self):
+        self.assertEqual(self._with_quote("title", "Virtual reality simulation"), [])
+
+    def test_a_span_reused_across_every_criterion_is_reported(self):
+        worksheet = worksheet_for()
+        shared = [{"field": "abstract", "quote": "Undergraduate nursing students trained with an immersive virtual reality module"}]
+        set_row(
+            worksheet["records"][0],
+            INCLUDE_VERDICTS,
+            {"inc_population": shared, "inc_intervention": shared, "exc_design": shared},
+            "include",
+        )
+        issues, summary = validate(worksheet)
+        self.assertEqual(issues, [])
+        # Not rejected -- a dense sentence can settle several criteria -- but visible.
+        self.assertEqual(summary["single_span_records"], ["12345678"])
+        self.assertEqual(summary["distinct_evidence_spans"], 1)
+        self.assertEqual(summary["verified_evidence_spans"], 3)
+
+    def test_distinct_spans_are_counted_separately_from_total_spans(self):
+        worksheet = worksheet_for()
+        set_row(worksheet["records"][0], INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include")
+        _issues, summary = validate(worksheet)
+        self.assertEqual(summary["distinct_evidence_spans"], 2)
+        self.assertEqual(summary["single_span_records"], [])
+
+
 class DecisionRuleTests(unittest.TestCase):
     def test_include_requires_affirmative_evidence_on_every_required_criterion(self):
         worksheet = worksheet_for()
@@ -338,6 +396,53 @@ class LedgerTests(unittest.TestCase):
         issues, _summary = candidate_ledger.validate_ledger(ledger)
         self.assertTrue(any("requires screening.record_sha256" in issue for issue in issues))
 
+    def _agreement_artifact(self, flagged, rubric_sha=None):
+        return {
+            "operation": "screening-agreement",
+            "rubric_sha256": rubric_sha or rubric_for()["rubric_sha256"],
+            "compared_records": 4,
+            "raw_agreement": 0.75,
+            "cohen_kappa": 0.5,
+            "confusion_matrix": {},
+            "disagreements": [],
+            "evidence_divergence": [],
+            "adjudication_pmids": flagged,
+        }
+
+    def test_a_flagged_record_must_be_adjudicated_before_it_reaches_the_ledger(self):
+        worksheet = worksheet_for()
+        set_row(worksheet["records"][0], INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include", decided_by="model")
+        with self.assertRaises(screening.ScreeningError) as ctx:
+            screening.to_ledger(
+                worksheet, rubric_for(), [RECORD],
+                agreement_artifact=self._agreement_artifact(["12345678"]),
+            )
+        self.assertIn("does not adjudicate", str(ctx.exception))
+
+    def test_an_adjudicated_flagged_record_passes(self):
+        worksheet = worksheet_for()
+        set_row(
+            worksheet["records"][0], INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include",
+            decided_by="model", adjudicated_by="human",
+        )
+        ledger = screening.to_ledger(
+            worksheet, rubric_for(), [RECORD],
+            agreement_artifact=self._agreement_artifact(["12345678"]),
+        )
+        agreement = ledger["screening_provenance"]["agreement"]
+        self.assertEqual(agreement["adjudicated_pmids"], ["12345678"])
+        self.assertEqual(agreement["unresolved_adjudications"], [])
+        self.assertEqual(agreement["coverage"], 4.0)
+
+    def test_an_agreement_artifact_from_another_rubric_is_refused(self):
+        worksheet = worksheet_for()
+        set_row(worksheet["records"][0], INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include")
+        with self.assertRaises(screening.ScreeningError):
+            screening.to_ledger(
+                worksheet, rubric_for(), [RECORD],
+                agreement_artifact=self._agreement_artifact([], rubric_sha="0" * 64),
+            )
+
     def test_an_invalid_worksheet_cannot_become_a_ledger(self):
         worksheet = worksheet_for()
         set_row(worksheet["records"][0], INCLUDE_VERDICTS, {}, "include")
@@ -404,6 +509,47 @@ class AgreementTests(unittest.TestCase):
         result = screening.agreement(worksheet, copy.deepcopy(worksheet))
         self.assertEqual(result["raw_agreement"], 1.0)
         self.assertEqual(result["cohen_kappa"], 1.0)
+        self.assertFalse(result["adjudication_required"])
+
+    def test_agreement_on_the_decision_with_unrelated_evidence_is_flagged(self):
+        """The gap verbatim checking cannot close: a real but irrelevant quotation."""
+        def screened(field, quote):
+            worksheet = worksheet_for()
+            set_row(
+                worksheet["records"][0],
+                {"inc_population": "yes", "inc_intervention": "no", "exc_design": "no"},
+                {"inc_intervention": [{"field": field, "quote": quote}]},
+                "exclude",
+            )
+            return worksheet
+
+        reader_a = screened("title", "Virtual reality simulation")
+        reader_b = screened("abstract", "Undergraduate nursing students trained")
+        # Each is individually valid: both quotations really are in the record.
+        self.assertEqual(validate(reader_a)[0], [])
+        self.assertEqual(validate(reader_b)[0], [])
+
+        result = screening.agreement(reader_a, reader_b)
+        self.assertEqual(result["raw_agreement"], 1.0)  # decision-level comparison sees nothing
+        self.assertEqual(result["evidence_divergence"], [{"pmid": "12345678", "criteria": ["inc_intervention"]}])
+        self.assertTrue(result["adjudication_required"])
+        self.assertEqual(result["adjudication_pmids"], ["12345678"])
+
+    def test_shared_evidence_is_not_flagged_as_divergent(self):
+        def screened(quote):
+            worksheet = worksheet_for()
+            set_row(
+                worksheet["records"][0],
+                {"inc_population": "yes", "inc_intervention": "no", "exc_design": "no"},
+                {"inc_intervention": [{"field": "abstract", "quote": quote}]},
+                "exclude",
+            )
+            return worksheet
+
+        result = screening.agreement(
+            screened("immersive virtual reality module"), screened("an immersive virtual reality")
+        )
+        self.assertEqual(result["evidence_divergence"], [])
         self.assertFalse(result["adjudication_required"])
 
     def test_agreement_across_rubric_versions_is_refused(self):

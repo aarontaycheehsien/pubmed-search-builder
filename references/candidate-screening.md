@@ -47,6 +47,10 @@ Each criterion takes one of four verdicts: `yes`, `no`, `unclear`, or `not_repor
 
 Evidence is a quotation plus the field it came from (`title`, `abstract`, `keywords`, `mesh_headings`). The validator checks the quotation appears verbatim in that field of the hash-bound record, so an unsupported quotation is no easier to write than an unsupported reason was. Whitespace and casing are normalised; invented text is not accepted.
 
+Existing in the record is necessary but not sufficient. Two further floors reject quotations that cannot function as evidence at all: a span made only of function words and research boilerplate cites nothing, and a span over 60 words points at nothing in particular rather than at the sentence that decides the criterion. The validation summary also reports `distinct_evidence_spans` against `verified_evidence_spans`, and lists `single_span_records` — records where one span was reused as the sole evidence for three or more criteria. That is not rejected, because a dense sentence can legitimately settle two criteria at once, but it is the signature of a quotation pasted once rather than read per criterion.
+
+These floors remove the cheap ways to fake evidence. None of them establishes that a quotation *supports* the verdict it is attached to — a screener can cite a real, substantive, but irrelevant sentence. That is what the agreement check tests, and why it is required.
+
 Decisions must follow from the verdicts, and evidence requirements are criterion-specific:
 
 - **include** — every required-inclusion criterion is `yes` *and* carries supporting evidence, and no decisive exclusion applies.
@@ -61,15 +65,28 @@ Rules may prioritise, triage, and pre-fill. They may not be the final authority 
 
 This is the guardrail against circular screening. A lexicon that excludes records lacking already-known vocabulary suppresses exactly the unfamiliar terminology vocabulary learning exists to find. The restriction is not that rules mention search terms — legitimate eligibility criteria overlap with search vocabulary by nature — but that a rule alone cannot finalise the records the evidence base is built from.
 
-### Agreement check
+### Agreement check (required)
+
+An agreement check is not optional polish. Verifying that a quotation exists in a record cannot show that it supports the verdict; only a second independent reading tests that, so the completion gate requires one covering at least 15% of screened records with every flagged record adjudicated.
 
 ```bash
+# Select the records to re-screen independently, then screen them into a replicate worksheet.
 python scripts/screening_tool.py sample screening_worksheet_1.json --fraction 0.15 --output screening_sample_1.json
-python scripts/screening_tool.py agreement screening_worksheet_1.json --replicate screening_worksheet_1_replicate.json \
-  --output screening_agreement_1.json
+
+python scripts/screening_tool.py agreement screening_worksheet_1.json \
+  --replicate screening_worksheet_1_replicate.json --output screening_agreement_1.json
+
+# Adjudicate everything it flagged (set `adjudicated_by` on those records), then build the ledger.
+python scripts/screening_tool.py to-ledger screening_worksheet_1.json --rubric screening_rubric_v1.json \
+  --records-file candidate_records.json --scope-version 1 \
+  --agreement screening_agreement_1.json --output candidate_ledger.json
 ```
 
-The sample is stratified by decision. A simple random sample of a screening set is mostly obvious excludes and measures very little; stratifying puts includes and uncertains — where errors actually cost recall — into the check. The report gives raw agreement and a confusion matrix alongside Cohen's κ, because κ alone hides which cell the disagreements fall in. Route every disagreement to adjudication and regenerate the ledger from the adjudicated worksheet.
+The sample is stratified by decision. A simple random sample of a screening set is mostly obvious excludes and measures very little; stratifying puts includes and uncertains — where errors actually cost recall — into the check.
+
+The report gives raw agreement and a confusion matrix alongside Cohen's κ, because κ alone hides which cell the disagreements fall in. It also reports **`evidence_divergence`**: records where both screenings reached the *same* decision but cited evidence with no substantive word in common. Decision-level agreement is blind to this — κ is 1.0 while one reader is pointing at text that is not the reason. It is the only mechanical signal that a real quotation may still be the wrong one.
+
+`to-ledger --agreement` refuses to build the ledger until every record in `adjudication_pmids` — disagreements and evidence divergences alike — carries `adjudicated_by` in the worksheet. It then carries the agreement summary into `screening_provenance.agreement`, which is what the completion gate reads.
 
 After screening, use `active-vocabulary-learning.md`. Only newly included `discovery`/`both` records may generate proposals. Excluded records receive a separate diagnostic and never supply proposed search terms. Assign every included record to existing locked concepts before extraction; an unknown concept or changed eligibility interpretation requires scope re-entry.
 

@@ -83,6 +83,9 @@ from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_
 from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
 
 MANIFEST_VERSION = "1.1"
+# Share of screened records that must be independently re-screened before handoff. Verifying a
+# quotation exists in a record cannot show it supports the verdict; a second reader can.
+MIN_SCREENING_AGREEMENT_COVERAGE = 0.15
 SKILL_NAME = "pubmed-search-builder"
 DEFAULT_SKILL_VERSION = "2.0.0"
 
@@ -1583,6 +1586,27 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 "re-screen them with screening_tool.py so each decision is bound to the rubric, the "
                 "record content, and quoted evidence"
             )
+        elif ledger_records:
+            # Quoted evidence is verified to exist in the record, which does not establish that it
+            # supports the verdict it is attached to. Only a second independent reading tests that,
+            # so an evidence-backed screening is not complete until one has been run and resolved.
+            provenance = ledger_payload.get("screening_provenance")
+            agreement = provenance.get("agreement") if isinstance(provenance, dict) else None
+            if not isinstance(agreement, dict):
+                issues.append(
+                    "candidate screening has no agreement check; re-screen a stratified sample and "
+                    "record it with `screening_tool.py agreement`, then rebuild the ledger with "
+                    "`to-ledger --agreement`"
+                )
+            else:
+                if agreement.get("unresolved_adjudications"):
+                    issues.append("screening agreement check has unresolved adjudications")
+                coverage = agreement.get("coverage")
+                if not isinstance(coverage, (int, float)) or coverage < MIN_SCREENING_AGREEMENT_COVERAGE:
+                    issues.append(
+                        f"screening agreement covers {coverage} of screened records; at least "
+                        f"{MIN_SCREENING_AGREEMENT_COVERAGE:.0%} must be independently re-screened"
+                    )
     if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
         issues.append("candidate-screening not-applicable status lacks a reason")
 
