@@ -34,13 +34,27 @@ python scripts/vocabulary_learning.py extract \
 
 The tool extracts phrases, acronyms, keywords, and MeSH from newly included discovery records only. It excludes existing and previously proposed terms. Excluded records are summarized separately with exclusion reasons and frequent terminology; `used_for_proposals` is always false. Unassigned included records and missing record content block adjudication.
 
-For later rounds, pass the prior final vocabulary-learning artifact with `--previous-learning` so only newly included records contribute new proposals.
+### The bounded review shortlist
+
+Generation is unbounded by nature: every 2-3 gram, acronym, keyword, and MeSH heading in every newly included record, for each concept that record is assigned to. A real build produces six figures of candidates, which no reviewer or critic can work through — so a per-candidate disposition requirement would be satisfiable only by a bulk reason, and the audit would then imply a review that never happened.
+
+The tool therefore ranks candidates and promotes a bounded shortlist:
+
+- **`proposals`** — the review shortlist, and the only list requiring a per-term disposition. Selection runs per locked concept and splits the budget round-robin across the MeSH, keyword, acronym, and phrase layers, preferring terms that cover records not yet represented. One concept or one phrase class cannot consume the allowance. Set the size with `--max-review-terms-per-concept` (default 60).
+- **`below_review_threshold`** — everything else, kept as measurements: threshold policy, counts by concept/layer/supporting-record count, and compact normalized-term fingerprints. Nothing here was reviewed, accepted, or rejected. Failing a mechanical ranking threshold is not a relevance judgement, and the tool never labels it one. The fingerprints let a later round skip the same tail instead of re-proposing it.
+- **`candidate_generation`** — `total_generated`, `promoted_for_review`, `below_review_threshold`, and `reconciled`. The completion gate checks that the shortlist and the retained tail reconcile with total generated candidates, and that the saved proposal count matches what was promoted.
+
+Ranking uses local supporting-record coverage only. PubMed background lift costs one query per term, so it belongs on the bounded set — run `pubmed_tool.py term-rank` against the shortlist when lift is needed.
+
+Candidate terms are attributed per record rather than per term, so a record assigned to several concepts proposes all of its terms under each. Shortlisted terms in that position carry `also_proposed_for_concepts`; deciding which concept a term actually belongs to is a review decision, not something the extractor can infer.
+
+For later rounds, pass the prior final vocabulary-learning artifact with `--previous-learning` so only newly included records contribute new proposals, and so the previous round's retained tail is not proposed again.
 
 Every authored `accepted` proposal then passes the seven checks in `no-harm-revisions.md`. The tool adopts only changes that fix the vocabulary gap, preserve prior held-out retrieval, stay inside the locked concept, avoid syntax/translation drift, preserve protocol scope, and report before/after workload. Failed proposals automatically revert or remain a labelled experimental-only variant.
 
 ## Adjudicate and retest
 
-Edit each proposal in the extraction artifact:
+Edit each proposal in the extraction artifact's `proposals` shortlist. Do not add decisions to `below_review_threshold`; the gate rejects an artifact that dispositions unreviewed candidates.
 
 ```json
 {

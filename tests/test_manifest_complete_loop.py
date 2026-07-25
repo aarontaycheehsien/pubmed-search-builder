@@ -447,6 +447,13 @@ class ManifestCompleteLoopTests(unittest.TestCase):
                 "assignment_required": False,
                 "processing_blockers": [],
                 "excluded_record_diagnosis": {"used_for_proposals": False},
+                "candidate_generation": {
+                    "total_generated": 0,
+                    "promoted_for_review": 0,
+                    "below_review_threshold": 0,
+                    "reconciled": True,
+                },
+                "below_review_threshold": {"count": 0, "fingerprints": []},
                 "proposals": [],
                 "accepted_term_count": 0,
                 "experimental_term_count": 0,
@@ -459,6 +466,97 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         rc, receipt = self.state("check-complete")
         self.assertEqual(rc, 1)
         self.assertFalse(any("vocabulary learning" in issue or "vocabulary-learning" in issue for issue in receipt["issues"]), receipt["issues"])
+
+    def _vocabulary_payload(self, **overrides):
+        payload = {
+            "operation": "vocabulary-learning",
+            "ok": True,
+            "scope_version": 1,
+            "locked_concepts": ["condition"],
+            "scope_reentry_required": False,
+            "assignment_required": False,
+            "processing_blockers": [],
+            "excluded_record_diagnosis": {"used_for_proposals": False},
+            "candidate_generation": {
+                "total_generated": 5000,
+                "promoted_for_review": 2,
+                "below_review_threshold": 4998,
+                "reconciled": True,
+            },
+            "below_review_threshold": {"count": 4998, "fingerprints": []},
+            "proposals": [
+                {"proposal_id": "V0001", "decision": "rejected", "decision_reason": "off concept"},
+                {"proposal_id": "V0002", "decision": "deferred", "decision_reason": "needs a probe"},
+            ],
+            "accepted_term_count": 0,
+            "experimental_term_count": 0,
+            "reverted_term_count": 0,
+            "all_accepted_terms_retested": True,
+            "no_harm_checks_complete": True,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _vocabulary_gate_issues(self, payload):
+        self.resolve_base_gates_and_scope()
+        ledger = self.write_json("candidate_ledger.json", {"scope_version": 1, "records": []})
+        validation = self.write_json("candidate_ledger_validation.json", {"operation": "candidate-ledger-validate", "ok": True})
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        manifest["build_state"]["candidate_screening"] = {
+            "status": "complete",
+            "artifact": str(ledger),
+            "validation_artifact": str(validation),
+            "summary": {"independent_holdout_available": False},
+            "reason": "",
+        }
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        artifact = self.write_json("vocabulary_learning.json", payload)
+        self.add("term-rank", "python scripts/vocabulary_learning.py retest", output=artifact)
+        _rc, receipt = self.state("check-complete")
+        return receipt["issues"]
+
+    def test_bounded_shortlist_satisfies_the_vocabulary_gate(self):
+        issues = self._vocabulary_gate_issues(self._vocabulary_payload())
+        self.assertFalse(
+            [issue for issue in issues if "vocabulary" in issue], issues
+        )
+
+    def test_gate_rejects_counts_that_do_not_reconcile_with_total_generated(self):
+        payload = self._vocabulary_payload(
+            candidate_generation={
+                "total_generated": 5000,
+                "promoted_for_review": 2,
+                "below_review_threshold": 10,
+                "reconciled": True,
+            }
+        )
+        issues = self._vocabulary_gate_issues(payload)
+        self.assertTrue(any("do not reconcile" in issue for issue in issues), issues)
+
+    def test_gate_rejects_a_shortlist_that_does_not_match_the_promoted_count(self):
+        payload = self._vocabulary_payload(
+            candidate_generation={
+                "total_generated": 5000,
+                "promoted_for_review": 40,
+                "below_review_threshold": 4960,
+                "reconciled": True,
+            }
+        )
+        issues = self._vocabulary_gate_issues(payload)
+        self.assertTrue(any("but saved 2 proposals" in issue for issue in issues), issues)
+
+    def test_gate_rejects_dispositions_on_unreviewed_candidates(self):
+        payload = self._vocabulary_payload(
+            below_review_threshold={"count": 4998, "fingerprints": [], "decision": "rejected"}
+        )
+        issues = self._vocabulary_gate_issues(payload)
+        self.assertTrue(any("must carry no disposition" in issue for issue in issues), issues)
+
+    def test_gate_rejects_a_legacy_artifact_with_no_generation_totals(self):
+        payload = self._vocabulary_payload()
+        payload.pop("candidate_generation")
+        issues = self._vocabulary_gate_issues(payload)
+        self.assertTrue(any("candidate-generation totals" in issue for issue in issues), issues)
 
     def test_valid_ablation_and_two_strand_artifacts_satisfy_new_gates(self):
         self.resolve_base_gates_and_scope()

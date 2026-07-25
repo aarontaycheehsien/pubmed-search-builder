@@ -831,6 +831,32 @@ def discover(
     return screening, provenance_output
 
 
+# Fields the next round actually consumes from a carried-forward record: identity, its screening
+# outcome, and the pilot families that found it. Record text (title/abstract/keywords/MeSH) is not
+# re-read -- cumulative vocabulary is carried in `vocabulary_terms` instead -- so the checkpoint no
+# longer grows a full copy of every screened record every round. The text stays recoverable through
+# the hashed screening artifacts listed in `source_references`.
+CHECKPOINT_RECORD_FIELDS = (
+    "pmid",
+    "candidate_id",
+    "decision",
+    "eligibility_reason",
+    "title_abstract_reviewed",
+    "provenance_detail",
+)
+
+
+def checkpoint_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Reduce an adjudicated record to the fields required to resume the next round."""
+    return {key: record[key] for key in CHECKPOINT_RECORD_FIELDS if key in record}
+
+
+def artifact_digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
 def vocabulary_from_records(records: list[dict[str, Any]]) -> set[str]:
     vocabulary: set[str] = set()
     for record in records:
@@ -952,7 +978,11 @@ def adjudicate(
     previous_included = {str(value) for value in (previous_state or {}).get("included_pmids", [])}
     included = {str(item.get("pmid")) for item in combined if item.get("decision") == "include"}
     previous_vocabulary = {str(value) for value in (previous_state or {}).get("vocabulary_terms", [])}
-    vocabulary = vocabulary_from_records(combined)
+    # Vocabulary is a per-record union, so extending the carried cumulative set with this round's
+    # records equals recomputing over every record -- without needing the earlier record text. The
+    # accumulation is monotonic: a record re-decided out of scope no longer retracts terminology it
+    # already contributed, which is the correct reading for a "have we stopped seeing new terms" test.
+    vocabulary = previous_vocabulary | vocabulary_from_records(current_records)
     new_included = sorted(included - previous_included, key=int)
     new_vocabulary = sorted(vocabulary - previous_vocabulary)
     round_saturated = not new_included and not new_vocabulary
@@ -1056,6 +1086,19 @@ def adjudicate(
             )
         gate["user_decision"] = decision
         gate["user_decision_text"] = render_user_decision_text(decision)
+    source_references = [
+        dict(item)
+        for item in (previous_state or {}).get("source_references", [])
+        if isinstance(item, dict)
+    ]
+    source_references.append(
+        {
+            "round": round_number,
+            "screening_sha256": artifact_digest(screening),
+            "provenance_sha256": artifact_digest(provenance),
+            "screened_record_count": len(current_records),
+        }
+    )
     state = {
         "operation": "orthogonal-pilot-adjudication",
         "ok": True,
@@ -1065,7 +1108,25 @@ def adjudicate(
         "pilot_types": sorted(PILOT_TYPES),
         "seen_pmids": sorted(combined_by_pmid, key=int),
         "included_pmids": sorted(included, key=int),
-        "adjudicated_records": combined,
+        "adjudicated_records": [checkpoint_record(item) for item in combined],
+        "source_references": source_references,
+        "review_summary": {
+            "note": (
+                "Compact round-by-round view for human and critic review. Full record content is not "
+                "duplicated here; it lives in the hashed screening artifacts in `source_references`."
+            ),
+            "round": round_number,
+            "screened_total": len(combined_by_pmid),
+            "included_total": len(included),
+            "new_included_this_round": len(new_included),
+            "new_vocabulary_this_round": len(new_vocabulary),
+            "vocabulary_total": len(vocabulary),
+            "round_saturated": round_saturated,
+            "consecutive_saturated_rounds": consecutive,
+            "safety_cap_reached_any": cap_reached_any,
+            "saturation_gate_verdict": gate.get("verdict"),
+            "saturation_gate_applies": gate.get("applies"),
+        },
         "vocabulary_terms": sorted(vocabulary),
         "new_included_pmids": new_included,
         "new_vocabulary_terms": new_vocabulary,

@@ -1769,6 +1769,37 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
             if missing_locked:
                 issues.append("vocabulary learning does not preserve registered locked concepts: " + ", ".join(missing_locked))
             proposals = payload.get("proposals") if isinstance(payload.get("proposals"), list) else []
+            # `proposals` is the bounded review shortlist; the per-term disposition checks below
+            # apply only to it. Candidate generation is verified by reconciliation instead, so a
+            # six-figure tail can neither be silently dropped nor bulk-dispositioned as reviewed.
+            generation = payload.get("candidate_generation") if isinstance(payload.get("candidate_generation"), dict) else {}
+            below = payload.get("below_review_threshold") if isinstance(payload.get("below_review_threshold"), dict) else {}
+            if not generation:
+                issues.append("vocabulary learning does not report candidate-generation totals")
+            else:
+                total = generation.get("total_generated")
+                promoted = generation.get("promoted_for_review")
+                withheld = generation.get("below_review_threshold")
+                if not all(isinstance(value, int) for value in (total, promoted, withheld)):
+                    issues.append("vocabulary-learning candidate-generation totals are not integers")
+                elif promoted + withheld != total or generation.get("reconciled") is not True:
+                    issues.append(
+                        "vocabulary-learning shortlist and below-threshold counts do not reconcile "
+                        f"with total generated candidates ({promoted} + {withheld} != {total})"
+                    )
+                elif len(proposals) != promoted:
+                    issues.append(
+                        f"vocabulary learning promoted {promoted} candidates for review but saved {len(proposals)} proposals"
+                    )
+                elif withheld and below.get("count") != withheld:
+                    issues.append("vocabulary-learning below-threshold record does not match the reported count")
+            if withheld_decisions := [
+                key for key in ("decision", "decisions", "rejected") if key in below
+            ]:
+                issues.append(
+                    "below-threshold vocabulary candidates must carry no disposition, found: "
+                    + ", ".join(withheld_decisions)
+                )
             accepted = [item for item in proposals if isinstance(item, dict) and item.get("decision") == "accepted"]
             adopted = [item for item in accepted if item.get("effective_decision") == "adopted"]
             experimental = [item for item in accepted if item.get("effective_decision") == "experimental-only"]

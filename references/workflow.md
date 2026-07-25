@@ -94,7 +94,7 @@ Freeze held-out records before mining. When no independent holdout is feasible, 
 
 For no-seed builds, do not begin term mining until repeated rounds add neither screened-in relevant studies nor vocabulary, no retrieval safety cap remains unresolved, and `no_seed_discovery.py adjudicate` has frozen discovery/holdout roles.
 
-Read `references/active-vocabulary-learning.md`. After each screening round, extract terminology only from newly included discovery records and map it only to already locked concepts. Keep excluded-record diagnosis separate. A new concept or eligibility interpretation triggers `state reopen-scope`; do not adopt its terms under the current version. Reason every term disposition and retest accepted terms against the frozen holdout when available plus differential samples.
+Read `references/active-vocabulary-learning.md`. After each screening round, extract terminology only from newly included discovery records and map it only to already locked concepts. Keep excluded-record diagnosis separate. A new concept or eligibility interpretation triggers `state reopen-scope`; do not adopt its terms under the current version. Reason every disposition on the bounded review shortlist and retest accepted terms against the frozen holdout when available plus differential samples. Candidates retained below the review threshold were never reviewed and carry no disposition; the gate reconciles their count against total generated candidates instead.
 
 ## 4. Build objective evidence and concept blocks
 
@@ -196,7 +196,7 @@ The audit must include:
 - strategy variants, counts, samples, validation, and filter effects;
 - concept-ablation recommendations and differential samples; for fragile topics, both strategy strands, known-item losses, unique records, workload estimates, and narrowing rationales;
 - empirical fragility metrics, dimension scores, hard flags, and any reasoned human override; for no-seed builds, orthogonal pilot coverage, blinded screening, saturation history, and holdout freeze;
-- active vocabulary-learning rounds, newly included records, excluded-record diagnosis, term dispositions, scope challenges, held-out effects, and differential samples;
+- active vocabulary-learning rounds, newly included records, excluded-record diagnosis, candidate-generation totals with the review-shortlist policy, shortlist term dispositions, scope challenges, held-out effects, and differential samples;
 - stratified sampling design and seed, label counts including uncertainty, precision confidence intervals, estimated records screened per relevant report, and recall-gated incremental workload comparisons;
 - every critic round and the revision-cycle ledger;
 - final QA, caveats, and external peer-review attention points.

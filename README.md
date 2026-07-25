@@ -169,6 +169,8 @@ For no-seed builds, `scripts/no_seed_discovery.py` runs six orthogonal pilot fam
 
 After candidate screening, `scripts/vocabulary_learning.py` extracts terms from newly included records, keeps excluded-record terminology diagnostic-only, blocks scope-changing proposals, and retests accepted within-concept additions against holdouts and differential samples.
 
+Extraction generates every phrase, acronym, keyword, and MeSH candidate in every newly included record — six figures of candidates on a real build. The tool ranks them and promotes a bounded per-concept shortlist (`--max-review-terms-per-concept`, default 60), split across the MeSH, keyword, acronym, and phrase layers so none monopolizes the budget. That shortlist is the only list requiring a per-term disposition. The remainder is retained as `below_review_threshold` — policy, counts, and compact normalized fingerprints, explicitly carrying no decision — and the completion gate reconciles shortlist plus retained tail against total generated candidates.
+
 For strategy variants, `scripts/screening_burden.py` builds reproducible complete-frame stratified samples, estimates weighted precision with confidence intervals, reports records screened per relevant report, and permits burden-based selection only among variants meeting the independent held-out recall requirement.
 
 Every critic or vocabulary revision also passes `scripts/revision_guard.py`: the named defect must be fixed without losing prior held-out retrieval, adding an unauthorized required block, introducing syntax/translation drift, silently changing scope, or omitting before/after workload counts. Failed revisions automatically keep the baseline authoritative or remain labelled experimental-only.

@@ -20,6 +20,21 @@ class VocabularyLearningError(ValueError):
     pass
 
 
+# Candidate generation enumerates every phrase, acronym, keyword, and MeSH heading in every newly
+# included record, for every concept the record is assigned to. On a real build that is six figures
+# of candidates -- an artifact no human or critic can review, which makes a per-proposal disposition
+# gate satisfiable only by a bulk reason. Ranking and capping produces a shortlist that a reviewer
+# can actually work through; the remainder is retained compactly as measurements, not decisions.
+REVIEW_TERMS_PER_CONCEPT_DEFAULT = 60
+
+BELOW_THRESHOLD_NOTE = (
+    "Candidates that did not reach the per-concept review shortlist. Falling below a mechanical "
+    "ranking threshold is not a relevance judgement: nothing here has been reviewed, accepted, or "
+    "rejected. Normalized fingerprints are retained so later rounds do not re-propose the same tail "
+    "and so shortlist/threshold counts reconcile against total generated candidates."
+)
+
+
 def read_json(path: str) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -159,6 +174,122 @@ def candidate_terms(record: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
+def proposal_bucket(proposal: dict[str, Any]) -> str:
+    """Extraction layer a candidate is charged against, matching term-rank's bucket names."""
+    if proposal.get("field") == "mesh":
+        return "mesh"
+    sources = set(proposal.get("sources") or [])
+    return next((name for name in ("keyword", "acronym", "phrase") if name in sources), "phrase")
+
+
+def rank_and_bound_proposals(
+    proposals: list[dict[str, Any]],
+    coverage_denominators: dict[str, int],
+    max_terms_per_concept: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Split generated candidates into a bounded review shortlist and a compact retained tail.
+
+    Selection runs per locked concept through ``select_diverse_term_candidates``, which allocates
+    the budget round-robin across the MeSH, keyword, acronym, and phrase layers and prefers terms
+    covering records not yet represented. One concept or one phrase class therefore cannot consume
+    the whole allowance. Scoring is local document-frequency coverage only -- PubMed lift costs a
+    query per term and belongs on the bounded shortlist, via ``pubmed_tool.py term-rank``.
+    """
+    by_concept: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for proposal in proposals:
+        denominator = max(1, int(coverage_denominators.get(str(proposal["concept"]), 0)))
+        proposal["relevant_df"] = len(proposal["supporting_pmids"])
+        proposal["coverage"] = round(proposal["relevant_df"] / denominator, 4)
+        proposal["extraction_layer"] = proposal_bucket(proposal)
+        by_concept[str(proposal["concept"])].append(proposal)
+
+    shortlist: list[dict[str, Any]] = []
+    tail: list[dict[str, Any]] = []
+    per_concept: dict[str, dict[str, int]] = {}
+    for concept in sorted(by_concept):
+        rows = by_concept[concept]
+        rows.sort(
+            key=lambda row: (
+                -int(row["relevant_df"]),
+                0 if row["field"] == "mesh" else 1,
+                str(row["term"]).lower(),
+            )
+        )
+        selected = pubmed_tool.select_diverse_term_candidates(rows, max_terms_per_concept)
+        selected_keys = {(str(row["normalized_term"]), str(row["field"])) for row in selected}
+        shortlist.extend(selected)
+        tail.extend(
+            row for row in rows if (str(row["normalized_term"]), str(row["field"])) not in selected_keys
+        )
+        per_concept[concept] = {
+            "generated": len(rows),
+            "promoted_for_review": len(selected),
+            "below_review_threshold": len(rows) - len(selected),
+            "coverage_denominator": max(1, int(coverage_denominators.get(concept, 0))),
+        }
+
+    shortlist.sort(
+        key=lambda row: (
+            str(row["concept"]).lower(),
+            -float(row["coverage"]),
+            -int(row["relevant_df"]),
+            str(row["term"]).lower(),
+        )
+    )
+    # Candidate terms are attributed per record, not per term, so a record assigned to two concepts
+    # proposes all of its terms under both. Surface that directly: a term shortlisted under several
+    # concepts needs the reviewer to decide which one it actually belongs to.
+    concepts_by_term: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    for row in shortlist:
+        concepts_by_term[(str(row["normalized_term"]), str(row["field"]))].add(str(row["concept"]))
+    for index, proposal in enumerate(shortlist, start=1):
+        proposal["proposal_id"] = f"V{index:04d}"
+        shared = concepts_by_term[(str(proposal["normalized_term"]), str(proposal["field"]))]
+        proposal["also_proposed_for_concepts"] = sorted(shared - {str(proposal["concept"])})
+
+    source_counts: Counter[str] = Counter()
+    support_counts: Counter[int] = Counter()
+    concept_counts: Counter[str] = Counter()
+    fingerprints: defaultdict[tuple[str, str], list[str]] = defaultdict(list)
+    for row in tail:
+        source_counts[str(row["extraction_layer"])] += 1
+        support_counts[int(row["relevant_df"])] += 1
+        concept_counts[str(row["concept"])] += 1
+        fingerprints[(str(row["concept"]), str(row["field"]))].append(str(row["normalized_term"]))
+
+    below = {
+        "note": BELOW_THRESHOLD_NOTE,
+        "count": len(tail),
+        "counts_by_concept": dict(sorted(concept_counts.items())),
+        "counts_by_extraction_layer": dict(sorted(source_counts.items())),
+        "counts_by_supporting_record_count": {
+            str(support): count for support, count in sorted(support_counts.items())
+        },
+        "fingerprints": [
+            {
+                "concept": concept,
+                "field": field,
+                "normalized_terms": sorted(set(fingerprints[(concept, field)])),
+            }
+            for concept, field in sorted(fingerprints)
+        ],
+    }
+    selection = {
+        "policy": "per-concept diverse selection across mesh/keyword/acronym/phrase layers",
+        "max_review_terms_per_concept": max_terms_per_concept,
+        "ranking": "local supporting-record coverage, then marginal record coverage within layer",
+        "cross_concept_note": (
+            "Terms are attributed per record, so a record assigned to several concepts proposes its "
+            "terms under each. `also_proposed_for_concepts` marks those; assigning the term to the "
+            "right concept is a review decision."
+        ),
+        "pubmed_lift_computed": False,
+        "pubmed_lift_note": "Background lift needs one PubMed query per term; run term-rank on the shortlist.",
+        "by_concept": per_concept,
+    }
+    return shortlist, {"review_selection": selection, "below_review_threshold": below}
+
+
 def excluded_diagnosis(records: list[dict[str, Any]], ledger: dict[str, dict[str, Any]]) -> dict[str, Any]:
     counts: Counter[str] = Counter()
     sources: defaultdict[str, set[str]] = defaultdict(set)
@@ -199,6 +330,7 @@ def extract_learning(
     *,
     scope_version: int,
     previous_learning: dict[str, Any] | None = None,
+    max_review_terms_per_concept: int = REVIEW_TERMS_PER_CONCEPT_DEFAULT,
 ) -> dict[str, Any]:
     scope, scope_labels = load_scope_labels(scope_file, scope_version)
     protocol_sha = (
@@ -233,11 +365,23 @@ def extract_learning(
         for item in (previous_learning or {}).get("proposals", [])
         if isinstance(item, dict)
     }
+    # Candidates the previous round retained below its review threshold were never reviewed, so
+    # they must not be re-proposed as if newly discovered. Without this the long tail would return
+    # in full every round.
+    previous_below = (previous_learning or {}).get("below_review_threshold")
+    for group in (previous_below or {}).get("fingerprints", []) if isinstance(previous_below, dict) else []:
+        if not isinstance(group, dict):
+            continue
+        concept = str(group.get("concept") or "")
+        previous_terms.update(
+            (concept, str(term)) for term in group.get("normalized_terms", []) if str(term)
+        )
     newly_included = [pmid for pmid in discovery_pmids if pmid not in previous_processed]
     proposals: dict[tuple[str, str, str], dict[str, Any]] = {}
     unassigned = []
     processing_blockers: list[dict[str, Any]] = []
     processed_this_round: set[str] = set()
+    coverage_denominators: Counter[str] = Counter()
     for pmid in newly_included:
         record = records_by_pmid.get(pmid)
         if not record:
@@ -250,6 +394,7 @@ def extract_learning(
             unassigned.append({"pmid": pmid, "terms": sorted({term for term, _source in candidate_terms(record)})[:100]})
             continue
         for label in labels:
+            coverage_denominators[label] += 1
             for term, source in candidate_terms(record):
                 normalized = pubmed_tool.normalize_for_match(term)
                 if not normalized or normalized in existing.get(label, set()) or (label, normalized) in previous_terms:
@@ -287,6 +432,10 @@ def extract_learning(
                     "required_action": "reopen retrieval scope and issue a new scope version before adopting related vocabulary",
                 }
             )
+    generated = list(proposals.values())
+    shortlist, bounding = rank_and_bound_proposals(
+        generated, dict(coverage_denominators), max(1, int(max_review_terms_per_concept))
+    )
     result = {
         "operation": "vocabulary-learning-extract",
         "ok": True,
@@ -295,14 +444,27 @@ def extract_learning(
         "newly_included_pmids": newly_included,
         "processed_included_pmids": sorted(previous_processed | processed_this_round, key=int),
         "holdout_pmids_frozen": holdout_pmids,
-        "proposals": list(proposals.values()),
+        "candidate_generation": {
+            "total_generated": len(generated),
+            "promoted_for_review": len(shortlist),
+            "below_review_threshold": bounding["below_review_threshold"]["count"],
+            "reconciled": len(shortlist) + bounding["below_review_threshold"]["count"] == len(generated),
+        },
+        "review_selection": bounding["review_selection"],
+        "below_review_threshold": bounding["below_review_threshold"],
+        "proposals": shortlist,
         "unassigned_included_records": unassigned,
         "assignment_required": bool(unassigned),
         "processing_blockers": processing_blockers,
         "excluded_record_diagnosis": excluded_diagnosis(records, ledger),
         "scope_challenges": challenges,
         "scope_reentry_required": bool(challenges),
-        "note": "Only terms assigned to already locked concepts are proposed. Excluded-record terminology is diagnostic only.",
+        "note": (
+            "Only terms assigned to already locked concepts are proposed. Excluded-record terminology "
+            "is diagnostic only. `proposals` is the bounded review shortlist and is the only list "
+            "requiring a per-term disposition; `below_review_threshold` retains the remainder as "
+            "measurements, not decisions."
+        ),
     }
     if scope.get("dsl_version") == 1:
         result.update({
@@ -509,6 +671,9 @@ def retest_learning(
         ),
         "newly_included_pmids": extraction.get("newly_included_pmids", []),
         "processed_included_pmids": extraction.get("processed_included_pmids", []),
+        "candidate_generation": extraction.get("candidate_generation", {}),
+        "review_selection": extraction.get("review_selection", {}),
+        "below_review_threshold": extraction.get("below_review_threshold", {}),
         "excluded_record_diagnosis": extraction.get("excluded_record_diagnosis", {}),
         "scope_challenges": extraction.get("scope_challenges", []),
         "scope_reentry_required": False,
@@ -522,7 +687,11 @@ def retest_learning(
         "reverted_term_count": len(reverted),
         "all_accepted_terms_retested": all(isinstance(item.get("retest"), dict) and item["retest"].get("required") is True and isinstance(item.get("no_harm"), dict) for item in accepted),
         "no_harm_checks_complete": all(isinstance(item.get("no_harm"), dict) and len(item["no_harm"].get("checks", [])) == len(revision_guard.CHECK_NAMES) for item in accepted),
-        "note": "Accepted terms are additions within locked concepts only. New concepts or eligibility interpretations require scope re-entry.",
+        "note": (
+            "Accepted terms are additions within locked concepts only. New concepts or eligibility "
+            "interpretations require scope re-entry. Dispositions cover the bounded review shortlist; "
+            "`below_review_threshold` was never reviewed and carries no decision."
+        ),
         "request_info": client.metadata(),
     }
     for key in ("dsl_version", "protocol_id", "protocol_sha256"):
@@ -541,6 +710,12 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--config-file", required=True)
     extract.add_argument("--previous-learning")
     extract.add_argument("--scope-version", type=int, required=True)
+    extract.add_argument(
+        "--max-review-terms-per-concept",
+        type=int,
+        default=REVIEW_TERMS_PER_CONCEPT_DEFAULT,
+        help="Review shortlist size per locked concept, split across extraction layers (default: %(default)s).",
+    )
     extract.add_argument("--output", required=True)
     retest = sub.add_parser("retest")
     retest.add_argument("--extraction-file", required=True)
@@ -565,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.config_file,
                 scope_version=args.scope_version,
                 previous_learning=previous,
+                max_review_terms_per_concept=args.max_review_terms_per_concept,
             )
         else:
             extraction = read_json(args.extraction_file)
@@ -584,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
             "scope_version": args.scope_version,
             "output": args.output,
             "proposal_count": len(result.get("proposals", [])),
+            "candidate_generation": result.get("candidate_generation", {}),
             "scope_reentry_required": result.get("scope_reentry_required"),
         }
     except (VocabularyLearningError, pubmed_tool.PubMedError, OSError) as exc:

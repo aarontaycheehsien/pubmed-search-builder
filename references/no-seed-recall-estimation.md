@@ -56,6 +56,16 @@ python scripts/candidate_ledger.py candidate_ledger.json --output candidate_ledg
 
 For later rounds, pass `--previous-state saturation_state_<N>.json` to both commands. The screening file contains records and blinded candidate IDs but no per-record pilot provenance. The provenance map is opened only after screening decisions are saved.
 
+### What the state file carries
+
+The state file is a **machine checkpoint**, not a copy of the evidence:
+
+- `adjudicated_records` keeps only what the next round consumes — PMID, blinded candidate ID, decision, eligibility reason, review flag, and the pilot families that found the record. Record text is not duplicated forward; cumulative `vocabulary_terms` carries the terminology signal instead, so a long build no longer re-serializes every screened abstract every round.
+- `source_references` lists each round's screening and provenance SHA-256, so the full record content stays recoverable and verifiable from the canonical artifacts.
+- `review_summary` is the compact human/critic view: round deltas, screened and included totals, vocabulary growth, saturation counters, and the gate verdict.
+
+Vocabulary accumulates monotonically: a record re-screened out of scope in a later round no longer retracts terminology it already contributed. That is the correct reading for a "have we stopped seeing new terms" stopping rule, and it keeps the novelty test stable across re-adjudication.
+
 Discovery stops only after the required consecutive rounds add neither a screened-in relevant study nor new vocabulary from screened-in records. A pilot retrieval safety cap is an operational ceiling, not a stopping rule; if reached, saturation is blocked until the pilot is narrowed or retrieval is completed. On saturation, the adjudicator deterministically freezes discovery and holdout roles and writes the candidate ledger before term mining.
 
 ## Volume-discrimination gate for an empty screened-in set

@@ -61,13 +61,14 @@ class VocabularyLearningTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return str(path)
 
-    def extract(self, config=None):
+    def extract(self, config=None, **kwargs):
         return vocabulary.extract_learning(
             self.scope,
             self.ledger,
             self.records,
             config or self.config,
             scope_version=1,
+            **kwargs,
         )
 
     def test_extracts_only_new_included_terms_and_diagnoses_excluded_separately(self):
@@ -188,6 +189,194 @@ class VocabularyLearningTests(unittest.TestCase):
             vocabulary.extract_learning(
                 self.scope, invalid, self.records, self.config, scope_version=1
             )
+
+
+class BoundedReviewShortlistTests(unittest.TestCase):
+    """Candidate generation is unbounded; the reviewable artifact must not be."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.scope = self.write("scope.json", {"scope_version": 1, "essential_blocks": ["condition"]})
+        self.ledger = self.write(
+            "ledger.json",
+            {
+                "scope_version": 1,
+                "records": [
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "use": "discovery", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                    {"pmid": "3", "provenance": "user-seed", "decision": "include", "use": "holdout", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                ],
+            },
+        )
+        self.config = self.write(
+            "config.json",
+            {
+                "scope_version": 1,
+                "concepts": [{"label": "condition", "existing_terms": ["asthma"]}],
+                "record_concept_assignments": {"1": ["condition"]},
+            },
+        )
+        # One record carrying far more candidate terms than any review budget.
+        self.records = self.write(
+            "wide_records.json",
+            {
+                "records": [
+                    {
+                        "pmid": "1",
+                        "title": " ".join(f"alpha{index} beta{index} gamma{index}" for index in range(40)),
+                        "abstract": " ".join(f"delta{index} epsilon{index} zeta{index}" for index in range(40)),
+                        "keywords": [f"keyword phrase {index}" for index in range(30)],
+                        "mesh_headings": [f"Mesh Heading {index}" for index in range(30)],
+                    },
+                    {"pmid": "3", "title": "Held out asthma", "abstract": "", "keywords": [], "mesh_headings": []},
+                ]
+            },
+        )
+
+    def write(self, name, payload):
+        path = self.root / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def extract(self, config=None, **kwargs):
+        return vocabulary.extract_learning(
+            self.scope, self.ledger, self.records, config or self.config, scope_version=1, **kwargs
+        )
+
+    def test_shortlist_is_capped_and_reconciles_with_total_generated(self):
+        result = self.extract(max_review_terms_per_concept=10)
+        generation = result["candidate_generation"]
+        self.assertEqual(len(result["proposals"]), 10)
+        self.assertEqual(generation["promoted_for_review"], 10)
+        self.assertGreater(generation["total_generated"], 100)
+        self.assertEqual(
+            generation["promoted_for_review"] + generation["below_review_threshold"],
+            generation["total_generated"],
+        )
+        self.assertTrue(generation["reconciled"])
+
+    def test_budget_is_split_across_extraction_layers(self):
+        result = self.extract(max_review_terms_per_concept=12)
+        layers = {item["extraction_layer"] for item in result["proposals"]}
+        # mesh/keyword/phrase all have candidates here; none may monopolise the budget.
+        self.assertGreaterEqual(len(layers), 3)
+        for layer in layers:
+            selected = [item for item in result["proposals"] if item["extraction_layer"] == layer]
+            self.assertLessEqual(len(selected), 6)
+
+    def test_withheld_candidates_carry_no_disposition(self):
+        result = self.extract(max_review_terms_per_concept=5)
+        below = result["below_review_threshold"]
+        self.assertNotIn("decision", below)
+        self.assertNotIn("rejected", below)
+        self.assertIn("not a relevance judgement", below["note"])
+        self.assertEqual(
+            below["count"], sum(len(group["normalized_terms"]) for group in below["fingerprints"])
+        )
+
+    def test_shortlisted_proposals_carry_local_ranking_evidence(self):
+        result = self.extract(max_review_terms_per_concept=5)
+        for proposal in result["proposals"]:
+            self.assertIsInstance(proposal["relevant_df"], int)
+            self.assertGreaterEqual(proposal["coverage"], 0.0)
+            self.assertLessEqual(proposal["coverage"], 1.0)
+        self.assertFalse(result["review_selection"]["pubmed_lift_computed"])
+
+    def test_withheld_tail_is_not_reproposed_next_round(self):
+        first = self.extract(max_review_terms_per_concept=5)
+        withheld = {
+            term
+            for group in first["below_review_threshold"]["fingerprints"]
+            for term in group["normalized_terms"]
+        }
+        self.assertTrue(withheld)
+        # A later round reprocessing the same record must not resurface the retained tail.
+        ledger = self.write(
+            "ledger_round2.json",
+            {
+                "scope_version": 1,
+                "records": [
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "use": "discovery", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                    {"pmid": "4", "provenance": "user-seed", "decision": "include", "use": "discovery", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                    {"pmid": "3", "provenance": "user-seed", "decision": "include", "use": "holdout", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                ],
+            },
+        )  # noqa: E501
+        records = self.write(
+            "records_round2.json",
+            {
+                "records": json.loads(Path(self.records).read_text(encoding="utf-8"))["records"]
+                + [{"pmid": "4", "title": "novel terminology appears here", "abstract": "", "keywords": [], "mesh_headings": []}]
+            },
+        )
+        config = self.write(
+            "config_round2.json",
+            {
+                "scope_version": 1,
+                "concepts": [{"label": "condition", "existing_terms": ["asthma"]}],
+                "record_concept_assignments": {"1": ["condition"], "4": ["condition"]},
+            },
+        )
+        second = vocabulary.extract_learning(
+            self.scope, ledger, records, config, scope_version=1, previous_learning=first,
+            max_review_terms_per_concept=5,
+        )
+        resurfaced = {item["normalized_term"] for item in second["proposals"]} & withheld
+        self.assertEqual(resurfaced, set())
+
+
+class CrossConceptAttributionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.scope = self.write(
+            "two_concept_scope.json",
+            {"scope_version": 1, "essential_blocks": ["condition", "intervention"]},
+        )
+        self.ledger = self.write(
+            "ledger.json",
+            {
+                "scope_version": 1,
+                "records": [
+                    {"pmid": "1", "provenance": "user-seed", "decision": "include", "use": "discovery", "title_abstract_reviewed": True, "eligibility_reason": "in scope"},
+                ],
+            },
+        )
+        self.records = self.write(
+            "records.json",
+            {
+                "records": [
+                    {"pmid": "1", "title": "Inhaled corticosteroid asthma trial", "abstract": "", "keywords": ["bronchial hyperreactivity"], "mesh_headings": []},
+                ]
+            },
+        )
+        self.config = self.write(
+            "two_concept_config.json",
+            {
+                "scope_version": 1,
+                "concepts": [{"label": "condition", "existing_terms": ["asthma"]}],
+                "record_concept_assignments": {"1": ["condition", "intervention"]},
+            },
+        )
+
+    def write(self, name, payload):
+        path = self.root / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def extract(self, **kwargs):
+        return vocabulary.extract_learning(
+            self.scope, self.ledger, self.records, self.config, scope_version=1, **kwargs
+        )
+
+    def test_terms_proposed_under_several_concepts_are_flagged_for_the_reviewer(self):
+        result = self.extract()
+        shared = [item for item in result["proposals"] if item["also_proposed_for_concepts"]]
+        self.assertTrue(shared, "a record assigned to two concepts proposes its terms under both")
+        for proposal in shared:
+            self.assertNotIn(proposal["concept"], proposal["also_proposed_for_concepts"])
 
 
 if __name__ == "__main__":

@@ -790,5 +790,139 @@ class PriorReviewBenchmarkTests(unittest.TestCase):
             self.assertEqual(code, 1)
 
 
+class SaturationCheckpointTests(unittest.TestCase):
+    """The checkpoint drops record text; resuming from it must stay equivalent."""
+
+    def _round(self, round_number, records):
+        candidates = [
+            {
+                "candidate_id": no_seed.blind_id(1, str(item["pmid"])),
+                "pmid": str(item["pmid"]),
+                "decision": item.get("decision", "include"),
+                "title_abstract_reviewed": True,
+                "eligibility_reason": "Matches locked scope",
+                "title": item["title"],
+                "abstract": item.get("abstract", ""),
+                "keywords": item.get("keywords", []),
+                "mesh_headings": item.get("mesh_headings", []),
+            }
+            for item in records
+        ]
+        screening = {
+            "operation": "orthogonal-pilot-screening",
+            "scope_version": 1,
+            "round": round_number,
+            "provenance_blinded": True,
+            "records": candidates,
+        }
+        provenance = {
+            "operation": "orthogonal-pilot-provenance",
+            "scope_version": 1,
+            "round": round_number,
+            "pilot_types": sorted(no_seed.PILOT_TYPES),
+            "safety_cap_reached": False,
+            "records": [
+                {
+                    "candidate_id": item["candidate_id"],
+                    "pmid": item["pmid"],
+                    "pilot_types": ["mesh-led"],
+                    "pilot_labels": ["mesh"],
+                }
+                for item in candidates
+            ],
+        }
+        return screening, provenance
+
+    def _adjudicate(self, screening, provenance, previous_state):
+        return no_seed.adjudicate(
+            screening,
+            provenance,
+            previous_state=previous_state,
+            scope_version=1,
+            required_saturated_rounds=2,
+            allocation_seed="test",
+        )
+
+    def test_checkpoint_carries_no_record_text(self):
+        screening, provenance = self._round(
+            1, [{"pmid": "1", "title": "Virtual reality nursing simulation", "abstract": "Immersive training study."}]
+        )
+        state, _ledger = self._adjudicate(screening, provenance, None)
+        record = state["adjudicated_records"][0]
+        self.assertEqual(set(record), set(no_seed.CHECKPOINT_RECORD_FIELDS))
+        for dropped in ("abstract", "title", "keywords", "mesh_headings"):
+            self.assertNotIn(dropped, record)
+        self.assertTrue(state["vocabulary_terms"])
+
+    def test_resuming_from_a_compact_checkpoint_matches_a_full_record_state(self):
+        screening1, provenance1 = self._round(
+            1,
+            [
+                {"pmid": "1", "title": "Virtual reality nursing simulation", "abstract": "Immersive training."},
+                {"pmid": "2", "title": "Augmented reality clinical teaching", "abstract": "Head mounted display."},
+            ],
+        )
+        compact, _ = self._adjudicate(screening1, provenance1, None)
+
+        # A pre-change state kept every screened record in full; both must resume identically.
+        legacy = json.loads(json.dumps(compact))
+        legacy["adjudicated_records"] = [
+            {**record, "title": "carried", "abstract": "carried text", "keywords": [], "mesh_headings": []}
+            for record in legacy["adjudicated_records"]
+        ]
+
+        screening2, provenance2 = self._round(
+            2, [{"pmid": "3", "title": "Simulation debriefing outcomes", "abstract": "Nursing student cohort."}]
+        )
+        from_compact, _ = self._adjudicate(screening2, provenance2, compact)
+        from_legacy, _ = self._adjudicate(screening2, provenance2, legacy)
+
+        for key in ("included_pmids", "seen_pmids", "vocabulary_terms", "new_included_pmids", "round_saturated"):
+            self.assertEqual(from_compact[key], from_legacy[key], key)
+
+    def test_source_references_accumulate_hashes_per_round(self):
+        screening1, provenance1 = self._round(1, [{"pmid": "1", "title": "Virtual reality nursing", "abstract": "A."}])
+        state1, _ = self._adjudicate(screening1, provenance1, None)
+        screening2, provenance2 = self._round(2, [{"pmid": "2", "title": "Augmented reality teaching", "abstract": "B."}])
+        state2, _ = self._adjudicate(screening2, provenance2, state1)
+
+        self.assertEqual([item["round"] for item in state2["source_references"]], [1, 2])
+        self.assertEqual(state2["source_references"][0], state1["source_references"][0])
+        self.assertEqual(state2["source_references"][1]["screening_sha256"], no_seed.artifact_digest(screening2))
+        self.assertNotEqual(
+            state2["source_references"][0]["screening_sha256"],
+            state2["source_references"][1]["screening_sha256"],
+        )
+
+    def test_review_summary_is_compact_and_reports_round_deltas(self):
+        screening1, provenance1 = self._round(1, [{"pmid": "1", "title": "Virtual reality nursing", "abstract": "A."}])
+        state1, _ = self._adjudicate(screening1, provenance1, None)
+        screening2, provenance2 = self._round(2, [{"pmid": "2", "title": "Augmented reality teaching", "abstract": "B."}])
+        state2, _ = self._adjudicate(screening2, provenance2, state1)
+
+        summary = state2["review_summary"]
+        self.assertEqual(summary["round"], 2)
+        self.assertEqual(summary["screened_total"], 2)
+        self.assertEqual(summary["included_total"], 2)
+        self.assertEqual(summary["new_included_this_round"], 1)
+        self.assertFalse(summary["round_saturated"])
+        # A review summary that is itself large defeats the purpose.
+        self.assertLess(len(json.dumps(summary)), 1200)
+
+    def test_vocabulary_accumulation_is_monotonic_across_rounds(self):
+        screening1, provenance1 = self._round(
+            1, [{"pmid": "1", "title": "Virtual reality nursing simulation", "abstract": "Immersive."}]
+        )
+        state1, _ = self._adjudicate(screening1, provenance1, None)
+        # The same record re-screened as excluded must not retract terminology already contributed.
+        screening2, provenance2 = self._round(
+            2,
+            [{"pmid": "1", "title": "Virtual reality nursing simulation", "abstract": "Immersive.", "decision": "exclude"}],
+        )
+        state2, _ = self._adjudicate(screening2, provenance2, state1)
+        self.assertTrue(set(state1["vocabulary_terms"]).issubset(set(state2["vocabulary_terms"])))
+        self.assertEqual(state2["new_vocabulary_terms"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
