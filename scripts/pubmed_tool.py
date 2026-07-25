@@ -25,6 +25,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from mesh_evidence import build_mesh_evidence, is_mesh_artifact
+from pubmed_search_builder.infrastructure.cache import ResponseCache, is_enabled_value
 from pubmed_search_builder.infrastructure.services import ncbi_eutils_policy
 from pubmed_search_builder.infrastructure.transport import StdlibTransport, TransportError, decode_json
 
@@ -840,8 +841,30 @@ def attach_hook(data: dict[str, object], hook: dict[str, object]) -> dict[str, o
     return data
 
 
+def env_positive_float(name: str, default: float) -> float:
+    try:
+        value = float(read_env(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def build_response_cache(*, enabled: bool = True, directory: str | None = None) -> ResponseCache:
+    """Resolve the workspace-scoped E-utilities cache from the environment."""
+    return ResponseCache.for_workspace(
+        enabled=enabled and is_enabled_value(read_env("NCBI_CACHE", "on")),
+        directory=directory or (read_env("NCBI_CACHE_DIR", "").strip() or None),
+        record_ttl_seconds=env_positive_float("NCBI_RECORD_CACHE_TTL_DAYS", 30.0) * 86400.0,
+        query_ttl_seconds=env_positive_float("NCBI_CACHE_TTL_HOURS", 24.0) * 3600.0,
+    )
+
+
 class NcbiClient:
-    def __init__(self, transport: StdlibTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: StdlibTransport | None = None,
+        cache: ResponseCache | None = None,
+    ) -> None:
         self.email = read_env("NCBI_EMAIL", DEFAULT_EMAIL)
         self.tool = read_env("NCBI_TOOL", DEFAULT_TOOL)
         self.api_key = read_env("NCBI_API_KEY", "")
@@ -850,6 +873,7 @@ class NcbiClient:
         self._last_request = 0.0
         self.retries_performed = 0  # transient NCBI retries this run, surfaced in metadata()
         self._transport = transport or StdlibTransport()
+        self.cache = cache if cache is not None else build_response_cache()
 
     def common_params(self) -> dict[str, str]:
         params = {
@@ -865,6 +889,10 @@ class NcbiClient:
         url = f"{BASE_URL}/{endpoint}"
         merged = self.common_params()
         merged.update(params)
+
+        cached = self.cache.get(endpoint, merged)
+        if cached is not None:
+            return cached
 
         user_agent = f"{self.tool}/1.0"
         if self.email:
@@ -882,6 +910,7 @@ class NcbiClient:
             raise PubMedError(str(exc)) from exc
         self.retries_performed += response.retries
         self._last_request = time.monotonic()
+        self.cache.put(endpoint, merged, response.body)
         return response.body
 
     def metadata(self) -> dict[str, object]:
@@ -891,6 +920,9 @@ class NcbiClient:
             "api_key_used": bool(self.api_key),
             "rate_limit_per_second": self.rate_limit_per_second,
             "retries_performed": self.retries_performed,
+            # Saved artifacts disclose whether any of their evidence was served from cache
+            # rather than retrieved live, so a reviewer can tell the difference.
+            "response_cache": self.cache.stats(),
         }
 
 
@@ -4164,6 +4196,17 @@ def run_selftest() -> dict[str, object]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PubMed E-utilities helper.")
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the workspace response cache and take every request live. Use for the "
+        "delivered final count and any check whose freshness matters.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        help="Response cache directory (default: .ncbi_cache in the run workspace). The cache is "
+        "per workspace so one case never serves another's responses.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     search_parser = subparsers.add_parser("search", help="Run PubMed ESearch.")
@@ -4438,16 +4481,32 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         add_compact_output_arguments(compact_parser)
 
+    cache_parser = subparsers.add_parser(
+        "cache",
+        help="Inspect or clear this workspace's NCBI response cache (no network).",
+    )
+    cache_parser.add_argument("--clear", action="store_true", help="Delete every cached response for this workspace.")
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    client = NcbiClient()
+    cache = build_response_cache(enabled=not args.no_cache, directory=args.cache_dir)
+    if args.no_cache:
+        cache.disabled_reason = "disabled by --no-cache"
+    client = NcbiClient(cache=cache)
     preflight: dict[str, object] | None = None
 
     try:
+        if args.command == "cache":
+            payload: dict[str, object] = {"operation": "ncbi-cache", "ok": True}
+            if args.clear:
+                payload.update(cache.clear())
+            payload.update(cache.describe())
+            write_json(payload)
+            return 0
         if args.command == "search":
             query = resolve_query(args, parser)
             preflight = pre_command_hook(client, args, query=query)

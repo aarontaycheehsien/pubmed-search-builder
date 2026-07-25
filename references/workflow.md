@@ -175,11 +175,11 @@ After the critic passes:
 
 1. Save the final recall-first topic-only strategy and any adopted filter/focused variant. For fragile topics, preserve both main and focused files; the focused strand cannot replace the main.
 2. Deduplicate exact repeated terms without removing distinct variants.
-3. Run `pubmed_tool.py search --query-file ... --retmax 0` and inspect PubMed translation warnings.
+3. Run `pubmed_tool.py --no-cache search --query-file ... --retmax 0` and inspect PubMed translation warnings. Final QA reports freshly retrieved numbers, so bypass the workspace response cache here.
 4. Fix unbalanced syntax and invalid field tags. Check spelling/hyphenation before removing zero-hit terms; remove and document genuine zero-hit terms by default, with free-text future-proofing kept only by explicit decision.
 5. Run `hooks_tool.py final-qa` and any applicable filter check.
 6. If the final topic-only count is below 500, run the low-count plausibility review. Diagnose; do not expand merely to cross the threshold.
-7. Rerun the final selected strategy after cleanup so the delivered count matches the query.
+7. Rerun the final selected strategy after cleanup with `--no-cache` so the delivered count matches the query and was retrieved live.
 
 Final QA cannot substitute for the critic: syntax hygiene does not review question translation, candidate-set integrity, MeSH breadth, or structural over-narrowing.
 

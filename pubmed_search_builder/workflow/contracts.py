@@ -169,6 +169,9 @@ def artifact_type_for_operation(operation: str) -> str:
         "critic-bundle-build",
         "critic-independent-run",
         "selftest",
+        # Local cache maintenance. It reports on stored responses and makes no retrieval
+        # claim, so it is a diagnostic receipt rather than search evidence.
+        "ncbi-cache",
     } or normalized.startswith("hooks-"):
         return "qa/evidence"
     if normalized.startswith("mesh-") or normalized in {"lookup", "details", "terms", "tree", "sweep", "sparql"}:

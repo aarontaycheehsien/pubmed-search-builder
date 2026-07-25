@@ -92,6 +92,17 @@ fault rather than a measurement: it is flagged in `sanity`, `run_eval.py` refuse
 write it to `--output`, and both runners exit `4`. Confirm `strategy_query` is the
 strategy you meant to score, then pass `--allow-zero-recall` if the zero is real.
 
+### Response caching
+
+Scoring re-resolves the same gold set and re-counts the same strategy every run, so results
+are cached per topic under `evals/.cache/ncbi/<topic-id>/`. One topic's responses never answer
+for another's, matching how a build's cache is scoped to its own run workspace. Re-scoring an
+unchanged fixture is roughly 4-5x faster and costs no NCBI calls.
+
+Record content is cached for 30 days and counts for 24 hours. Pass `--no-cache` to take every
+request live — do that whenever a number is being reported as freshly retrieved rather than
+compared.
+
 ### Caveat: one run is a smoke test
 
 Scoring a fixed strategy is deterministic, so score-only mode is stable. But a
@@ -236,7 +247,6 @@ launch it in the background.
 - `run_suite.py`: `--runs N` variance (mean ± sd recall/NNR), multi-fixture
   aggregate scorecard, `Δ vs last run` regression diff, and a `--topic`
   selector to run one or all fixtures.
-- An NCBI response cache to keep repeated generations affordable.
 - Retry logic around the driver (transient `windows sandbox: ... runner
   pipe-in` timeouts have been observed at the tail of a build).
 

@@ -217,6 +217,34 @@ The `(... NOT ...)` queries are temporary diagnostics; do not copy them into the
 
 These `NOT` queries are temporary diagnostics. Do not copy them into the final strategy unless the protocol independently requires an exclusion and final QA documents the recall risk.
 
+### Response cache
+
+E-utilities responses are cached in `.ncbi_cache/` inside the run workspace, so the repeated
+probing a build does — block counts, ablations, variant comparisons, re-fetching a frozen
+holdout — costs one NCBI call rather than one per invocation. The cache is per workspace by
+construction: one review never serves another's responses, because a count answered from an
+unrelated build's session would break the retrieval-date claim in the audit. Caching directly
+in the skill installation is refused for the same reason; start builds with
+`manifest_tool.py init --workspace runs/<topic-slug>`.
+
+Freshness follows the endpoint. `efetch`/`esummary` record content is cached for 30 days;
+`esearch`/`elink` counts and links for 24 hours, since they drift as PubMed grows.
+
+`request_info.response_cache` in every saved artifact reports whether that artifact's evidence
+was served from cache, and how much. Run the delivered final count and any other freshness-
+critical check with `--no-cache`:
+
+```bash
+python scripts/pubmed_tool.py --no-cache search --query-file final_strategy.txt --retmax 0
+
+# Inspect or clear the workspace cache; neither touches the network.
+python scripts/pubmed_tool.py cache
+python scripts/pubmed_tool.py cache --clear
+```
+
+The API key is never part of the cache key and is never written into a cache entry, so
+rotating a key does not discard the cache and no credential lands in the run workspace.
+
 ### Windows and PowerShell input
 
 On Windows, pass the file *path*, not the file contents: use `--query-file query.txt` (or `--query-stdin`), and do not read a query into a variable to splice onto the command line. PowerShell re-parses inline arguments, so long Boolean strategies lose brackets, parentheses, and wildcards (`[tiab]`, `(...)`, `*`), and Windows PowerShell 5.1 can corrupt non-ASCII characters the same way.

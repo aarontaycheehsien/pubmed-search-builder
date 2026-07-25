@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -61,9 +62,20 @@ def resolve_fixture(arg: str) -> Path:
     raise SystemExit(f"fixture/topic not found: {arg}\navailable topics: {', '.join(available) or '(none)'}")
 
 
-def _run_tool(tool: Path, args: list[str]) -> dict:
+def topic_cache_dir(topic_id: str) -> Path:
+    """Per-topic NCBI cache for score-only runs.
+
+    Scoring re-resolves the same gold set and re-counts the same strategy on every run, so a
+    cache makes repeat scoring nearly free. It is keyed per topic rather than shared, for the
+    same reason builds are: one topic's responses must never answer for another's.
+    """
+    return HERE / ".cache" / "ncbi" / re.sub(r"[^A-Za-z0-9_.-]+", "_", topic_id or "unknown")
+
+
+def _run_tool(tool: Path, args: list[str], cache_dir: Path | None = None) -> dict:
     """Run a pubmed_tool.py subcommand and return parsed JSON stdout."""
-    cmd = [sys.executable, str(tool), *args]
+    cache_args = ["--cache-dir", str(cache_dir)] if cache_dir else ["--no-cache"]
+    cmd = [sys.executable, str(tool), *cache_args, *args]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
     if proc.returncode != 0:
         raise SystemExit(
@@ -83,20 +95,20 @@ def _write_temp(text: str) -> str:
     return fh.name
 
 
-def resolve_in_pubmed(tool: Path, gold: list[str]) -> set[str]:
+def resolve_in_pubmed(tool: Path, gold: list[str], cache_dir: Path | None = None) -> set[str]:
     """Return the subset of gold PMIDs that actually exist in PubMed."""
     found: set[str] = set()
     for i in range(0, len(gold), UID_CHUNK):
         chunk = gold[i : i + UID_CHUNK]
         query = " OR ".join(f"{pmid}[uid]" for pmid in chunk)
         path = _write_temp(query)
-        data = _run_tool(tool, ["search", "--query-file", path, "--retmax", str(len(chunk))])
+        data = _run_tool(tool, ["search", "--query-file", path, "--retmax", str(len(chunk))], cache_dir)
         found.update(str(p) for p in (data.get("pmids") or []))
     return found
 
 
-def strategy_total_count(tool: Path, strategy_file: Path) -> int:
-    data = _run_tool(tool, ["search", "--query-file", str(strategy_file), "--retmax", "0"])
+def strategy_total_count(tool: Path, strategy_file: Path, cache_dir: Path | None = None) -> int:
+    data = _run_tool(tool, ["search", "--query-file", str(strategy_file), "--retmax", "0"], cache_dir)
     return int(data.get("count") or 0)
 
 
@@ -119,7 +131,7 @@ def sanity_review(card: dict) -> dict:
     return {"zero_recall": zero_recall, "warnings": warnings_out}
 
 
-def run_recall(tool: Path, strategy_file: Path, gold: list[str], blocks_file: Path | None) -> dict:
+def run_recall(tool: Path, strategy_file: Path, gold: list[str], blocks_file: Path | None, cache_dir: Path | None = None) -> dict:
     out = _write_temp("")  # reuse temp path machinery for the --output file
     args = [
         "recall",
@@ -129,7 +141,7 @@ def run_recall(tool: Path, strategy_file: Path, gold: list[str], blocks_file: Pa
     ]
     if blocks_file is not None:
         args += ["--blocks-file", str(blocks_file)]
-    _run_tool(tool, args)
+    _run_tool(tool, args, cache_dir)
     return json.loads(Path(out).read_text(encoding="utf-8"))
 
 
@@ -141,6 +153,7 @@ def score(
     blocks_override: str | Path | None = None,
     seen_pmids: set[str] | None = None,
     mined_pmids: set[str] | None = None,
+    use_cache: bool = True,
 ) -> dict:
     """Score a strategy against the fixture's gold set.
 
@@ -179,10 +192,11 @@ def score(
     strategy_query = strategy_file.read_text(encoding="utf-8-sig")
     strategy_sha256 = hashlib.sha256(strategy_query.encode("utf-8")).hexdigest()
 
-    in_pubmed = resolve_in_pubmed(tool, gold)
+    cache_dir = topic_cache_dir(str(fixture.get("id") or "")) if use_cache else None
+    in_pubmed = resolve_in_pubmed(tool, gold, cache_dir)
     unreachable = [p for p in gold if p not in in_pubmed]
 
-    recall_data = run_recall(tool, strategy_file, gold, blocks_file)
+    recall_data = run_recall(tool, strategy_file, gold, blocks_file, cache_dir)
     retrieved = [str(p) for p in (recall_data.get("retrieved_pmids") or [])]
     missed_all = [str(p) for p in (recall_data.get("missed_pmids") or [])]
     missed_reachable = [p for p in missed_all if p in in_pubmed]
@@ -191,7 +205,7 @@ def score(
     retrieved_n = len(retrieved)  # retrieved is always a subset of in_pubmed
     recall_reachable = round(retrieved_n / reachable_n * 100, 1) if reachable_n else 0.0
 
-    total_hits = strategy_total_count(tool, strategy_file)
+    total_hits = strategy_total_count(tool, strategy_file, cache_dir)
     nnr_proxy = round(total_hits / retrieved_n) if retrieved_n else None
     seen_set = {str(pmid) for pmid in (seen_pmids or set())}
     mined_set = {str(pmid) for pmid in (mined_pmids or set())}
@@ -336,6 +350,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Persist a scorecard that retrieved no gold PMIDs (normally a harness fault, not a result).",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Take every NCBI request live instead of reusing this topic's cached responses.",
+    )
     args = parser.parse_args(argv)
 
     fixture_path = resolve_fixture(args.fixture)
@@ -348,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         tool,
         strategy_override=args.strategy_file,
         blocks_override=args.blocks_file,
+        use_cache=not args.no_cache,
     )
 
     blocked = card["sanity"]["zero_recall"] and not args.allow_zero_recall

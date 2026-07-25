@@ -122,6 +122,35 @@ python scripts/pubmed_tool.py selftest
 - **Evidence-preserving record output**: `fetch`, `mine`, and `sample` require `--output`, save full JSON, and print only receipt-style stdout
 - **API key protection**: Blocks exposure of API keys in queries or output
 - **Rate limiting**: Automatic handling of 3 req/sec (no key) vs 10 req/sec (with key)
+- **Workspace-scoped response cache**: repeated probes reuse saved responses instead of re-querying NCBI
+
+#### Response cache
+
+A build re-probes the same queries many times — block counts, ablations, variant comparisons,
+re-fetches of a frozen holdout. Those responses are cached in `.ncbi_cache/` **inside the run
+workspace**, so they are reused across commands and sessions for one review and never shared
+with another. A count served to review B from a response review A fetched last week would be a
+provenance leak; scoping the cache to the workspace makes that impossible. (MeSH RDF is cached
+globally by `mesh_tool.py`, correctly — that vocabulary is a shared reference dataset, not a
+review's retrieval evidence.)
+
+Record content (`efetch`/`esummary`) is cached for 30 days; counts and links
+(`esearch`/`elink`) for 24 hours. The API key is never part of the cache key and is never
+written to a cache entry. Every saved artifact discloses cache activity under
+`request_info.response_cache`, so a reviewer can tell cached evidence from freshly retrieved
+evidence.
+
+```bash
+# Inspect or clear this workspace's cache (no network)
+python scripts/pubmed_tool.py cache
+python scripts/pubmed_tool.py cache --clear
+
+# Take a request live — use this for the delivered final count
+python scripts/pubmed_tool.py --no-cache search --query-file final_strategy.txt --retmax 0
+```
+
+Configure with `NCBI_CACHE`, `NCBI_CACHE_DIR`, `NCBI_CACHE_TTL_HOURS`, and
+`NCBI_RECORD_CACHE_TTL_DAYS`; see [`.env.example`](.env.example).
 
 ### MeSH RDF Tools (`scripts/mesh_tool.py`)
 
