@@ -58,6 +58,9 @@ screening_rules_round_*.json
 screening_burden.json
 provenance_round_*.json
 saturation_state_*.json
+vocabulary_config.json
+vocabulary_extract_*.json
+vocabulary_learning_*.json
 orthogonal_pilots*.json
 run_manifest_*.json
 term_rank_*.json
