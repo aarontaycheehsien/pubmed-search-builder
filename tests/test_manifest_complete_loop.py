@@ -848,5 +848,26 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         )
 
 
+class CompleteLoopIssueReportingTests(unittest.TestCase):
+    """The gate merges two readiness helpers whose gate checks overlap."""
+
+    def test_readiness_issues_are_not_reported_twice(self):
+        # build_state_readiness checks the concept gate, and complete_loop_readiness then
+        # loops over every gate name; without deduplication the concept gate is listed twice.
+        issues = manifest_tool.complete_loop_readiness(
+            {"build_state": {}}, Path("nonexistent_manifest.json")
+        )
+        duplicates = sorted({issue for issue in issues if issues.count(issue) > 1})
+        self.assertEqual(duplicates, [], f"complete-loop gate repeats issues: {duplicates}")
+
+    def test_every_gate_is_still_reported_once(self):
+        issues = manifest_tool.complete_loop_readiness(
+            {"build_state": {}}, Path("nonexistent_manifest.json")
+        )
+        for gate in manifest_tool.GATE_NAMES:
+            matching = [issue for issue in issues if issue == f"{gate} gate is not resolved"]
+            self.assertEqual(len(matching), 1, f"{gate} gate should be reported exactly once")
+
+
 if __name__ == "__main__":
     unittest.main()

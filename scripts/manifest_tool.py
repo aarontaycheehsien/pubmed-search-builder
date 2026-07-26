@@ -2377,7 +2377,9 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 if "## MeSH backend and fidelity evidence" not in markdown:
                     issues.append("final audit Markdown lacks reduced-fidelity MeSH evidence section")
 
-    return issues
+    # build_state_readiness and the GATE_NAMES loop above both check the concept gate, so an
+    # unresolved gate would otherwise be reported twice. Collapse repeats, preserving order.
+    return list(dict.fromkeys(issues))
 
 
 def load_block_specs(path_str: str) -> list[dict[str, str]]:
