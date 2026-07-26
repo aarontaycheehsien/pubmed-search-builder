@@ -1,11 +1,7 @@
 {
   "_about": {
-    "purpose": "Machine-checkable inventory of the skill's canonical normative rules after the scope-first conceptual/objective/critic refactor.",
-    "format_note": "JSON keeps the test standard-library-only.",
-    "status_values": {
-      "canonical": "Rule lives in its named owner and required pointers remain present.",
-      "duplicated-pending": "Temporary deduplication target."
-    }
+    "purpose": "Machine-checkable inventory of the skill's canonical normative rules: which document owns each rule, and which documents must link to that owner.",
+    "format_note": "JSON keeps the test standard-library-only."
   },
   "rules": [
     {
@@ -24,8 +20,7 @@
         "SKILL.md",
         "references/concept-analysis-and-gating.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "concept.roles-fragility-admission",
@@ -43,8 +38,7 @@
         "SKILL.md",
         "references/workflow.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "candidate.screen-before-mining",
@@ -67,8 +61,7 @@
         "references/seed-pmid-validation.md",
         "references/tiab-expansion.md"
       ],
-      "guarded_by": "test_screening_decisions_require_verifiable_evidence",
-      "status": "canonical"
+      "guarded_by": "test_screening_decisions_require_verifiable_evidence"
     },
     {
       "id": "candidate.rule-only-cannot-supply-evidence-roles",
@@ -83,8 +76,7 @@
         "SKILL.md",
         "references/workflow.md"
       ],
-      "guarded_by": "test_rule_only_screening_cannot_supply_evidence_roles",
-      "status": "canonical"
+      "guarded_by": "test_rule_only_screening_cannot_supply_evidence_roles"
     },
     {
       "id": "critic.internal-not-human-press",
@@ -102,8 +94,7 @@
         "SKILL.md",
         "references/workflow.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "revision.explicit-no-harm-gate",
@@ -125,8 +116,7 @@
         "references/press-critic.md",
         "references/active-vocabulary-learning.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "goal.tracking-ownership",
@@ -142,8 +132,7 @@
       "pointer_locations": [
         "SKILL.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "tools.record-content-saved-json",
@@ -157,8 +146,7 @@
       "pointer_locations": [
         "SKILL.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "tools.complete-loop-manifest",
@@ -174,8 +162,7 @@
       "pointer_locations": [
         "SKILL.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "wildcard.current-limits-and-proximity-exclusion",
@@ -191,8 +178,7 @@
       "pointer_locations": [
         "references/workflow.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "bramer.reciprocal-gap-analysis",
@@ -210,8 +196,7 @@
         "references/workflow.md",
         "references/mesh-and-pubmed-tools.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "filters.validated-sources-and-ovid-warning",
@@ -229,8 +214,7 @@
         "references/workflow.md",
         "references/prisma-s-reporting.md"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "prisma-s.item-coverage",
@@ -242,8 +226,7 @@
         "item 14. peer review",
         "do not satisfy item 14"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "tiab.objective-term-ranking-and-proximity",
@@ -257,8 +240,7 @@
         "background_count",
         "proximity review pass"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "output.audit-iteration-sections",
@@ -272,8 +254,7 @@
         "## search strategy (numbered line set)",
         "## prisma-s appendix (pubmed)"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     },
     {
       "id": "framework.methods-evaluation-profile",
@@ -296,8 +277,7 @@
         "references/concept-analysis-and-gating.md",
         "references/protocol-dsl.md"
       ],
-      "guarded_by": "test_canonical_slots_and_search_defaults_are_documented",
-      "status": "canonical"
+      "guarded_by": "test_canonical_slots_and_search_defaults_are_documented"
     },
     {
       "id": "examples.framework-walkthroughs",
@@ -308,8 +288,7 @@
         "peco walk-through",
         "pcc walk-through"
       ],
-      "guarded_by": "none",
-      "status": "canonical"
+      "guarded_by": "none"
     }
   ]
 }
