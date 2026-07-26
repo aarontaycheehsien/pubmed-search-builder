@@ -48,7 +48,7 @@ Use these fields:
 
 The ledger may begin as a compact table in the response or working notes, but its decisions must be carried forward into the final audit Markdown file's decision ledger. An optional audit workbook or other handoff artifact can supplement the Markdown audit file, but does not replace it.
 
-If a candidate's role is optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant and it is materially plausible, default `decision_needed` to yes unless the protocol already fixes the decision.
+If a candidate's role is optional secondary `AND` block, outcome block, safety block, filter/limit, or focused variant and it is materially plausible, default `decision_needed` to yes unless the protocol already fixes the decision. `decision_needed` means the candidate cannot be adopted without a user or protocol decision; it does not by itself mean the question blocks the concept gate. See the gate-blocking rule in Phase 1.
 
 Do not use pasted Boolean syntax, line numbers, field tags, filters, or prior strategy structure as a source of concept evidence. If the user supplied Boolean syntax, use only an independently confirmed plain-language topic or protocol question as the source for concept analysis.
 
@@ -136,10 +136,28 @@ Before MeSH lookup or PubMed exploration:
 
 1. Choose the review framework and extract candidate concepts from the plain-language question.
 2. Run the PICO-slot ambiguity check below.
+2a. If the framework choice selected the `methods-evaluation` profile, run its mandatory ambiguity check and canonical slot profile from `methods-evaluation-framework.md` before assigning roles.
 3. Run the scope breadth check below for methodological or automation topics.
 4. Apply the AND-block admission test to each candidate concept.
 5. Mark each candidate as a core required concept, within-block term family, screening-only concept, omitted concept, reserve/focused-variant candidate, or filter/limit decision.
-6. Ask the user at the concept gate by default whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, focused variant, or very-fragile leave-out trade-off is identified unless the protocol already decides it. Also ask when needed to resolve a high-impact framework ambiguity.
+6. Record every materially plausible optional secondary `AND` block, outcome block, safety block, filter/limit, focused variant, and very-fragile leave-out trade-off as an offer, unless the protocol already decides it. None may be adopted without a user or protocol decision. Then apply the gate-blocking rule below to decide which one, if any, is asked now.
+
+### Which offers block the gate
+
+Recording an offer and blocking on it are different acts. Every recorded offer is already protected by the adoption rule — nothing narrowing enters the strategy without a decision — so the gate only needs to stop for decisions that later evidence cannot settle.
+
+Block the gate and ask now when the decision:
+
+- changes which concepts are in scope, or what the review question means;
+- changes the eligibility interpretation;
+- resolves a `high`-impact framework-slot or scope-breadth ambiguity that would move the searchable anchor; or
+- accepts the recall risk of requiring a very fragile concept that the protocol appears to demand.
+
+Defer to Phase 2, offer recorded, when a reversible read-only comparison can measure the trade-off — most filters, limits, focused variants, and optional blocks. Asking before that evidence exists makes the user guess at a question the build is about to answer empirically. This is the `SKILL.md` stop rule: present the evidence before asking the user to adopt a narrowing design.
+
+Whether an already-in-scope concept should be *required* as an `AND` block is a retrieval-structure question, not a scope question. Leave-one-block-out ablation measures it directly, and the admission test's "default if uncertain, do not admit" already protects recall in the meantime, so defer it. Only the question of whether the concept is in scope at all belongs at the gate.
+
+Ask one question at a time, in the precedence order above, and stop. Several qualifying offers do not become several questions; the rest stay recorded and are raised when each becomes the next decision.
 
 This phase may use only the plain-language question, protocol wording, framework reasoning, and a conceptual vocabulary brainstorm needed to distinguish concepts from eligibility properties. It must not inspect seed/candidate records, run MeSH lookup, PubMed exploration, block construction, variants, final QA, or filters.
 
@@ -176,7 +194,7 @@ Before MeSH lookup, record a compact pre-MeSH gate summary containing:
 - optional concept offers: each materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, focused variant, or very-fragile leave-out alternative, or `none identified`
 - methodological filter or limit decisions needed before narrowing the strategy
 - optional secondary `AND` blocks, outcome blocks, safety blocks, filters, limits, or focused variants that require user/protocol authorization before testing
-- the one next user-facing question, if a human decision is required before proceeding
+- the one next user-facing question, if an offer blocks the gate under the precedence rule; otherwise `gate resolved`, listing the offers deferred to Phase 2
 
 If no human decision is needed, state that the gate is resolved and continue to the pre-MeSH vocabulary/domain brainstorm.
 
@@ -190,6 +208,8 @@ Common high-impact ambiguities to check:
 - Could the candidate be either Intervention or Exposure? Example: is hormone replacement therapy an intervention (RCT framing) or an exposure (observational framing)?
 - Could the question be Diagnostic accuracy or Screening effectiveness? These call for different frameworks (PIRD vs PICO) and different validated filters.
 - Could what was classified as Population actually be a Condition that should anchor the search? Example: "adults with depression" - the search anchor is usually depression, with adults handled at screening unless the demographic is itself central to scope.
+
+For method, tool, or technology performance-evaluation questions, `methods-evaluation-framework.md` adds three mandatory high-impact checks: whether the method is performing the task or being evaluated at it; which workflow stage is in scope; and whether evidence synthesis is the application context or the eligible report type. Run them instead of forcing the question through the PICO slots above.
 
 If any ambiguity is graded `high` and would change which concept enters the gate as an essential `AND` block, pause and ask the user before proceeding to MeSH lookup or block drafting. Do not silently commit to one interpretation. See `anti-patterns.md` Mistake 7 for the underlying failure mode.
 
@@ -209,6 +229,8 @@ For LLM/AI evidence-synthesis topics, explicitly consider whether each of these 
 
 If the scope is ambiguous and would change an essential `AND` block, pause and ask the user unless the user has already chosen recall-first with no seeds. In that no-seed recall-first case, continue with the broader workflow as the main strategy and document any narrower formulation/search-strategy-only query as a focused or reserve variant.
 
+Under the `methods-evaluation` profile this check governs the `task_function` slot, and the workflow areas above are the candidate stages. The application context, comparator, and performance outcome are handled by the slot defaults in `methods-evaluation-framework.md`, not by this check.
+
 ## Concept roles
 
 Use these roles consistently:
@@ -221,7 +243,7 @@ Use these roles consistently:
 
 Sensitivity-dangerous concepts include outcomes, comparators, mechanisms, mediators, moderators, barriers, facilitators, narrow settings, service-use qualifiers, disease severity, subgroup-only population limits, and ad hoc study-design terms. Outcomes and comparators in particular have empirically lower retrieval potential in PubMed and Embase ([Frandsen et al. 2020](https://doi.org/10.1016/j.jclinepi.2020.07.005)); two-block PICO searches retrieved more relevant systematic reviews than four-block searches ([Ho et al. 2016](https://doi.org/10.1371/journal.pone.0167170)).
 
-Do not ask about ordinary term expansion that stays inside an existing `OR` block. Ask by default at the concept gate whenever a materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, or focused variant is identified, unless the protocol already decides it. During later testing, ask again only if new evidence materially changes the trade-off context.
+Do not ask about ordinary term expansion that stays inside an existing `OR` block. Record every materially plausible optional secondary `AND` block, outcome block, safety block, filter, limit, or focused variant as an offer unless the protocol already decides it, then apply the gate-blocking rule: ask at the gate when the decision changes an essential block or the eligibility interpretation, and otherwise in Phase 2 with the comparison evidence attached. During later testing, ask again only if new evidence materially changes the trade-off context.
 
 After drafting two or more proposed `AND` blocks, operationalize this admission test with `references/concept-ablation-and-strands.md`. Leave-one-block-out counts, known-item effects, and differential samples challenge over-structured designs but never redefine the locked question. For fragile topics, default to separate recall-first and focused strands.
 

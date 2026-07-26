@@ -31,6 +31,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue((output / "references" / "no-harm-revisions.md").is_file())
             self.assertTrue((output / "references" / "external-trial-registry-validation.md").is_file())
             self.assertTrue((output / "references" / "evidence-synthesis-retrieval.md").is_file())
+            self.assertTrue((output / "references" / "methods-evaluation-framework.md").is_file())
             self.assertTrue((output / "scripts" / "registry_sentinel.py").is_file())
             self.assertTrue((output / "scripts" / "review_discovery.py").is_file())
             self.assertTrue((output / "pubmed_search_builder" / "workflow" / "events.py").is_file())

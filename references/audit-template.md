@@ -20,6 +20,19 @@
 - **Omitted or reserve concepts:** [list with sensitivity rationale]
 - **Methodological filters or limits:** [none, or name/source/version/interface/adaptation]
 
+## Methods-evaluation framework decisions (conditional)
+
+Include this section when the locked protocol sets `review.framework.profile_id` to `methods-evaluation`.
+
+- **Slot-to-concept mapping:** [technology/method, task/function, application context, comparator, performance outcome -> essential block / within-block family / screening-only / focused variant / omitted]
+- **Ambiguity check resolutions:** [method performing vs. being evaluated; which workflow stage is in scope; evidence synthesis as application context vs. eligible report type]
+- **Comparator and performance-outcome handling:** [screening-only by default, or the recorded justification for requiring either as an `AND` block]
+- **Task-language breadth:** [narrow action vs. broader workflow decision, and where the narrow wording lives]
+- **Application context vs. publication type:** [how the context was searched, and confirmation that it was not turned into a report filter]
+- **Study-design or evaluation terminology:** [not used as a filter, or the validated source that justifies it]
+- **Evidence target:** [mode and why a methods-evaluation context did not switch it to evidence syntheses]
+- **Focused variant status:** [variant IDs and confirmation that none replaces the recall-first main strategy]
+
 ## Retrieval-scope versions
 
 - **Current version:** [positive integer]

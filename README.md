@@ -413,6 +413,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
 - **[references/protocol-dsl.md](references/protocol-dsl.md)**: Versioned review-protocol schema, validation, compilation, verification, and migration
 - **[references/workflow.md](references/workflow.md)**: Detailed step-by-step workflow
 - **[references/framework-selection.md](references/framework-selection.md)**: Question-type-to-framework selection (PICO, PECO, PIRD, PCC, SPIDER, etc.)
+- **[references/methods-evaluation-framework.md](references/methods-evaluation-framework.md)**: Method/tool performance-evaluation profile — canonical slots, mandatory ambiguity check, and the evidence-target rule
 - **[references/concept-analysis-and-gating.md](references/concept-analysis-and-gating.md)**: Concept-analysis ledger, AND-block admission test, and the concept gate
 - **[references/candidate-screening.md](references/candidate-screening.md)**: Criterion-level evidence-backed screening, decision provenance, discovery/holdout roles, and evidence-set integrity
 - **[references/press-critic.md](references/press-critic.md)**: PRESS-informed internal critic schema, routing, and pass criteria

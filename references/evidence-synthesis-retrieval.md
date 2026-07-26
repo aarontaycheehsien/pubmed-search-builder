@@ -6,6 +6,8 @@ Use this route only when the locked protocol explicitly sets `evidence_target.mo
 
 State which completed report types are eligible: systematic review, meta-analysis, network meta-analysis, scoping review, umbrella review, rapid review, living systematic review, qualitative evidence synthesis, or evidence map. State how protocols, narrative reviews, and methods papers are handled. A primary-study protocol must not silently acquire a review-report filter.
 
+An evidence-synthesis *application context* is not an evidence-synthesis *target*. A review of how a tool performs at a review task — screening, searching, data extraction — retrieves primary methodological evaluations and stays in `primary-studies` mode; see `methods-evaluation-framework.md`. Activate this route from `evidence_target.mode` alone, never because systematic reviews appear in the question.
+
 Publication types and text labels are retrieval signals, not eligibility evidence. In particular, methods-topic headings such as `Meta-Analysis as Topic` are for papers about methods and are deliberately excluded from the completed-review profile. Screen every retrieved candidate against the locked protocol.
 
 ## Build a transparent profile

@@ -38,6 +38,45 @@ FRAGILITY = {"stable", "fragile", "very_fragile"}
 DECISION_TYPES = {"filter", "limit"}
 DECISION_STATUSES = {"selected", "rejected"}
 
+METHODS_EVALUATION_PROFILE = "methods-evaluation"
+SCREENING_ONLY_DEFAULT = "screening-only"
+# Canonical slot IDs and their default search handling, keyed by framework profile.
+FRAMEWORK_PROFILE_SLOTS: dict[str, tuple[tuple[str, str], ...]] = {
+    METHODS_EVALUATION_PROFILE: (
+        ("technology_method", "usually-essential"),
+        ("task_function", "essential-if-scope-defining"),
+        ("application_context", "essential-only-when-definitional"),
+        ("comparator", SCREENING_ONLY_DEFAULT),
+        ("performance_outcome", SCREENING_ONLY_DEFAULT),
+    ),
+}
+FRAMEWORK_PROFILE_AUDIT_TITLES = {
+    METHODS_EVALUATION_PROFILE: "Methods-evaluation framework decisions",
+}
+METHODS_EVALUATION_DOMAIN = "methods-evaluation-role-safety"
+METHODS_EVALUATION_CHECKS: tuple[dict[str, str], ...] = (
+    {
+        "id": "comparator-outcome-not-required",
+        "question": "Were comparator or performance-outcome concepts turned into required AND blocks without a recorded justification?",
+    },
+    {
+        "id": "task-language-breadth",
+        "question": "Was the task narrowed to one brittle expression when a broader workflow concept was plausibly in scope?",
+    },
+    {
+        "id": "context-vs-publication-type",
+        "question": "Was the application context confused with a publication type or report filter?",
+    },
+    {
+        "id": "evaluation-terminology-filter",
+        "question": "Was study-design or evaluation terminology used as an unvalidated filter?",
+    },
+    {
+        "id": "focused-variant-cannot-replace-main",
+        "question": "Does a focused task-specific variant attempt to replace the recall-first main strategy?",
+    },
+)
+
 ROOT_KEYS = {
     "dsl_version", "protocol_id", "scope_version", "version_change", "review",
     "eligibility", "searchable_scope", "screening_only", "filters_and_limits",
@@ -169,6 +208,20 @@ def _named_records(
     return records, ids
 
 
+def framework_profile_id(protocol: Any) -> str | None:
+    """Return the declared framework profile ID without assuming the protocol is valid."""
+    if not isinstance(protocol, dict):
+        return None
+    review = protocol.get("review")
+    if not isinstance(review, dict):
+        return None
+    framework = review.get("framework")
+    if not isinstance(framework, dict):
+        return None
+    value = framework.get("profile_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
     """Return deterministic structural and semantic validation issues."""
     if mode not in {"draft", "lock"}:
@@ -234,7 +287,12 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
     elif isinstance(external, dict) and external.get("status") == "enabled":
         issues.append("$.external_validation cannot be enabled in pubmed-only mode")
 
+    profile_id = framework_profile_id(data)
     target = data.get("evidence_target")
+    if target is None and lock and profile_id in FRAMEWORK_PROFILE_SLOTS:
+        issues.append(
+            f"$.evidence_target is required when $.review.framework.profile_id is {profile_id!r}"
+        )
     if target is not None:
         target = _object(
             target,
@@ -263,9 +321,14 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
 
     review = _object(data.get("review"), "$.review", {"question", "framework"}, {"question", "framework"}, issues)
     _text(review.get("question"), "$.review.question", issues, lock=lock)
-    framework = _object(review.get("framework"), "$.review.framework", {"name", "rationale", "slots"},
+    framework = _object(review.get("framework"), "$.review.framework", {"name", "profile_id", "rationale", "slots"},
                         {"name", "rationale", "slots"}, issues)
     _text(framework.get("name"), "$.review.framework.name", issues, lock=lock)
+    if "profile_id" in framework:
+        declared = _text(framework.get("profile_id"), "$.review.framework.profile_id", issues, lock=lock)
+        if declared and declared not in FRAMEWORK_PROFILE_SLOTS:
+            supported = ", ".join(sorted(FRAMEWORK_PROFILE_SLOTS))
+            issues.append(f"$.review.framework.profile_id must be one of: {supported}")
     _text(framework.get("rationale"), "$.review.framework.rationale", issues, lock=lock)
     slots, slot_ids = _named_records(framework.get("slots"), "$.review.framework.slots",
                                      {"id", "label", "description"}, {"id", "label", "description"}, issues, lock=lock)
@@ -274,6 +337,13 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
         _text(slot.get("description"), f"$.review.framework.slots[{index}].description", issues, lock=lock)
     if lock and not slots:
         issues.append("$.review.framework.slots must contain at least one slot in lock mode")
+    if lock and profile_id in FRAMEWORK_PROFILE_SLOTS:
+        declared_slots = set(slot_ids)
+        for canonical, _default in FRAMEWORK_PROFILE_SLOTS[profile_id]:
+            if canonical not in declared_slots:
+                issues.append(
+                    f"$.review.framework.slots must define canonical {profile_id} slot {canonical!r}"
+                )
 
     eligibility = _object(data.get("eligibility"), "$.eligibility", {"inclusion", "exclusion"},
                           {"inclusion", "exclusion"}, issues)
@@ -502,6 +572,39 @@ def _envelope(protocol: dict[str, Any], source: Path, artifact_type: str) -> dic
     }
 
 
+def framework_profile_packet(protocol: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the role-safety packet for a declared framework profile, or None."""
+    profile = framework_profile_id(protocol)
+    if profile not in FRAMEWORK_PROFILE_SLOTS:
+        return None
+    concepts = protocol["searchable_scope"]["concepts"]
+    slots: list[dict[str, Any]] = []
+    required_on_screening_default: list[str] = []
+    for slot_id, default in FRAMEWORK_PROFILE_SLOTS[profile]:
+        assigned = [
+            {"concept_id": concept["id"], "role": concept["role"]}
+            for concept in concepts
+            if slot_id in concept.get("framework_slots", [])
+        ]
+        slots.append({
+            "slot_id": slot_id,
+            "default_search_handling": default,
+            "assigned_concepts": assigned,
+        })
+        if default == SCREENING_ONLY_DEFAULT and any(item["role"] == "essential" for item in assigned):
+            required_on_screening_default.append(slot_id)
+    return {
+        "profile_id": profile,
+        "slots": slots,
+        "screening_only_by_default": [
+            slot_id for slot_id, default in FRAMEWORK_PROFILE_SLOTS[profile] if default == SCREENING_ONLY_DEFAULT
+        ],
+        "required_blocks_on_screening_default_slots": required_on_screening_default,
+        "focused_variants_cannot_replace_main_strategy": True,
+        "checks": [dict(check) for check in METHODS_EVALUATION_CHECKS],
+    }
+
+
 def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[str, Any]]:
     """Build all deterministic derivative artifacts, keyed by output filename."""
     version = protocol["scope_version"]
@@ -509,6 +612,7 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
     seeds = protocol["seeds"]["records"]
     decisions = protocol["filters_and_limits"]["decisions"]
     evidence_target = protocol.get("evidence_target")
+    profile_packet = framework_profile_packet(protocol)
 
     concept_ledger = {
         **_envelope(protocol, source, "concept-ledger"),
@@ -558,7 +662,9 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
             "screening-only-properties", "filters-and-limits", "date-boundaries",
             "seed-roles", "recall-and-workload", "focused-variants", "information-source-mode",
             *(["evidence-target"] if isinstance(evidence_target, dict) else []),
+            *([METHODS_EVALUATION_DOMAIN] if profile_packet else []),
         ],
+        **({"framework_profile": profile_packet} if profile_packet else {}),
         "protocol_summary": {
             "version_change": protocol["version_change"],
             "review": protocol["review"],
@@ -579,6 +685,13 @@ def build_artifacts(protocol: dict[str, Any], source: Path) -> dict[str, dict[st
         },
     }
     conditional_sections: list[dict[str, Any]] = []
+    if profile_packet:
+        conditional_sections.append({
+            "id": f"{profile_packet['profile_id']}-framework",
+            "title": FRAMEWORK_PROFILE_AUDIT_TITLES[profile_packet["profile_id"]],
+            "required": True,
+            "source_refs": ["review.framework"],
+        })
     if seeds:
         conditional_sections.append({"id": "seed-accounting", "title": "Seed accounting", "required": True, "source_refs": ["seeds"]})
     if any(value is not None for ranges in (protocol["date_boundaries"]["eligibility"], protocol["date_boundaries"]["search"]) for value in ranges.values()):

@@ -1,6 +1,6 @@
 # Framework Selection
 
-Run this step before slot extraction in `workflow.md §1`. The default LLM behaviour is to force every question into PICO, which often produces searches that miss relevant records when the question is exposure-based, qualitative, diagnostic, or scoping. Choose the framework once, deliberately, before extracting candidate slots.
+Run this step before slot extraction in `workflow.md §2`. The default LLM behaviour is to force every question into PICO, which often produces searches that miss relevant records when the question is exposure-based, qualitative, diagnostic, or scoping. Choose the framework once, deliberately, before extracting candidate slots.
 
 Do not skip this step just because the topic looks like a clinical effectiveness question. The framework choice shapes which slots enter the concept gate and which are sensitivity-dangerous defaults.
 
@@ -16,13 +16,18 @@ Do not skip this step just because the topic looks like a clinical effectiveness
 | Qualitative experience / views | PICo or SPIDER | Population, Interest/phenomenon, Context. SPIDER adds Design, Evaluation, Research type. |
 | Scoping or mapping review | PCC | Population, Concept, Context. Often broader and less restrictive than intervention reviews. |
 | Health services / intervention implementation | PICO, PCC, or SPIDER | Depends on review intent. |
+| Method, tool, or technology performance evaluation | `methods-evaluation` profile | Technology/method, task, application context, comparator, performance outcome. Read `methods-evaluation-framework.md`. |
 | Methodological review | Custom concept framework | Usually method + domain/application. |
+
+Route to the `methods-evaluation` profile when the question has the shape *How well does [method/tool] perform [task] in [application context], compared with [baseline]?* — for example large language models generating Boolean search strategies, AI-assisted title/abstract screening, automated risk-of-bias assessment, or a clinical search filter's retrieval performance. A question about a tool's effect on patients is an intervention question and stays in PICO. `methods-evaluation-framework.md` holds the canonical slot profile, the mandatory ambiguity check, and the evidence-target rule; do not re-derive them here.
+
+The framework tracks the **question type**. The **report type being retrieved** is carried separately by `evidence_target`, not by the framework. So an umbrella review or review-of-reviews has no framework row of its own: pick the framework from the underlying question — exercise for knee osteoarthritis is still intervention effectiveness, hence PICO — and set `evidence_target.mode` to `evidence-syntheses`. Do not invent an "umbrella" framework, and do not drift to PCC because the records happen to be reviews. See `evidence-synthesis-retrieval.md`.
 
 ## Decision rule
 
 1. Identify the question type from the table above. Use the user's plain-language question, not pasted Boolean syntax.
 2. Choose the framework with the closest match.
-3. State the framework choice and reason before extracting candidate slots in `workflow.md` section 1.
+3. State the framework choice and reason before extracting candidate slots in `workflow.md` section 2.
 4. State whether a framework question is needed. If no framework question is needed, explicitly say `No framework question is needed` and give the reason. If a framework question is needed, ask only that question and stop.
 5. If the question is ambiguous between two frameworks, prefer the framework that drops more sensitivity-dangerous concepts (e.g., PECO over PICO when Comparator would be irrelevant; PCC over PICO for scoping questions). When the ambiguity is high-impact (would change which concept enters the gate as essential), pause and ask the user before MeSH lookup, PubMed exploration, or block drafting.
 
@@ -33,6 +38,7 @@ Do not skip this step just because the topic looks like a clinical effectiveness
 - **PIRD / diagnostic PICO**: Reference standard is usually omitted. Diagnostic accuracy terms (sensitivity, specificity) are usually omitted; use a validated diagnostic filter only if required.
 - **PCC**: Context may or may not be searched. Do not over-restrict unless the context is central to scope.
 - **PICo / SPIDER**: Context may or may not be searched. Qualitative study filters can reduce sensitivity if poorly designed.
+- **`methods-evaluation`**: Comparator and performance outcome are screening-only by default; application context is searched only when definitional; narrow task wording is a within-block family or focused variant when a broader workflow is plausibly in scope.
 
 In all cases, fewer required `AND` blocks generally protects recall. Carry the framework choice into the concept-analysis ledger in `concept-analysis-and-gating.md`.
 
@@ -40,7 +46,7 @@ In all cases, fewer required `AND` blocks generally protects recall. Carry the f
 
 Record the chosen framework, the question type, and the reason in the concept-analysis ledger. The ledger entry should include:
 
-- chosen framework
+- chosen framework, and the `profile_id` when a machine-readable profile applies (currently only `methods-evaluation`; leave it unset for every other framework)
 - question type (from the table or `other - custom`)
 - why this framework was chosen over the next-closest alternative
 - which framework slots will be sensitivity-dangerous by default

@@ -276,6 +276,30 @@
       "status": "canonical"
     },
     {
+      "id": "framework.methods-evaluation-profile",
+      "rule": "methods-evaluation-framework.md owns the method/tool performance-evaluation slot profile, its search defaults, and its ambiguity check.",
+      "canonical_owner": "references/methods-evaluation-framework.md",
+      "assertions": [
+        "canonical slot profile",
+        "mandatory ambiguity check",
+        "technology_method",
+        "task_function",
+        "application_context",
+        "comparator",
+        "performance_outcome",
+        "screening-only by default",
+        "the application context never triggers this mode on its own"
+      ],
+      "pointer_locations": [
+        "SKILL.md",
+        "references/framework-selection.md",
+        "references/concept-analysis-and-gating.md",
+        "references/protocol-dsl.md"
+      ],
+      "guarded_by": "test_canonical_slots_and_search_defaults_are_documented",
+      "status": "canonical"
+    },
+    {
       "id": "examples.framework-walkthroughs",
       "rule": "examples.md retains worked PICO, PECO, and PCC examples.",
       "canonical_owner": "references/examples.md",

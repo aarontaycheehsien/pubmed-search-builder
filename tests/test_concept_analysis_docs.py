@@ -71,6 +71,113 @@ class SkillContractTests(unittest.TestCase):
             self.assertIn(reference, skill)
 
 
+class ConceptGateAskingPolicyTests(unittest.TestCase):
+    """Recording an offer and blocking the gate on it are different acts."""
+
+    def test_gate_blocks_only_on_decisions_evidence_cannot_settle(self):
+        gate = read_doc("references/concept-analysis-and-gating.md").lower()
+        self.assertIn("which offers block the gate", gate)
+        self.assertIn("recording an offer and blocking on it are different acts", gate)
+        for blocking in (
+            "changes which concepts are in scope, or what the review question means",
+            "changes the eligibility interpretation",
+            "resolves a `high`-impact framework-slot or scope-breadth ambiguity",
+        ):
+            self.assertIn(blocking, gate)
+        self.assertIn("defer to phase 2, offer recorded", gate)
+        # Requiring an in-scope concept as a block is measurable, so it must not block the gate.
+        self.assertIn("is a retrieval-structure question, not a scope question", gate)
+        self.assertIn("only the question of whether the concept is in scope at all belongs at the gate", gate)
+        self.assertIn("ask one question at a time, in the precedence order above", gate)
+        self.assertIn("several qualifying offers do not become several questions", gate)
+
+    def test_asking_policy_matches_the_top_level_stop_rule(self):
+        skill = read_doc("SKILL.md").lower()
+        gate = read_doc("references/concept-analysis-and-gating.md").lower()
+        self.assertIn("present their evidence before asking the user to adopt a narrowing design", skill)
+        self.assertIn("present the evidence before asking the user to adopt a narrowing design", gate)
+        # decision_needed must not be read as "this blocks the gate".
+        self.assertIn("does not by itself mean the question blocks the concept gate", gate)
+
+
+class MethodsEvaluationFrameworkTests(unittest.TestCase):
+    def test_profile_is_routed_from_skill_selection_and_concept_gate(self):
+        skill = read_doc("SKILL.md").lower()
+        self.assertIn("methods-evaluation-framework.md", skill)
+        self.assertIn("profile_id", skill)
+        selection = read_doc("references/framework-selection.md").lower()
+        self.assertIn("methods-evaluation-framework.md", selection)
+        self.assertIn("how well does [method/tool] perform [task]", selection)
+        gate = read_doc("references/concept-analysis-and-gating.md").lower()
+        self.assertIn("methods-evaluation-framework.md", gate)
+
+    def test_framework_tracks_question_type_and_evidence_target_carries_report_type(self):
+        selection = read_doc("references/framework-selection.md").lower()
+        self.assertIn("the framework tracks the **question type**", selection)
+        self.assertIn("carried separately by `evidence_target`", selection)
+        self.assertIn("do not invent an \"umbrella\" framework", selection)
+        self.assertIn("currently only `methods-evaluation`", selection)
+
+    def test_canonical_slots_and_search_defaults_are_documented(self):
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        for slot in (
+            "technology_method",
+            "task_function",
+            "application_context",
+            "comparator",
+            "performance_outcome",
+        ):
+            self.assertIn(slot, doc)
+        self.assertIn("screening-only by default", doc)
+        self.assertIn("essential only when definitional", doc)
+        self.assertIn("all five slots must be named in the protocol", doc)
+        # A slot is an analytic role, not a required block: it may carry several elements.
+        self.assertIn("a slot may carry more than one element", doc)
+        self.assertIn("is an eligibility property, not searchable context", doc)
+        self.assertIn("when the method and the task are the same artifact", doc)
+        self.assertIn("the five slots are analytic roles, not a required block count", doc)
+
+    def test_definitional_context_and_fragility_scope_have_concrete_tests(self):
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        self.assertIn("would a record about the same method performing the same task in a different domain be out of scope", doc)
+        self.assertIn("within-block tethering family", doc)
+        # The rubric's hard red flags must not evict the paper's own subject from the search.
+        self.assertIn("applies to the paper's subject, not its study properties", doc)
+        self.assertIn("what the paper is *about*", doc)
+        self.assertIn("a stage named in the plain-language question is not by itself the protocol narrowing the review", doc)
+
+    def test_mandatory_ambiguity_check_separates_role_stage_and_evidence_type(self):
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        self.assertIn("mandatory ambiguity check", doc)
+        self.assertIn("performing the task, or being evaluated at it", doc)
+        self.assertIn("which workflow stage is in scope", doc)
+        self.assertIn("application context or the eligible report type", doc)
+        self.assertIn("pause and ask the user before mesh lookup", doc)
+
+    def test_application_context_never_switches_the_evidence_target(self):
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        self.assertIn("includes primary methodological evaluations", doc)
+        self.assertIn("the application context never triggers this mode on its own", doc)
+        self.assertIn("evidence-synthesis-retrieval.md", doc)
+
+    def test_narrow_task_language_stays_a_variant_not_the_main_block(self):
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        self.assertIn("within-block term family or a focused variant", doc)
+        self.assertIn("do not let a single brittle expression carry the block", doc)
+        self.assertIn("two-block recall-first main strategy", doc)
+
+    def test_profile_id_and_compiled_qa_are_documented_in_the_dsl(self):
+        dsl = read_doc("references/protocol-dsl.md").lower()
+        self.assertIn("profile_id", dsl)
+        self.assertIn("methods-evaluation", dsl)
+        self.assertIn("no dsl version bump", dsl)
+        self.assertIn("methods-evaluation-role-safety", dsl)
+        doc = read_doc("references/methods-evaluation-framework.md").lower()
+        self.assertIn("methods-evaluation-role-safety", doc)
+        audit = read_doc("references/audit-template.md").lower()
+        self.assertIn("## methods-evaluation framework decisions (conditional)", audit)
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_every_revision_has_an_executable_no_harm_gate(self):
         workflow = read_doc("references/workflow.md").lower()

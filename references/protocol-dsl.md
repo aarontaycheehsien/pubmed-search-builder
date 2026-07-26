@@ -8,7 +8,7 @@ A version `1` protocol contains:
 
 - `dsl_version`, `protocol_id`, and `scope_version`;
 - `version_change`, identifying the prior scope version, reason, and decision source;
-- `review`, containing the plain-language question and framework slots;
+- `review`, containing the plain-language question, framework slots, and an optional framework `profile_id`;
 - `eligibility`, containing explicit inclusion and exclusion criteria;
 - `searchable_scope.concepts`, with stable IDs, concept roles, eligibility/framework links, definitions, rationale, provisional fragility, and optional term families;
 - `screening_only.properties`, for eligibility properties that are unsafe as required search blocks;
@@ -19,6 +19,17 @@ A version `1` protocol contains:
 - `focused_variants`, which may prioritize screening but cannot replace the recall-first main strategy.
 
 See `schemas/review-protocol.schema.json` for the binding field and value constraints.
+
+## Framework profiles
+
+`review.framework` accepts an optional `profile_id` that makes a framework choice machine-checkable. It is additive: a protocol without it validates and compiles exactly as before, so no DSL version bump is involved.
+
+The only profile is currently `methods-evaluation`, for questions asking how well a method, tool, or technology performs a task. Selecting it makes lock validation require:
+
+- all five canonical slot IDs in `review.framework.slots` — `technology_method`, `task_function`, `application_context`, `comparator`, and `performance_outcome`; and
+- an explicit `evidence_target`, which is normally `primary-studies` because a primary methodological evaluation is a primary study.
+
+Slot labels and descriptions remain free text. Compilation then adds a `methods-evaluation-role-safety` domain and a `framework_profile` block to the critic packet, plus a "Methods-evaluation framework decisions" section to the audit outline. See `methods-evaluation-framework.md` for the slot defaults, the mandatory ambiguity check, and why an evidence-synthesis application context must not switch `evidence_target.mode`.
 
 ## Validate, compile, and verify
 

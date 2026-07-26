@@ -69,6 +69,7 @@
           "required": ["name", "rationale", "slots"],
           "properties": {
             "name": {"type": "string", "minLength": 1},
+            "profile_id": {"$ref": "#/$defs/framework_profile_id"},
             "rationale": {"type": "string", "minLength": 1},
             "slots": {
               "type": "array",
@@ -176,6 +177,10 @@
   },
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "framework_profile_id": {
+      "description": "Optional machine-readable framework profile. Selecting one requires that profile's canonical slot IDs and an explicit evidence_target.",
+      "enum": ["methods-evaluation"]
+    },
     "framework_slot": {
       "type": "object",
       "additionalProperties": false,
