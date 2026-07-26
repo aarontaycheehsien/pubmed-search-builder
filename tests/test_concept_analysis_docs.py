@@ -1,4 +1,11 @@
-"""Documentation-contract tests for the scope-first conceptual/objective/critic workflow."""
+"""Documentation-contract tests for the scope-first conceptual/objective/critic workflow.
+
+These tests pin sentences that encode governance rules, so a rule cannot be dropped or
+reversed by rewording. That makes them fire on deliberate edits too, which is intended --
+but a bare "substring not found" gives no hint which document to look at or why the
+sentence mattered. `DocText` therefore carries its source path through `.lower()` and
+slicing, and `DocContractTestCase` uses it to explain any failure.
+"""
 
 from pathlib import Path
 import re
@@ -8,15 +15,64 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_doc(relative: str) -> str:
-    return (ROOT / relative).read_text(encoding="utf-8")
+class DocText(str):
+    """A document's text that remembers which file it came from."""
+
+    path: str
+
+    def __new__(cls, value: str, path: str) -> "DocText":
+        text = super().__new__(cls, value)
+        text.path = path
+        return text
+
+    def lower(self) -> "DocText":
+        return DocText(str.lower(self), self.path)
+
+    def __getitem__(self, item) -> "DocText":
+        return DocText(str.__getitem__(self, item), self.path)
+
+
+def read_doc(relative: str) -> DocText:
+    return DocText((ROOT / relative).read_text(encoding="utf-8"), relative)
 
 
 def skill_docs() -> list[Path]:
     return [ROOT / "SKILL.md", *sorted((ROOT / "references").glob("*.md"))]
 
 
-class CrossReferenceIntegrityTests(unittest.TestCase):
+class DocContractTestCase(unittest.TestCase):
+    """Adds the document name and the reason a phrase is pinned to every failure."""
+
+    # unittest would otherwise append our message to its own, which dumps the whole
+    # document -- burying the useful part under 17 KB of Markdown.
+    longMessage = False
+
+    @staticmethod
+    def _explain(member: object, container: object, present: bool) -> str | None:
+        path = getattr(container, "path", None)
+        if path is None:
+            return None
+        if present:
+            return (
+                f"{path} still contains a phrase this contract forbids:\n"
+                f"      {member!r}"
+            )
+        return (
+            f"{path} no longer states a pinned rule:\n"
+            f"      {member!r}\n"
+            f"    This phrase is pinned because it encodes a governance rule, not because the\n"
+            f"    wording is precious. If you reworded it deliberately, update this assertion in\n"
+            f"    the same commit. If not, restore the rule in {path}."
+        )
+
+    def assertIn(self, member, container, msg=None):  # noqa: N802 - unittest API
+        super().assertIn(member, container, msg or self._explain(member, container, present=False))
+
+    def assertNotIn(self, member, container, msg=None):  # noqa: N802 - unittest API
+        super().assertNotIn(member, container, msg or self._explain(member, container, present=True))
+
+
+class CrossReferenceIntegrityTests(DocContractTestCase):
     """Mechanical guards against reference drift, not phrasing contracts."""
 
     def test_every_reference_doc_is_routed_from_skill_md(self):
@@ -50,7 +106,7 @@ class CrossReferenceIntegrityTests(unittest.TestCase):
         self.assertGreater(found, 3, "pointer scan found too little to be meaningful")
 
 
-class SkillContractTests(unittest.TestCase):
+class SkillContractTests(DocContractTestCase):
     def test_frontmatter_uses_only_name_and_description_with_strong_triggers(self):
         skill = read_doc("SKILL.md")
         frontmatter = skill.split("---", 2)[1]
@@ -124,7 +180,7 @@ class SkillContractTests(unittest.TestCase):
             self.assertIn(reference, skill)
 
 
-class ConceptGateAskingPolicyTests(unittest.TestCase):
+class ConceptGateAskingPolicyTests(DocContractTestCase):
     """Recording an offer and blocking the gate on it are different acts."""
 
     def test_gate_blocks_only_on_decisions_evidence_cannot_settle(self):
@@ -145,15 +201,20 @@ class ConceptGateAskingPolicyTests(unittest.TestCase):
         self.assertIn("several qualifying offers do not become several questions", gate)
 
     def test_asking_policy_matches_the_top_level_stop_rule(self):
-        skill = read_doc("SKILL.md").lower()
+        # SKILL.md and the gate state the same rule with an unavoidable pronoun difference
+        # ("present their evidence" vs "present the evidence"). Pinning both literals made
+        # each doc's wording load-bearing for a test named after the other, so match the
+        # rule rather than the article.
+        stop_rule = re.compile(r"present (?:the|their) evidence before asking the user to adopt a narrowing design")
+        for doc in (read_doc("SKILL.md"), read_doc("references/concept-analysis-and-gating.md")):
+            with self.subTest(doc=doc.path):
+                self.assertRegex(doc.lower(), stop_rule, f"{doc.path} no longer states the adopt-after-evidence stop rule")
         gate = read_doc("references/concept-analysis-and-gating.md").lower()
-        self.assertIn("present their evidence before asking the user to adopt a narrowing design", skill)
-        self.assertIn("present the evidence before asking the user to adopt a narrowing design", gate)
         # decision_needed must not be read as "this blocks the gate".
         self.assertIn("does not by itself mean the question blocks the concept gate", gate)
 
 
-class MethodsEvaluationFrameworkTests(unittest.TestCase):
+class MethodsEvaluationFrameworkTests(DocContractTestCase):
     def test_profile_is_routed_from_skill_selection_and_concept_gate(self):
         skill = read_doc("SKILL.md").lower()
         self.assertIn("methods-evaluation-framework.md", skill)
@@ -231,7 +292,7 @@ class MethodsEvaluationFrameworkTests(unittest.TestCase):
         self.assertIn("## methods-evaluation framework decisions (conditional)", audit)
 
 
-class WorkflowContractTests(unittest.TestCase):
+class WorkflowContractTests(DocContractTestCase):
     def test_every_revision_has_an_executable_no_harm_gate(self):
         workflow = read_doc("references/workflow.md").lower()
         guard = read_doc("references/no-harm-revisions.md").lower()
@@ -297,7 +358,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("revision-cycle ledger", workflow)
 
 
-class CandidateEvidenceTests(unittest.TestCase):
+class CandidateEvidenceTests(DocContractTestCase):
     def test_candidate_screening_schema_and_role_constraints_are_documented(self):
         doc = read_doc("references/candidate-screening.md").lower()
         for phrase in (
@@ -353,7 +414,7 @@ class CandidateEvidenceTests(unittest.TestCase):
         self.assertIn("does not satisfy candidate-screening integrity", doc)
 
 
-class CriticAndAuditTests(unittest.TestCase):
+class CriticAndAuditTests(DocContractTestCase):
     def test_critic_schema_routing_and_press_distinction_are_documented(self):
         doc = read_doc("references/press-critic.md").lower()
         for phrase in (
@@ -390,7 +451,7 @@ class CriticAndAuditTests(unittest.TestCase):
         self.assertIn("do not satisfy item 14", doc)
 
 
-class SupportingGuardrailTests(unittest.TestCase):
+class SupportingGuardrailTests(DocContractTestCase):
     def test_record_content_requires_saved_json(self):
         tools = read_doc("references/mesh-and-pubmed-tools.md").lower()
         self.assertIn("record-content commands", tools)
