@@ -354,7 +354,7 @@ OR "post covid syndrome"[tiab]
 OR "post covid condition"[tiab]
 ```
 
-Apply the same approach to other emerging constructs (e.g., newly named syndromes, novel therapeutic classes, recent technologies). If such a variant currently returns zero PubMed records, the final validation gate (`workflow.md` §9) removes and documents it by default; but because an emerging term may gain records as the literature grows, keep it when future-proofing a search that will be re-run (PRISMA-S Item 12), after first ruling out a spelling or hyphenation typo.
+Apply the same approach to other emerging constructs (e.g., newly named syndromes, novel therapeutic classes, recent technologies). If such a variant currently returns zero PubMed records, the final validation gate (`workflow.md` §8, Final QA) removes and documents it by default; but because an emerging term may gain records as the literature grows, keep it when future-proofing a search that will be re-run (PRISMA-S Item 12), after first ruling out a spelling or hyphenation typo.
 
 ### Historical and regional synonym pairs
 

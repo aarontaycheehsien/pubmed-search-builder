@@ -96,6 +96,7 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 - `references/framework-selection.md` - question type and framework selection.
 - `references/methods-evaluation-framework.md` - method/tool performance-evaluation profile, canonical slots, ambiguity check, and evidence-target rule.
 - `references/concept-analysis-and-gating.md` - scope artifact, concept roles, fragility, and `AND`-block admission.
+- `references/anti-patterns.md` - recurring LLM failure modes; read at the concept gate and again at final query hygiene.
 - `references/empirical-fragility.md` - measured fragility dimensions, classification, and reasoned human overrides.
 - `references/concept-ablation-and-strands.md` - executable leave-one-block-out testing and two-strand fragile-topic delivery.
 - `references/screening-burden.md` - reproducible stratified samples, precision intervals, workload estimates, and recall-gated variant selection.
@@ -111,5 +112,9 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 - `references/seed-pmid-validation.md` - seeded discovery and validation.
 - `references/no-seed-recall-estimation.md` - optional pilot-expansion heuristic.
 - `references/external-trial-registry-validation.md` - optional registry sentinel for external PubMed leak detection.
+- `references/wildcard-and-truncation.md` - wildcard safety, current PubMed truncation limits, and testing.
+- `references/low-count-plausibility.md` - diagnosing an implausibly low final count without expanding to hit a threshold.
 - `references/audit-template.md` - audit and iteration-ledger structure.
+- `references/prisma-s-reporting.md` - PRISMA-S item coverage and what internal QA does not satisfy.
+- `references/examples.md` - worked PICO, PECO, and PCC walk-throughs.
 - `references/goal-tracking.md` - `/goal` intake and completion rules.

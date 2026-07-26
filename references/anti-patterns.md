@@ -2,7 +2,7 @@
 
 This document catalogues recurring failure modes when building high-sensitivity PubMed strategies. The codex workflow's guardrails already discourage these patterns, but enumerating them explicitly helps with LLM-generated drafts where defaults often override the workflow.
 
-Use this document during `workflow.md §3` (concept gate) and §9 (final query hygiene). If a draft strategy exhibits one of these anti-patterns, revise before delivery.
+Use this document during `workflow.md §2` (Lock conceptual scope, which contains the concept gate) and §8 (Final QA, which contains final query hygiene). If a draft strategy exhibits one of these anti-patterns, revise before delivery.
 
 ## Mistake 1: Treating PICO as a Boolean template
 
@@ -107,7 +107,7 @@ Evidence: LLM-generated Boolean queries show median sensitivity of 85% with IQR 
 
 Emitting a final Boolean strategy without testing it against seed PMIDs (where supplied) or against PubMed count checks is a documented LLM failure mode. A draft is not a final strategy.
 
-The codex workflow forces iteration in `workflow.md §7` (Test iteratively) and §8 (Revise). Do not skip these steps to deliver a "complete" answer faster.
+The codex workflow forces this in `workflow.md §5` (Probe before asking for adoption), §6 (Validate), and §7 (Run the critic and revise). Do not skip these steps to deliver a "complete" answer faster.
 
 Evidence: [Adam et al. 2024](https://doi.org/10.1093/jamiaopen/ooae098); [Park, Shin & Kim 2025](https://doi.org/10.69528/jkmla.2025.52.1.28) showed that even with PRESS-style prompting, LLM-generated strategies require human refinement on controlled vocabulary and syntax. [De Cassai et al. 2025](https://doi.org/10.1136/rapm-2024-106231) found ChatGPT-4o retrieved only 6% of the records that expert search strings retrieved across 85 anesthesiology systematic reviews.
 

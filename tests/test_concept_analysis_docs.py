@@ -1,6 +1,7 @@
 """Documentation-contract tests for the scope-first conceptual/objective/critic workflow."""
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -9,6 +10,44 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read_doc(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def skill_docs() -> list[Path]:
+    return [ROOT / "SKILL.md", *sorted((ROOT / "references").glob("*.md"))]
+
+
+class CrossReferenceIntegrityTests(unittest.TestCase):
+    """Mechanical guards against reference drift, not phrasing contracts."""
+
+    def test_every_reference_doc_is_routed_from_skill_md(self):
+        routing = read_doc("SKILL.md").split("## Reference Routing")[1]
+        listed = set(re.findall(r"`references/([a-z0-9._-]+\.md)`", routing))
+        actual = {path.name for path in (ROOT / "references").glob("*.md")}
+        self.assertEqual(
+            actual - listed, set(), "reference docs missing from SKILL.md Reference Routing"
+        )
+        self.assertEqual(listed - actual, set(), "SKILL.md routes a reference that does not exist")
+
+    def test_workflow_section_pointers_resolve_to_real_sections(self):
+        workflow = read_doc("references/workflow.md")
+        headings = dict(re.findall(r"^## (\d+)\. (.+)$", workflow, re.M))
+        pointer = re.compile(r"workflow\.md`?[\s,]*(?:§|section )\s*(\d+)`?[\s,]*(?:\(([^)]*)\))?")
+        found = 0
+        for doc in skill_docs():
+            for number, label in pointer.findall(doc.read_text(encoding="utf-8")):
+                found += 1
+                heading = headings.get(number)
+                self.assertIsNotNone(heading, f"{doc.name}: workflow.md has no section {number}")
+                if not label:
+                    continue
+                # A parenthetical label must describe the section it points at.
+                words = {w for w in re.findall(r"[a-z]{4,}", label.lower())}
+                target = heading.lower()
+                self.assertTrue(
+                    any(w in target for w in words) or not words,
+                    f"{doc.name}: '§{number} ({label})' does not describe section {number!r} ({heading!r})",
+                )
+        self.assertGreater(found, 3, "pointer scan found too little to be meaningful")
 
 
 class SkillContractTests(unittest.TestCase):
