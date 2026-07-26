@@ -12,7 +12,7 @@ Start this step with the concise **Scope lock** marker from `SKILL.md`. State on
 
 Use `workflow.md` as the canonical source for the full build sequence and high-sensitivity mental model.
 
-The seed PMID decision is resolved when the user supplies PMIDs, says there are none, or explicitly asks to proceed without them. Before scope version 1 is locked, normalize supplied identifiers only; do not fetch, mine, expand, or inspect record content.
+The seed PMID decision is resolved when the user supplies PMIDs, says there are none, explicitly asks to proceed without them, or a valid locked protocol encodes `seeds.records`. Nothing else resolves it: if the question was asked and not yet answered, the gate waits. Before scope version 1 is locked, normalize supplied identifiers only; do not fetch, mine, expand, or inspect record content.
 
 Produce the scope-lock summary, validate `review_protocol_v1.json` in lock mode, compile its derived artifacts, and lock it before any record fetch, MeSH lookup, PubMed exploration, block construction, filter check, focused variant, or validation. Objective evidence enters only after this baseline exists.
 

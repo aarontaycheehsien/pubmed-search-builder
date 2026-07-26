@@ -45,6 +45,20 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("review objects, never as scope evidence", skill[review:])
         self.assertIn("do not search pubmed or the web to answer", skill)
 
+    def test_intake_stops_for_the_seed_decision_rather_than_assuming_none(self):
+        skill = read_doc("SKILL.md").lower()
+        self.assertIn("ask once for optional known-relevant seed pmids and stop for the answer", skill)
+        self.assertIn('"no seeds" must still be the user\'s stated choice rather than an assumption', skill)
+        # The generic stop rule must not read as forbidding the intake stop.
+        self.assertIn("stop at intake for the plain-language question and for the seed decision", skill)
+        workflow = read_doc("references/workflow.md").lower()
+        self.assertIn("ask once whether known-relevant seed pmids exist and stop for the answer", workflow)
+        seeds = read_doc("references/seed-pmid-validation.md").lower()
+        self.assertIn("do not treat silence, or your own inference that none exist", seeds)
+        # The two legitimate skips stay available.
+        for doc in (skill, workflow):
+            self.assertIn("valid locked protocol", doc)
+
     def test_only_four_user_facing_markers_and_probes_before_adoption(self):
         skill = read_doc("SKILL.md").lower()
         for marker in ("`intake`", "`scope lock`", "`empirical build and critic loop`", "`handoff`"):

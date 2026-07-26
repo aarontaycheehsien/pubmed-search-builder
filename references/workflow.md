@@ -39,7 +39,7 @@ Require an independently stated plain-language review question. Pasted Boolean s
 
 When `review_protocol*.json` is supplied, read `references/protocol-dsl.md`, then run `protocol_tool.py validate ... --mode lock` and `protocol_tool.py compile ...` before any candidate-record, MeSH, or PubMed work. The protocol question satisfies the independent-question requirement. Its decisions satisfy user gates only when lock validation passes. Preserve the source protocol and compile receipt in the run; do not edit compiled ledgers to change scope.
 
-For a new build, ask once whether known-relevant seed PMIDs exist. Seeds are optional. Normalize and deduplicate supplied numeric PMIDs, but do not fetch, mine, or expand them until scope version 1 is locked.
+For a new build, ask once whether known-relevant seed PMIDs exist and stop for the answer. Seeds are optional and the build proceeds without them, but do not assume their absence: seed status is resolved only when the user supplies PMIDs, states there are none, or asks to proceed without them. Skip the question only when the user already supplied PMIDs or a valid locked protocol encodes `seeds.records`. Normalize and deduplicate supplied numeric PMIDs, but do not fetch, mine, or expand them until scope version 1 is locked.
 
 For an existing-strategy review, confirm the plain-language question first. Then accept the draft as a review object and preserve it as version 0; do not infer eligibility, essential concepts, or filters from its structure.
 

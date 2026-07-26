@@ -6,7 +6,7 @@ Seeds may support candidate discovery, objective vocabulary, and validation, but
 
 ## Intake before scope lock
 
-After the plain-language question is confirmed, ask once whether the user has known-relevant seed PMIDs. Before scope lock:
+After the plain-language question is confirmed, ask once whether the user has known-relevant seed PMIDs and stop for the answer. Do not treat silence, or your own inference that none exist, as a "no seeds" decision; seed status is resolved only by the user supplying PMIDs, stating there are none, asking to proceed without them, or by a valid locked protocol that encodes `seeds.records`. Before scope lock:
 
 1. Normalize and deduplicate numeric PMIDs while preserving order.
 2. Record malformed entries and do not pass them to PubMed.
