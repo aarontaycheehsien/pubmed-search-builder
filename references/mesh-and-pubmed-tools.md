@@ -76,7 +76,7 @@ python scripts/mesh_tool.py circuit status
 
 Use `cache clear` to remove response entries, or `circuit reset` for an intentional manual breaker reset after checking that the host/network is healthy. Every network command accepts `--no-cache` for a one-command fresh fetch; it bypasses both cache reads and writes but keeps pacing and circuit protection active.
 
-The following environment variables tune Phase 1 behavior. Defaults are deliberately conservative; change them only for a documented operational reason:
+The following environment variables tune Phase 1 behavior. Defaults are deliberately conservative; change them only for a documented operational reason. Process environment variables take precedence. A file beside the installed skill is the only implicit `.env`; use `--env-file <path>` before the subcommand for any other location. A `.env` in the current working directory is never loaded automatically.
 
 | Variable | Default | Effect |
 |---|---:|---|

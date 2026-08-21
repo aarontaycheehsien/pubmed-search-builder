@@ -1,6 +1,7 @@
 # Local configuration and secrets
 .env
 .env.*
+!.env.example
 *.env
 *.key
 *.pem
@@ -39,6 +40,23 @@ evals/.cache/
 # Run workspaces. `manifest_tool.py init --workspace runs/<slug>` is the supported way to
 # start a build; everything a run writes stays inside its own directory.
 /runs/
+/archive_prior_run/
+
+# Legacy root-level run artifacts. Keep generated review state in runs/<slug>/ rather than
+# publishing it beside the skill source.
+/burden_variants.json
+/concepts.json
+/intervention_*.json
+/intervention_*.txt
+/main_strategy*.json
+/main_strategy*.txt
+/mesh_sweep_*.json
+/narrowing_blocks.json
+/outcome_block_query.txt
+/population_*.json
+/population_*.txt
+/qa_warning_dispositions.json
+/recall_holdout.json
 
 # Workspace-scoped NCBI response caches (one per run workspace).
 .ncbi_cache/

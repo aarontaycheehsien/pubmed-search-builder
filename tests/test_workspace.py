@@ -94,6 +94,21 @@ class ResolveWithinTests(unittest.TestCase):
             (Path(td) / "outside.txt").write_text("q", encoding="utf-8")
             self.assertIsNone(resolve_within(run, "../outside.txt", search=False))
 
+    def test_tree_search_rejects_a_file_symlink_that_escapes_the_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run = root / "run"
+            run.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            link = run / "nested" / "outside.txt"
+            link.parent.mkdir()
+            try:
+                link.symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"file symlinks are unavailable: {exc}")
+            self.assertIsNone(resolve_within(run, "outside.txt"))
+
 
 class IsWithinTests(unittest.TestCase):
     def test_root_itself_and_descendants_are_within(self):

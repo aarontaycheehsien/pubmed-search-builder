@@ -38,6 +38,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from mesh_evidence import build_mesh_evidence
+from pubmed_search_builder.infrastructure.env import configure_env_file, read_env
 from pubmed_search_builder.infrastructure.transport import decode_json
 
 
@@ -60,7 +61,6 @@ DEFAULT_TOOL = "codex-search-strategy-check"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_BACKOFF_SECONDS = 1.0
 REQUEST_CACHE: dict[tuple[str, tuple[tuple[str, str], ...]], object] = {}
-ENV_FILE_CACHE: dict[str, str] | None = None
 CACHE_SCHEMA_VERSION = 1
 RESILIENCE_STATE_VERSION = 1
 DEFAULT_CACHE_TTL_DAYS = 1.0
@@ -162,76 +162,6 @@ class CircuitOpenError(MeshError):
 
 class TransientResponseError(Exception):
     """A successful HTTP response whose body cannot yet be used as JSON."""
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except OSError:
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def env_file_values() -> dict[str, str]:
-    global ENV_FILE_CACHE
-    if ENV_FILE_CACHE is not None:
-        return ENV_FILE_CACHE
-
-    values: dict[str, str] = {}
-    seen: set[Path] = set()
-    candidates = [
-        Path(__file__).resolve().parents[1] / ".env",
-        Path.cwd() / ".env",
-    ]
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            resolved = candidate
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        values.update(parse_env_file(candidate))
-
-    ENV_FILE_CACHE = values
-    return values
-
-
-def read_env(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value:
-        return value
-    value = env_file_values().get(name)
-    if value:
-        return value
-    if os.name != "nt":
-        return default
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            value, _ = winreg.QueryValueEx(key, name)
-            return str(value) if value else default
-    except OSError:
-        return default
 
 
 def mesh_user_agent() -> str:
@@ -3126,6 +3056,11 @@ def write_pending_labels(path: Path, result: dict[str, object]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MeSH RDF helper.")
+    parser.add_argument(
+        "--env-file",
+        help="Read allowlisted NCBI/MeSH settings from this explicit file. Without it, only "
+        "the process environment and the skill-root .env are used; the current directory is ignored.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_cache_bypass_flag(command_parser: argparse.ArgumentParser) -> None:
@@ -3248,6 +3183,10 @@ def main(argv: list[str] | None = None) -> int:
     global CACHE_BYPASS
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        configure_env_file(args.env_file)
+    except ValueError as exc:
+        parser.error(str(exc))
     CACHE_BYPASS = bool(getattr(args, "no_cache", False))
 
     try:

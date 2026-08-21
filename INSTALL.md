@@ -97,7 +97,7 @@ On macOS/Linux:
 python tools/package_skill.py --output "${CODEX_HOME:-$HOME/.codex}/skills/pubmed-search-builder" --replace
 ```
 
-Re-run the command after pulling updates. The package intentionally excludes `.env`; set NCBI variables in the environment or place `.env` in the working directory where searches run.
+Re-run the command after pulling updates. The package intentionally excludes `.env`; set NCBI variables in the process environment or pass an explicit file before the subcommand, for example `python scripts/pubmed_tool.py --env-file <path-to-pubmed.env> search ...`. The tools never load `.env` from the current working directory implicitly.
 
 ---
 

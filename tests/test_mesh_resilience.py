@@ -18,6 +18,11 @@ mesh_tool = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(mesh_tool)
 
+from pubmed_search_builder.infrastructure.env import (  # noqa: E402
+    configure_env_file,
+    reset_env_file_cache,
+)
+
 
 class FakeResponse:
     def __init__(self, payload):
@@ -74,7 +79,8 @@ class MeshResilienceTests(unittest.TestCase):
         mesh_tool.REQUEST_CACHE.clear()
         mesh_tool.NETWORK_METRICS.clear()
         mesh_tool.FALLBACK_HOST_STATE.clear()
-        mesh_tool.ENV_FILE_CACHE = {}
+        configure_env_file(None)
+        reset_env_file_cache()
 
     def tearDown(self):
         mesh_tool.urllib.request.urlopen = self.original_urlopen
@@ -88,7 +94,8 @@ class MeshResilienceTests(unittest.TestCase):
         mesh_tool.REQUEST_CACHE.clear()
         mesh_tool.NETWORK_METRICS.clear()
         mesh_tool.FALLBACK_HOST_STATE.clear()
-        mesh_tool.ENV_FILE_CACHE = None
+        configure_env_file(None)
+        reset_env_file_cache()
         for name, value in self.original_environment.items():
             if value is None:
                 os.environ.pop(name, None)

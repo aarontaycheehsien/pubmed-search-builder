@@ -1,10 +1,12 @@
 """Workspace-scoped NCBI response cache: reuse within a case, never across cases."""
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 for candidate in (ROOT, ROOT / "scripts"):
@@ -113,6 +115,44 @@ class CaseIsolationTests(unittest.TestCase):
             second = ResponseCache.for_workspace(directory=shared)
             first.put("esearch.fcgi", SEARCH_PARAMS, b"body")
             self.assertEqual(second.get("esearch.fcgi", SEARCH_PARAMS), b"body")
+
+    def test_env_cache_directory_cannot_escape_the_working_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run = root / "run"
+            external = root / "external"
+            run.mkdir()
+            values = {
+                "NCBI_CACHE": "on",
+                "NCBI_CACHE_DIR": str(external),
+                "NCBI_RECORD_CACHE_TTL_DAYS": "30",
+                "NCBI_CACHE_TTL_HOURS": "24",
+            }
+            previous = Path.cwd()
+            try:
+                os.chdir(run)
+                with patch.object(pubmed_tool, "read_env", side_effect=lambda name, default="": values.get(name, default)):
+                    cache = pubmed_tool.build_response_cache()
+            finally:
+                os.chdir(previous)
+            self.assertFalse(cache.enabled)
+            self.assertIn("outside the run workspace", cache.disabled_reason)
+
+    def test_cli_cache_directory_is_an_explicit_external_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run = root / "run"
+            external = root / "external"
+            run.mkdir()
+            previous = Path.cwd()
+            try:
+                os.chdir(run)
+                with patch.object(pubmed_tool, "read_env", side_effect=lambda name, default="": default):
+                    cache = pubmed_tool.build_response_cache(directory=str(external))
+            finally:
+                os.chdir(previous)
+            self.assertTrue(cache.enabled)
+            self.assertEqual(cache.directory, external.resolve())
 
 
 class SecretHygieneTests(unittest.TestCase):

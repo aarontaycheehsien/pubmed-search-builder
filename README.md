@@ -38,6 +38,10 @@ cp .env.example .env
 # Edit .env and add your NCBI email (recommended) and API key (optional)
 ```
 
+The default `.env` is the file at the skill root. When configuration lives elsewhere, pass
+`--env-file <path>` before the subcommand. The tools do not trust a working-directory `.env`
+implicitly; process environment variables always take precedence over file values.
+
 ### 3. Test installation
 ```bash
 python scripts/pubmed_tool.py doctor
@@ -403,7 +407,7 @@ Higher rate limits (10 req/sec vs 3 req/sec) are available with an API key.
    NCBI_API_KEY=YOUR_NCBI_API_KEY
    ```
 
-**Security note**: Never commit your `.env` file to version control. The `.gitignore` already excludes `.env` and `.env.*` files.
+**Security note**: Never commit your `.env` file to version control. The `.gitignore` excludes `.env` and `.env.*` files while deliberately retaining the placeholder-only `.env.example`.
 
 ---
 

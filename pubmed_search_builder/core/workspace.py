@@ -82,7 +82,17 @@ def resolve_within(
     if not search:
         return None
 
-    matches = sorted(path for path in root_path.rglob(raw.name) if path.is_file())
+    matches: list[Path] = []
+    for path in root_path.rglob(raw.name):
+        if not path.is_file():
+            continue
+        try:
+            resolved_match = path.resolve()
+        except OSError:
+            continue
+        if is_within(resolved_match, root_path):
+            matches.append(resolved_match)
+    matches.sort()
     return matches[0] if matches else None
 
 

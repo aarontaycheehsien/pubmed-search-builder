@@ -25,7 +25,9 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from mesh_evidence import build_mesh_evidence, is_mesh_artifact
+from pubmed_search_builder.core.workspace import is_within
 from pubmed_search_builder.infrastructure.cache import ResponseCache, is_enabled_value
+from pubmed_search_builder.infrastructure.env import configure_env_file, read_env
 from pubmed_search_builder.infrastructure.services import ncbi_eutils_policy
 from pubmed_search_builder.infrastructure.transport import StdlibTransport, TransportError, decode_json
 
@@ -45,7 +47,6 @@ RELATED_LINKNAMES = {
     "citedin": "pubmed_pubmed_citedin",
     "refs": "pubmed_pubmed_refs",
 }
-ENV_FILE_CACHE: dict[str, str] | None = None
 API_KEY_ASSIGNMENT_PATTERN = re.compile(
     r"\b(?P<name>NCBI_API_KEY|api[_-]?key)\s*=\s*(?P<value>[^\s&),;]+)",
     re.IGNORECASE,
@@ -294,76 +295,6 @@ BOUNDARY_NOISE_TOKENS = {
 
 class PubMedError(Exception):
     pass
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except OSError:
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def env_file_values() -> dict[str, str]:
-    global ENV_FILE_CACHE
-    if ENV_FILE_CACHE is not None:
-        return ENV_FILE_CACHE
-
-    values: dict[str, str] = {}
-    seen: set[Path] = set()
-    candidates = [
-        Path(__file__).resolve().parents[1] / ".env",
-        Path.cwd() / ".env",
-    ]
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            resolved = candidate
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        values.update(parse_env_file(candidate))
-
-    ENV_FILE_CACHE = values
-    return values
-
-
-def read_env(name: str, default: str = "") -> str:
-    value = os.environ.get(name)
-    if value:
-        return value
-    value = env_file_values().get(name)
-    if value:
-        return value
-    if os.name != "nt":
-        return default
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            value, _ = winreg.QueryValueEx(key, name)
-            return str(value) if value else default
-    except OSError:
-        return default
 
 
 def element_text(element: ET.Element | None) -> str:
@@ -851,9 +782,23 @@ def env_positive_float(name: str, default: float) -> float:
 
 def build_response_cache(*, enabled: bool = True, directory: str | None = None) -> ResponseCache:
     """Resolve the workspace-scoped E-utilities cache from the environment."""
+    cache_enabled = enabled and is_enabled_value(read_env("NCBI_CACHE", "on"))
+    if not cache_enabled:
+        return ResponseCache.disabled("disabled by configuration")
+    if directory is None:
+        configured = read_env("NCBI_CACHE_DIR", "").strip()
+        if configured:
+            resolved = Path(configured).expanduser().resolve()
+            workspace = Path.cwd().resolve()
+            if not is_within(resolved, workspace):
+                return ResponseCache.disabled(
+                    "refusing NCBI_CACHE_DIR outside the run workspace; use the explicit "
+                    "--cache-dir option to authorize an external cache"
+                )
+            directory = str(resolved)
     return ResponseCache.for_workspace(
-        enabled=enabled and is_enabled_value(read_env("NCBI_CACHE", "on")),
-        directory=directory or (read_env("NCBI_CACHE_DIR", "").strip() or None),
+        enabled=True,
+        directory=directory,
         record_ttl_seconds=env_positive_float("NCBI_RECORD_CACHE_TTL_DAYS", 30.0) * 86400.0,
         query_ttl_seconds=env_positive_float("NCBI_CACHE_TTL_HOURS", 24.0) * 3600.0,
     )
@@ -4249,6 +4194,11 @@ def run_selftest() -> dict[str, object]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PubMed E-utilities helper.")
     parser.add_argument(
+        "--env-file",
+        help="Read allowlisted NCBI/MeSH settings from this explicit file. Without it, only "
+        "the process environment and the skill-root .env are used; the current directory is ignored.",
+    )
+    parser.add_argument(
         "--no-cache",
         action="store_true",
         help="Bypass the workspace response cache and take every request live. Use for the "
@@ -4545,6 +4495,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        configure_env_file(args.env_file)
+    except ValueError as exc:
+        parser.error(str(exc))
     cache = build_response_cache(enabled=not args.no_cache, directory=args.cache_dir)
     if args.no_cache:
         cache.disabled_reason = "disabled by --no-cache"
