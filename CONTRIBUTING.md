@@ -109,6 +109,28 @@ python -m unittest tests.test_codex_hooks
 python scripts/repository_hygiene.py
 ```
 
+### Claude Code Repository Hooks
+
+Claude Code sessions started in this repository or one of its subdirectories load the
+same lifecycle protections from `.claude/settings.json`. The configuration uses Claude
+Code's cross-platform exec form to run the shared Python scripts in `.codex/hooks`; it
+does not add hooks to `SKILL.md`, change the `/pubmed-search-builder` skill name, or edit
+personal `~/.claude/settings.json` settings.
+
+Review the project hooks and their source with `/hooks` after accepting Claude Code's
+workspace trust prompt. Use `claude doctor` from the repository root to validate active
+settings. To disable non-managed hooks for one diagnostic run, start Claude Code with
+`--settings '{"disableAllHooks":true}'`.
+
+The Claude configuration has the same local-only boundary as the Codex configuration:
+the scripts make no network calls, do not read conversation transcripts, and no-op when
+the event working directory is outside this repository. The secret guard never includes a
+detected value in its own output and asks Claude to suppress the submitted text in the
+block notice. The validated Claude Code baseline, `2.1.239`, accepts that documented
+response field but may still render its own `Original prompt` line, so do not use a real
+credential when testing the guard. `python` must resolve to Python 3.10 or later on
+`PATH`.
+
 ## Testing Your Changes
 
 ### For Tool Changes

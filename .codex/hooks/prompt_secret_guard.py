@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import sys
 
 from common import emit, event_cwd, read_event
 
@@ -67,16 +68,17 @@ def main() -> int:
 
     labels = secret_labels(prompt)
     if labels:
-        emit(
-            {
-                "decision": "block",
-                "reason": (
-                    "Potential secret material was detected in the prompt "
-                    f"({', '.join(labels)}). Put the value in the process environment or trusted "
-                    "skill-root .env, then resubmit without the value. The detected value was not logged."
-                ),
-            }
-        )
+        response = {
+            "decision": "block",
+            "reason": (
+                "Potential secret material was detected in the prompt "
+                f"({', '.join(labels)}). Put the value in the process environment or trusted "
+                "skill-root .env, then resubmit without the value. The detected value was not logged."
+            ),
+        }
+        if "--claude" in sys.argv[1:]:
+            response["suppressOriginalPrompt"] = True
+        emit(response)
         return 0
 
     if contains_personal_path(prompt):

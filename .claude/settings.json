@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.codex/hooks/session_context.py"
+            ],
+            "timeout": 5,
+            "statusMessage": "Loading PubMed workflow state"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.codex/hooks/prompt_secret_guard.py",
+              "--claude"
+            ],
+            "timeout": 5,
+            "statusMessage": "Checking prompt for sensitive values"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.codex/hooks/stop_gate.py"
+            ],
+            "timeout": 30,
+            "statusMessage": "Checking repository and PubMed run gates"
+          }
+        ]
+      }
+    ]
+  }
+}
