@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/session_context.py\"",
-            "commandWindows": "@git -c alias.codex=!python${IFS}.codex/hooks/session_context.py codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/session_context_hook codex",
             "timeout": 5,
             "statusMessage": "Loading PubMed workflow state",
             "additionalContextLimit": 4000
@@ -21,7 +21,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/prompt_secret_guard.py\"",
-            "commandWindows": "@git -c alias.codex=!python${IFS}.codex/hooks/prompt_secret_guard.py codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/prompt_secret_guard_hook codex",
             "timeout": 5,
             "statusMessage": "Checking prompt for sensitive values"
           }
@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/stop_gate.py\"",
-            "commandWindows": "@git -c alias.codex=!python${IFS}.codex/hooks/stop_gate.py codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/stop_gate_hook codex",
             "timeout": 30,
             "statusMessage": "Checking repository and PubMed run gates"
           }
