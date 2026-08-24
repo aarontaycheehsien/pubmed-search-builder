@@ -95,6 +95,11 @@ trust to the current hook hash, so changed hooks require another review. The hoo
 only local Python scripts, make no network calls, do not read transcripts, and do not
 replace the workflow and completion requirements in `SKILL.md`.
 
+The quote-free `commandWindows` launchers are intentional. Current Codex releases on
+Windows misparse hook commands containing embedded quoted segments
+([openai/codex#38168](https://github.com/openai/codex/issues/38168)); keep this form until
+the upstream command-runner fix is available and verified by the Windows regression test.
+
 The stop hook treats incomplete PubMed run manifests as advisory because intake and
 scope decisions may legitimately need user input. Repository-hygiene failures request
 one continuation, then report rather than creating a stop loop. To test the hooks:

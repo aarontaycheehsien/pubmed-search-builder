@@ -34,7 +34,27 @@ class HookConfigurationTests(unittest.TestCase):
                     self.assertEqual(hook["type"], "command")
                     self.assertIn("git rev-parse --show-toplevel", hook["command"])
                     self.assertIn("commandWindows", hook)
+                    self.assertNotIn('"', hook["commandWindows"])
+                    self.assertIn("alias.codex=!python${IFS}", hook["commandWindows"])
                     self.assertLessEqual(hook["timeout"], 30)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows command-runner regression test")
+    def test_windows_session_command_survives_codex_cmd_wrapping(self):
+        config = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        command = config["hooks"]["SessionStart"][0]["hooks"][0]["commandWindows"]
+        event = {"cwd": str(ROOT), "hook_event_name": "SessionStart", "source": "startup"}
+        result = subprocess.run(
+            f'cmd.exe /d /s /c "{command}"',
+            cwd=ROOT,
+            input=json.dumps(event),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        response = json.loads(result.stdout)
+        self.assertEqual(response["hookSpecificOutput"]["hookEventName"], "SessionStart")
 
 
 class PromptSecretGuardTests(unittest.TestCase):
