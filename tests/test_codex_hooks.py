@@ -25,6 +25,7 @@ def run_hook(name: str, event: dict[str, object]) -> subprocess.CompletedProcess
 class HookConfigurationTests(unittest.TestCase):
     def test_configuration_is_cross_platform_and_bounded(self):
         config = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(config), {"hooks"})
         self.assertEqual(set(config["hooks"]), {"SessionStart", "UserPromptSubmit", "Stop"})
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "^(startup|resume|clear|compact)$")
         for groups in config["hooks"].values():

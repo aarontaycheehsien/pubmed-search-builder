@@ -1,5 +1,4 @@
 {
-  "description": "Repository-local guardrails for PubMed Search Builder development and run workspaces.",
   "hooks": {
     "SessionStart": [
       {
