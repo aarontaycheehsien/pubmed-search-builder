@@ -1,0 +1,46 @@
+{
+  "description": "Repository-local guardrails for PubMed Search Builder development and run workspaces.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/session_context.py\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root '.codex/hooks/session_context.py')\"",
+            "timeout": 5,
+            "statusMessage": "Loading PubMed workflow state",
+            "additionalContextLimit": 4000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/prompt_secret_guard.py\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root '.codex/hooks/prompt_secret_guard.py')\"",
+            "timeout": 5,
+            "statusMessage": "Checking prompt for sensitive values"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/stop_gate.py\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root '.codex/hooks/stop_gate.py')\"",
+            "timeout": 30,
+            "statusMessage": "Checking repository and PubMed run gates"
+          }
+        ]
+      }
+    ]
+  }
+}

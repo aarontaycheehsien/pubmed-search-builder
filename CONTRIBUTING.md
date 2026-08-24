@@ -82,6 +82,28 @@ Have an idea? Open a GitHub issue describing:
    python scripts/pubmed_tool.py doctor
    ```
 
+### Codex Repository Hooks
+
+This repository includes lifecycle hooks in `.codex/hooks.json` for Codex sessions
+started in the repository or one of its subdirectories. They provide concise session
+state, block prompts that contain high-confidence secret values, warn before personal
+absolute paths are copied into tracked files, and check repository or active-run gates
+when a turn stops.
+
+Review and trust the hook definitions with `/hooks` before relying on them. Codex ties
+trust to the current hook hash, so changed hooks require another review. The hooks use
+only local Python scripts, make no network calls, do not read transcripts, and do not
+replace the workflow and completion requirements in `SKILL.md`.
+
+The stop hook treats incomplete PubMed run manifests as advisory because intake and
+scope decisions may legitimately need user input. Repository-hygiene failures request
+one continuation, then report rather than creating a stop loop. To test the hooks:
+
+```bash
+python -m unittest tests.test_codex_hooks
+python scripts/repository_hygiene.py
+```
+
 ## Testing Your Changes
 
 ### For Tool Changes
