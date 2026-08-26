@@ -67,6 +67,7 @@ import re
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -210,6 +211,18 @@ UNVALIDATED_HANDOFF_VALUES = ("accepted", "declined")
 # applies. Casefolded synonyms below are all treated as "no seeds supplied".
 SEED_GATE_VALUES = ("provided", "none", "partial")
 NO_SEED_GATE_VALUES = {"none", "no", "no-seed", "no-seeds", "no_seeds", "none-supplied", "noseed"}
+
+# Why this run may be sitting idle. The Stop gate is a hard gate on `active` and `complete`, so a run
+# that legitimately cannot proceed must say so in the manifest rather than leaving the hook to guess
+# from prose. `awaiting-user` additionally names a pause *type* whose precondition the gate re-derives
+# from build state, so a pause that does not match the run cannot excuse a stop. See
+# `references/workflow.md`.
+RUN_STATUS_VALUES = ("active", "awaiting-user", "checkpoint", "blocked-external", "complete")
+# Statuses that may excuse an incomplete handoff. `active` means "still working" and `complete` means
+# "claiming done" -- both are decided by the complete-loop gate, never by the status field.
+STOP_ALLOWED_RUN_STATUSES = frozenset({"awaiting-user", "checkpoint", "blocked-external"})
+RUN_STATUS_REASON_REQUIRED = frozenset({"awaiting-user", "checkpoint", "blocked-external"})
+RUN_STATUS_HISTORY_LIMIT = 200
 
 
 class ManifestError(Exception):
@@ -501,6 +514,11 @@ def new_build_state() -> dict[str, object]:
         "stages_completed": [],
         "gates": {gate: "pending" for gate in GATE_NAMES},
         "pending_user_question": "",
+        "run_status": {"status": "active", "type": "", "reason": "", "recorded_utc": "", "stage": ""},
+        # Append-only. `run_status` alone is overwritten on every change, which would let a build
+        # accumulate pauses invisibly; the history is what makes them auditable, since no pause the
+        # tool can record is unforgeable by an agent that drives the tool.
+        "run_status_history": [],
         "open_decisions": [],
         "blocks": {},
         "recall_offer": "pending",
@@ -550,6 +568,12 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
             state["gates"].setdefault(gate, "pending")
     if not isinstance(state.get("blocks"), dict):
         state["blocks"] = {}
+    # Backfilled in memory, so every pre-existing run gains a run status without a migration step.
+    if not isinstance(state.get("run_status"), dict):
+        state["run_status"] = dict(base["run_status"])
+    else:
+        for key, value in base["run_status"].items():
+            state["run_status"].setdefault(key, value)
     if not isinstance(state.get("scope"), dict):
         state["scope"] = base["scope"]
     else:
@@ -560,6 +584,8 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
     else:
         for key, value in base["candidate_screening"].items():
             state["candidate_screening"].setdefault(key, value)
+    if not isinstance(state.get("run_status_history"), list):
+        state["run_status_history"] = []
     if not isinstance(state.get("critic_rounds"), list):
         state["critic_rounds"] = []
     if not isinstance(state.get("revision_cycles"), list):
@@ -569,6 +595,149 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
 
 def gate_resolved(value: object) -> bool:
     return isinstance(value, str) and value not in UNRESOLVED_GATE_VALUES
+
+
+def _stage_in(state: dict[str, object], *names: str) -> bool:
+    return str(state.get("current_stage") or "") in names
+
+
+def _gate_unresolved(state: dict[str, object], gate: str) -> bool:
+    gates = state.get("gates") if isinstance(state.get("gates"), dict) else {}
+    return not gate_resolved(gates.get(gate))
+
+
+# Recognised reasons a run may be waiting on the human, each paired with the build-state condition
+# that must independently hold for it. An allowlist of names alone would only cost a plausible label;
+# re-deriving the condition from tracked state means a pause can excuse a stop only at a point in the
+# build where that decision is genuinely outstanding. Every pause is also an audited manifest field
+# (`audit_markdown.py` renders it), so repeated pauses stay visible rather than silent.
+#
+# Each condition pairs a gate/field check with the stages where that decision is actually live.
+# The stage half is not decoration: several of these fields (`recall_offer`, `unvalidated_handoff`,
+# every gate) start out unresolved, so a field-only condition would be satisfied by any fresh
+# manifest and the pause type would be a label rather than a claim.
+INTAKE_STAGES = ("intake", "question-intake", "seed-intake", "scope-lock")
+CONCEPT_STAGES = INTAKE_STAGES + ("concept-gate", "candidate-discovery", "candidate-screening", "objective-evidence")
+FILTER_STAGES = ("block-testing", "validation")
+LATE_STAGES = ("validation", "critic-review", "revision", "final-qa")
+
+PAUSE_TYPE_CONDITIONS: dict[str, tuple[str, Callable[[dict[str, object]], bool]]] = {
+    "seed-intake": (
+        "an intake stage with the seed gate unresolved",
+        lambda state: _stage_in(state, *INTAKE_STAGES) and _gate_unresolved(state, "seed"),
+    ),
+    "framework-decision": (
+        "an intake/scope-lock stage with the framework gate unresolved",
+        lambda state: _stage_in(state, *INTAKE_STAGES) and _gate_unresolved(state, "framework"),
+    ),
+    "scope-clarification": (
+        "an intake/scope-lock stage whose retrieval scope is not locked",
+        lambda state: _stage_in(state, *INTAKE_STAGES)
+        and (state.get("scope") or {}).get("status") != "locked",
+    ),
+    "concept-gate": (
+        "a pre-block-testing stage with the concept gate unresolved",
+        lambda state: _stage_in(state, *CONCEPT_STAGES) and _gate_unresolved(state, "concept"),
+    ),
+    "recall-reducing-filter-decision": (
+        "a block-testing/validation stage with the filter gate unresolved",
+        lambda state: _stage_in(state, *FILTER_STAGES) and _gate_unresolved(state, "filter"),
+    ),
+    "recall-offer": (
+        "a no-seed build at validation whose heuristic recall offer is still pending",
+        lambda state: seed_gate_is_no_seed(state)
+        and _stage_in(state, "validation")
+        and state.get("recall_offer", "pending") not in RECALL_OFFER_RESOLVED,
+    ),
+    "thin-evidence-decision": (
+        "a no-seed build at validation or later with the unvalidated-handoff decision still pending",
+        lambda state: seed_gate_is_no_seed(state)
+        and _stage_in(state, *LATE_STAGES)
+        and (state.get("unvalidated_handoff") or {}).get("status") not in UNVALIDATED_HANDOFF_VALUES,
+    ),
+    "critic-revision-decision": (
+        "the critic-review or revision stage with an open decision recorded",
+        lambda state: _stage_in(state, "critic-review", "revision") and bool(state.get("open_decisions")),
+    ),
+    # Deliberately unconditional: when the user asks to stop, refusing would create the stop loop the
+    # gate exists to avoid. Freshness still binds it to the turn immediately after the user spoke.
+    "user-requested": ("an explicit user request to stop", lambda state: True),
+}
+
+
+def pause_type_issues(state: dict[str, object], pause_type: str) -> list[str]:
+    """Return why ``pause_type`` does not apply to this build state; empty means it applies."""
+    condition = PAUSE_TYPE_CONDITIONS.get(pause_type)
+    if condition is None:
+        return [
+            f"unknown pause type {pause_type!r}; choose from: {', '.join(sorted(PAUSE_TYPE_CONDITIONS))}"
+        ]
+    description, predicate = condition
+    try:
+        applies = bool(predicate(state))
+    except (AttributeError, TypeError):
+        applies = False
+    if applies:
+        return []
+    return [f"pause type {pause_type!r} requires {description}"]
+
+
+def run_status_stop_reason(state: dict[str, object], since: str = "") -> tuple[bool, str]:
+    """Decide whether the recorded run status alone excuses stopping with an incomplete build.
+
+    ``since`` is the timestamp of the user's most recent turn. A status recorded before it is stale:
+    it was raised for an earlier exchange and has since been answered or abandoned, so it no longer
+    describes why *this* turn is ending. Staleness downgrades to the complete-loop gate rather than
+    blocking outright, which keeps the decision in one place.
+    """
+    block = state.get("run_status") if isinstance(state.get("run_status"), dict) else {}
+    status = str(block.get("status") or "active")
+    if status not in STOP_ALLOWED_RUN_STATUSES:
+        return False, f"run status is {status!r}"
+    recorded = str(block.get("recorded_utc") or "")
+    if since and (not recorded or recorded < since):
+        return False, f"run status {status!r} predates the user's last turn and is stale"
+    if status == "awaiting-user":
+        pause_type = str(block.get("type") or "")
+        issues = pause_type_issues(state, pause_type)
+        if issues:
+            return False, issues[0]
+        return True, f"awaiting a user decision: {pause_type}"
+    if status == "blocked-external":
+        return True, "blocked on an external dependency"
+    return True, "recorded mid-run checkpoint"
+
+
+def stop_readiness(data: dict[str, object], manifest_path: Path, since: str = "") -> dict[str, object]:
+    """Full Stop-gate verdict: run status first, then the complete-loop gate."""
+    state = ensure_build_state(data)
+    block = state.get("run_status") if isinstance(state.get("run_status"), dict) else {}
+    excused, reason = run_status_stop_reason(state, since)
+    history = state.get("run_status_history") if isinstance(state.get("run_status_history"), list) else []
+    verdict: dict[str, object] = {
+        "allow_stop": True,
+        "run_status": str(block.get("status") or "active"),
+        "pause_type": str(block.get("type") or ""),
+        "recorded_utc": str(block.get("recorded_utc") or ""),
+        "idle_events": len(history),
+        "since": since,
+        "reason": reason,
+        "issues": [],
+    }
+    if excused:
+        verdict["basis"] = "run-status"
+        return verdict
+    verdict["basis"] = "complete-loop"
+    # Same strictness as the pre-existing hook command
+    # (`show --validate --check-files --require-complete-loop`): a manifest whose entries no longer
+    # match the files on disk cannot support a handoff claim, however complete its build state looks.
+    issues = [
+        f"structural: {issue}" for issue in validate_manifest(data, check_files=True, manifest_path=manifest_path)
+    ]
+    issues.extend(complete_loop_readiness(data, manifest_path))
+    verdict["issues"] = issues
+    verdict["allow_stop"] = not issues
+    return verdict
 
 
 def build_state_readiness(state: dict[str, object]) -> list[str]:
@@ -2459,7 +2628,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
     action = args.state_action
 
     # Read-only actions never lock or write.
-    if action in ("show", "check-ready", "check-complete", "coverage"):
+    if action in ("show", "check-ready", "check-complete", "check-stop", "coverage"):
         data = load_manifest(path)
         state = ensure_build_state(data)
         receipt = base_receipt(f"state-{action}", path, data)
@@ -2475,6 +2644,10 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             issues = complete_loop_readiness(data, path)
             receipt["ok"] = not issues
             receipt["issues"] = issues
+        elif action == "check-stop":
+            verdict = stop_readiness(data, path, str(getattr(args, "since", "") or "").strip())
+            receipt.update(verdict)
+            receipt["ok"] = bool(verdict["allow_stop"])
         elif action == "coverage":
             entries = data.get("entries", [])
             receipt["coverage"] = derive_block_coverage(state, entries)
@@ -2510,6 +2683,43 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             state["pending_user_question"] = args.text
         elif action == "clear-question":
             state["pending_user_question"] = ""
+        elif action == "set-run-status":
+            if args.value not in RUN_STATUS_VALUES:
+                raise ManifestError(
+                    f"Unknown run status {args.value!r}. Choose from: {', '.join(RUN_STATUS_VALUES)}."
+                )
+            reason = str(args.reason or "").strip()
+            if args.value in RUN_STATUS_REASON_REQUIRED and not reason:
+                raise ManifestError(f"run status {args.value!r} requires a non-empty --reason")
+            pause_type = str(getattr(args, "type", "") or "").strip()
+            if args.value == "awaiting-user":
+                if not pause_type:
+                    raise ManifestError(
+                        "run status 'awaiting-user' requires --type, one of: "
+                        + ", ".join(sorted(PAUSE_TYPE_CONDITIONS))
+                    )
+                issues = pause_type_issues(state, pause_type)
+                if issues:
+                    raise ManifestError(
+                        issues[0]
+                        + ". Record the pause the build is actually at, or resolve the outstanding gate first."
+                    )
+            elif pause_type:
+                raise ManifestError("--type applies only to run status 'awaiting-user'")
+            state["run_status"] = {
+                "status": args.value,
+                "type": pause_type,
+                "reason": reason,
+                "recorded_utc": now,
+                "stage": str(state.get("current_stage") or ""),
+            }
+            if not isinstance(state.get("run_status_history"), list):
+                state["run_status_history"] = []
+            state["run_status_history"].append(dict(state["run_status"]))
+            # Bounded so a long build cannot grow the manifest without limit; the count survives
+            # truncation so the audit still reports how many times the run went idle.
+            if len(state["run_status_history"]) > RUN_STATUS_HISTORY_LIMIT:
+                del state["run_status_history"][:-RUN_STATUS_HISTORY_LIMIT]
         elif action == "resolve-recall-offer":
             if args.value not in RECALL_OFFER_VALUES:
                 raise ManifestError(
@@ -3142,6 +3352,10 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "final_topic_count": final_topic_count,
             "low_count_review_required": final_topic_count is not None and final_topic_count < LOW_COUNT_THRESHOLD,
             "scope": state.get("scope") if isinstance(state, dict) else None,
+            # Surfaced on the dashboard because a build that keeps going idle is a finding in its
+            # own right, and the current status alone hides how often that happened.
+            "run_status": state.get("run_status") if isinstance(state, dict) else None,
+            "run_status_history": state.get("run_status_history") if isinstance(state, dict) else None,
             "candidate_screening": state.get("candidate_screening") if isinstance(state, dict) else None,
             "critic_rounds": state.get("critic_rounds") if isinstance(state, dict) else [],
             "revision_cycles": state.get("revision_cycles") if isinstance(state, dict) else [],
@@ -3282,6 +3496,24 @@ def build_parser() -> argparse.ArgumentParser:
     set_question.add_argument("text", help="The exact pending question.")
     add_state_action("clear-question", "Clear the pending user/protocol question.")
 
+    set_run_status = add_state_action(
+        "set-run-status",
+        "Record why the run is idle so the Stop gate can tell a legitimate pause from an abandoned build. "
+        f"One of: {', '.join(RUN_STATUS_VALUES)}.",
+    )
+    set_run_status.add_argument("value", choices=RUN_STATUS_VALUES)
+    set_run_status.add_argument(
+        "--type",
+        default="",
+        help="Required for 'awaiting-user'. The gate re-derives the matching build-state condition, so "
+        f"the pause must fit where the build actually is. One of: {', '.join(sorted(PAUSE_TYPE_CONDITIONS))}.",
+    )
+    set_run_status.add_argument(
+        "--reason",
+        default="",
+        help="Required for awaiting-user, checkpoint, and blocked-external. Recorded in the audit.",
+    )
+
     resolve_recall_offer = add_state_action(
         "resolve-recall-offer",
         f"Record the no-seed heuristic recall-offer outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.",
@@ -3367,6 +3599,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_state_action(
         "check-complete", "Run the combined conceptual-objective-critic completion gate (read-only).", mutating=False
+    )
+    check_stop = add_state_action(
+        "check-stop",
+        "Stop-gate verdict (read-only): allow the turn to end on a fresh, matching run status, otherwise "
+        "fall through to the complete-loop gate. Exit 1 when stopping is not yet justified.",
+        mutating=False,
+    )
+    check_stop.add_argument(
+        "--since",
+        default="",
+        help="UTC timestamp of the user's last turn. A run status recorded before it is treated as stale.",
     )
     add_state_action(
         "coverage",

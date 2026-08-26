@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from common import REPOSITORY_ROOT, emit, event_cwd, find_nearest_manifest, load_manifest_context, read_event
+from common import REPOSITORY_ROOT, active_manifest, client_name, emit, event_cwd, load_manifest_context, read_event
 
 
 def main() -> int:
@@ -13,15 +13,17 @@ def main() -> int:
         emit({})
         return 0
 
-    manifest = find_nearest_manifest(cwd)
-    if manifest is None:
+    manifest, ambiguity = active_manifest(event, client_name())
+    if manifest is not None:
+        context = load_manifest_context(manifest, REPOSITORY_ROOT)
+    elif ambiguity:
+        context = ambiguity
+    else:
         context = (
             "PubMed Search Builder repository hooks are active in maintenance mode. "
             "Keep generated run artifacts and personal absolute paths out of source control, "
             "and satisfy the repository hygiene check before handoff."
         )
-    else:
-        context = load_manifest_context(manifest, REPOSITORY_ROOT)
 
     emit(
         {

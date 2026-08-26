@@ -61,6 +61,10 @@ evals/.cache/
 # Workspace-scoped NCBI response caches (one per run workspace).
 .ncbi_cache/
 
+# Session-scoped hook state: which run a session is attached to, when the user last spoke, and the
+# Stop gate's block budget. Local, disposable, and never shared between machines.
+/.codex/state/
+
 # Legacy skill-run working artifacts. `manifest_tool.py init` now refuses to create build
 # state in the repository root, so new builds cannot add to this list. The patterns stay
 # until the artifacts already sitting in the root are cleared out.

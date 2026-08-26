@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 import sys
 
-from common import emit, event_cwd, read_event
+from common import client_name, emit, event_cwd, read_event, record_user_turn
 
 
 SECRET_ASSIGNMENT_RE = re.compile(
@@ -62,6 +62,9 @@ def main() -> int:
     event = read_event()
     if event_cwd(event) is None:
         return 0
+    # The user speaking is the one signal the assistant cannot author. Stamping it here is what lets
+    # the Stop gate tell a pause raised for *this* exchange from one left over from an earlier turn.
+    record_user_turn(event, client_name())
     prompt = event.get("prompt")
     if not isinstance(prompt, str):
         return 0

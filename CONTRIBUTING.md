@@ -87,8 +87,9 @@ Have an idea? Open a GitHub issue describing:
 This repository includes lifecycle hooks in `.codex/hooks.json` for Codex sessions
 started in the repository or one of its subdirectories. They provide concise session
 state, block prompts that contain high-confidence secret values, warn before personal
-absolute paths are copied into tracked files, and check repository or active-run gates
-when a turn stops.
+absolute paths are copied into tracked files, keep material PubMed commands inside the
+provenance path, attach the run a session is working on, and check repository or
+active-run gates when a turn stops.
 
 Review and trust the hook definitions with `/hooks` before relying on them. Codex ties
 trust to the current hook hash, so changed hooks require another review. The hooks use
@@ -100,9 +101,23 @@ Windows misparse hook commands containing embedded quoted segments
 ([openai/codex#38168](https://github.com/openai/codex/issues/38168)); keep this form until
 the upstream command-runner fix is available and verified by the Windows regression test.
 
-The stop hook treats incomplete PubMed run manifests as advisory because intake and
-scope decisions may legitimately need user input. Repository-hygiene failures request
-one continuation, then report rather than creating a stop loop. To test the hooks:
+The stop hook is a conditional hard gate. An incomplete PubMed run may end a turn only
+when the manifest positively records why — a fresh, type-matched `awaiting-user` pause, a
+`checkpoint`, or a `blocked-external` blocker (see "Run status" in
+`references/mesh-and-pubmed-tools.md`). Anything else is blocked once, with the remedy in
+the block reason.
+
+Three independent brakes keep that from becoming a stop loop, and every one of them is
+load-bearing: the hook never blocks twice in a cascade (`stop_hook_active`), never blocks
+more than three times in a session, and fails **open** whenever the gate itself cannot
+produce a verdict — a timeout, an unreadable manifest, or any exception continues with an
+advisory rather than blocking. Blocking on a check that did not actually run is how a stop
+loop starts. Repository-hygiene failures follow the same pattern.
+
+Hook tests run the real gate scripts against a throwaway workspace by setting
+`PUBMED_SEARCH_BUILDER_HOOK_ROOT`, so no test depends on which builds are sitting in the
+developer's `runs/`. That variable is test-only; it moves where runs and session state are
+read from and cannot redirect which code executes. To test the hooks:
 
 ```bash
 python -m unittest tests.test_codex_hooks

@@ -255,5 +255,176 @@ class ManifestStateTests(unittest.TestCase):
         self.assertIn("reminders", receipt)
 
 
+class RunStatusTests(ManifestStateTests):
+    """Why a run is idle, and when that excuses ending a turn on an incomplete build.
+
+    The Stop gate is hard on `active`; these tests pin the only ways past it. A pause has to name a
+    decision that is genuinely outstanding *and* have been raised for the current exchange, so
+    neither a plausible-sounding label nor a pause left over from an earlier turn is enough.
+    """
+
+    def run_status(self):
+        return self.load()["build_state"]["run_status"]
+
+    def test_default_run_status_is_active(self):
+        self.state("set-stage", "intake")
+        self.assertEqual(self.run_status()["status"], "active")
+
+    def test_backfilled_into_a_manifest_written_before_the_field_existed(self):
+        self.run_cli(["init", "--manifest", self.manifest, "--topic-slug", "legacy"])
+        data = self.load()
+        data["build_state"] = {"current_stage": "revision", "gates": {"concept": "resolved"}}
+        Path(self.manifest).write_text(json.dumps(data), encoding="utf-8")
+        _, receipt = self.state("show")
+        self.assertEqual(receipt["build_state"]["run_status"]["status"], "active")
+
+    def test_pause_requires_a_type_that_matches_build_state(self):
+        self.state("set-stage", "intake")
+        self.state("resolve-gate", "seed", "pending")
+        rc, _ = self.state("set-run-status", "awaiting-user", "--type", "seed-intake", "--reason", "need seeds")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.run_status()["type"], "seed-intake")
+
+        # Same label, but the gate it claims to be waiting on is now resolved.
+        self.state("resolve-gate", "seed", "none")
+        rc, _ = self.state("set-run-status", "awaiting-user", "--type", "seed-intake", "--reason", "need seeds")
+        self.assertEqual(rc, 1)
+
+    def test_every_pause_type_is_refused_when_its_condition_is_absent(self):
+        # A fully-resolved build has no outstanding decision, so only the unconditional
+        # user-requested pause may be recorded.
+        self.state("set-stage", "audit-output")
+        for gate in manifest_tool.GATE_NAMES:
+            self.state("resolve-gate", gate, "resolved")
+        self.state("resolve-recall-offer", "declined")
+        self.state("resolve-unvalidated-handoff", "accepted", "--reason", "user accepted")
+        for pause_type in sorted(manifest_tool.PAUSE_TYPE_CONDITIONS):
+            with self.subTest(pause_type=pause_type):
+                rc, _ = self.state("set-run-status", "awaiting-user", "--type", pause_type, "--reason", "x")
+                self.assertEqual(rc, 0 if pause_type == "user-requested" else 1)
+
+    def test_a_fresh_build_only_admits_intake_pauses(self):
+        """The stage half of each condition is load-bearing.
+
+        `recall_offer`, `unvalidated_handoff`, and every gate start out unresolved, so a
+        condition that checked the field alone would be satisfied by any brand-new manifest and
+        the pause type would be a label rather than a claim about where the build is.
+        """
+
+        self.state("set-stage", "intake")
+        admitted = set()
+        for pause_type in sorted(manifest_tool.PAUSE_TYPE_CONDITIONS):
+            rc, _ = self.state("set-run-status", "awaiting-user", "--type", pause_type, "--reason", "x")
+            if rc == 0:
+                admitted.add(pause_type)
+        self.assertEqual(
+            admitted,
+            {"seed-intake", "framework-decision", "scope-clarification", "concept-gate", "user-requested"},
+        )
+
+    def test_late_stage_pauses_need_their_stage_as_well_as_their_field(self):
+        # A no-seed build with both decisions outstanding, but parked at block-testing.
+        self.state("set-stage", "block-testing")
+        self.state("resolve-gate", "seed", "none")
+        for pause_type in ("recall-offer", "thin-evidence-decision"):
+            with self.subTest(pause_type=pause_type, stage="block-testing"):
+                self.assertEqual(self.state("set-run-status", "awaiting-user", "--type", pause_type, "--reason", "x")[0], 1)
+        self.state("set-stage", "validation")
+        for pause_type in ("recall-offer", "thin-evidence-decision"):
+            with self.subTest(pause_type=pause_type, stage="validation"):
+                self.assertEqual(self.state("set-run-status", "awaiting-user", "--type", pause_type, "--reason", "x")[0], 0)
+
+    def test_no_seed_pauses_are_refused_on_a_seeded_build(self):
+        self.state("set-stage", "validation")
+        self.state("resolve-gate", "seed", "provided")
+        for pause_type in ("recall-offer", "thin-evidence-decision"):
+            with self.subTest(pause_type=pause_type):
+                self.assertEqual(self.state("set-run-status", "awaiting-user", "--type", pause_type, "--reason", "x")[0], 1)
+
+    def test_unknown_type_and_missing_reason_are_refused(self):
+        self.state("set-stage", "intake")
+        self.assertEqual(self.state("set-run-status", "awaiting-user", "--type", "invented", "--reason", "x")[0], 1)
+        self.assertEqual(self.state("set-run-status", "awaiting-user", "--reason", "x")[0], 1)
+        self.assertEqual(self.state("set-run-status", "checkpoint")[0], 1)
+        self.assertEqual(self.state("set-run-status", "blocked-external")[0], 1)
+        # --type is meaningless outside a pause and must not be silently accepted.
+        self.assertEqual(self.state("set-run-status", "checkpoint", "--type", "seed-intake", "--reason", "x")[0], 1)
+
+    def test_check_stop_prefers_a_fresh_status_over_the_complete_loop_gate(self):
+        self.state("set-stage", "block-testing")
+        self.state("set-run-status", "checkpoint", "--reason", "reporting progress")
+        rc, receipt = self.state("check-stop", "--since", "2000-01-01T00:00:00Z")
+        self.assertEqual(rc, 0)
+        self.assertTrue(receipt["allow_stop"])
+        self.assertEqual(receipt["basis"], "run-status")
+        self.assertEqual(receipt["issues"], [])
+
+    def test_check_stop_ignores_a_status_older_than_the_users_last_turn(self):
+        self.state("set-stage", "block-testing")
+        self.state("set-run-status", "checkpoint", "--reason", "reporting progress")
+        rc, receipt = self.state("check-stop", "--since", "2099-01-01T00:00:00Z")
+        self.assertEqual(rc, 1)
+        self.assertFalse(receipt["allow_stop"])
+        self.assertEqual(receipt["basis"], "complete-loop")
+        self.assertIn("stale", receipt["reason"])
+
+    def test_active_and_complete_never_excuse_an_incomplete_stop(self):
+        self.state("set-stage", "final-qa")
+        for status in ("active", "complete"):
+            with self.subTest(status=status):
+                self.state("set-run-status", status)
+                _, receipt = self.state("check-stop")
+                self.assertFalse(receipt["allow_stop"])
+                self.assertEqual(receipt["basis"], "complete-loop")
+
+    def test_check_stop_reports_structural_damage_as_well_as_gate_gaps(self):
+        self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "search", "--command", "cmd", "--count", "1"]
+        )
+        self.state("set-stage", "final-qa")
+        data = self.load()
+        del data["working_dir"]
+        Path(self.manifest).write_text(json.dumps(data), encoding="utf-8")
+        _, receipt = self.state("check-stop")
+        self.assertFalse(receipt["allow_stop"])
+        self.assertTrue(any(issue.startswith("structural:") for issue in receipt["issues"]))
+
+    def test_every_status_change_is_appended_to_history(self):
+        self.state("set-stage", "block-testing")
+        self.state("set-run-status", "checkpoint", "--reason", "first report")
+        self.state("set-run-status", "active")
+        self.state("set-run-status", "checkpoint", "--reason", "second report")
+        history = self.load()["build_state"]["run_status_history"]
+        self.assertEqual([item["status"] for item in history], ["checkpoint", "active", "checkpoint"])
+        self.assertEqual(history[0]["reason"], "first report")
+        self.assertEqual(history[0]["stage"], "block-testing")
+        _, receipt = self.state("check-stop")
+        self.assertEqual(receipt["idle_events"], 3)
+
+    def test_history_is_bounded(self):
+        self.state("set-stage", "block-testing")
+        limit = manifest_tool.RUN_STATUS_HISTORY_LIMIT
+        data = None
+        for index in range(limit + 5):
+            self.state("set-run-status", "checkpoint", "--reason", f"report {index}")
+        data = self.load()["build_state"]["run_status_history"]
+        self.assertEqual(len(data), limit)
+        # Truncation drops the oldest, so the most recent idle events are the ones retained.
+        self.assertEqual(data[-1]["reason"], f"report {limit + 4}")
+
+    def test_report_surfaces_run_status(self):
+        self.state("set-stage", "revision")
+        self.state("set-run-status", "blocked-external", "--reason", "E-utilities 503")
+        _, receipt = self.run_cli(["report", "--manifest", self.manifest])
+        self.assertEqual(receipt["run_status"]["status"], "blocked-external")
+        self.assertEqual(len(receipt["run_status_history"]), 1)
+
+    def test_check_stop_is_read_only(self):
+        self.state("set-stage", "final-qa")
+        before = Path(self.manifest).read_text(encoding="utf-8")
+        self.state("check-stop")
+        self.assertEqual(Path(self.manifest).read_text(encoding="utf-8"), before)
+
+
 if __name__ == "__main__":
     unittest.main()

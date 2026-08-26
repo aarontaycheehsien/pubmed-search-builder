@@ -413,6 +413,46 @@ Canonical stages are `intake`, `scope-lock`, `candidate-discovery`, `candidate-s
 
 Gate values are free-form, but record the **seed gate** as one of `provided`, `none`, or `partial` (`state resolve-gate seed none`). A `none` (no-seed) build is then auto-detected: read-only views (`state show`, `show`, `report`) surface a non-blocking `reminders` entry telling you to offer the optional heuristic recall check and gate handoff with `--require-recall-offer`. The reminder never affects exit codes; it just prevents the no-seed recall offer from being forgotten.
 
+### Run status: why the run is idle
+
+`build_state.run_status` records *why* a turn is ending while the build is incomplete. The Stop hook is a hard gate: an incomplete run may end a turn only when the manifest positively says why. Anything else falls through to the complete-loop gate and is blocked.
+
+```bash
+python scripts/manifest_tool.py state set-run-status awaiting-user --type seed-intake --reason "asked whether seed PMIDs exist"
+python scripts/manifest_tool.py state set-run-status checkpoint --reason "reporting block counts before continuing"
+python scripts/manifest_tool.py state set-run-status blocked-external --reason "PubMed E-utilities returned 503 on three retries"
+python scripts/manifest_tool.py state set-run-status active            # resume work
+python scripts/manifest_tool.py state check-stop --since <last-user-turn-utc>   # read-only Stop verdict
+```
+
+| Status | Meaning | Excuses an incomplete stop |
+| --- | --- | --- |
+| `active` | Still building | No — the complete-loop gate decides |
+| `awaiting-user` | Waiting on a named human decision | Yes, while fresh and type-matched |
+| `checkpoint` | Deliberate mid-run progress report | Yes, while fresh |
+| `blocked-external` | A dependency failed and the run cannot proceed | Yes, while fresh |
+| `complete` | Claiming the build is done | No — the complete-loop gate decides |
+
+`awaiting-user` requires a `--type`, and each type names a condition the gate re-derives from build state, so a pause can only be recorded at a point where that decision is genuinely outstanding:
+
+| `--type` | Valid only when |
+| --- | --- |
+| `seed-intake` | an intake stage and the seed gate is unresolved |
+| `framework-decision` | an intake stage and the framework gate is unresolved |
+| `scope-clarification` | an intake stage and the scope is not locked |
+| `concept-gate` | a pre-block-testing stage and the concept gate is unresolved |
+| `recall-reducing-filter-decision` | stage `block-testing`/`validation` and the filter gate is unresolved |
+| `recall-offer` | a no-seed build at `validation` with the recall offer still pending |
+| `thin-evidence-decision` | a no-seed build at `validation` or later with the unvalidated-handoff decision pending |
+| `critic-revision-decision` | stage `critic-review`/`revision` with an open decision |
+| `user-requested` | always — the user asked to stop |
+
+Each condition checks a stage as well as a field. That is deliberate: `recall_offer`, `unvalidated_handoff`, and every gate begin unresolved, so a field-only condition would be satisfied by any brand-new manifest and the type would be a label rather than a claim about where the build is.
+
+A status is **stale** once the user has spoken again: it was raised for an earlier exchange, so it stops excusing a stop and the complete-loop gate applies.
+
+No pause the tool records is unforgeable by an agent that drives the tool, so the guarantee is visibility rather than prevention: every status change appends to `build_state.run_status_history` and is surfaced by `state show`, `report`, and `check-stop` (`idle_events`). A build that keeps going idle says so on its own dashboard.
+
 ### Per-block evidence coverage
 
 Beyond the stage/gate readiness check, `build_state` also tracks **per-essential-block evidence coverage**, so the manifest can confirm each essential concept actually got an aggressive MeSH sweep and a block count rather than relying on the model's recollection. Register the essential blocks once (reuse the same `--blocks-file` built for `recall`/`audit-scaffold`), tag each sweep/count entry with `--block <label>`, and check coverage before handoff:

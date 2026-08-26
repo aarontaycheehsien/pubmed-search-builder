@@ -225,3 +225,27 @@ Stop only when:
 - final QA and low-count/filter checks pass where applicable;
 - the audit and manifest exist and the complete-loop gate passes;
 - remaining limitations and the need for external human PRESS review are explicit.
+
+## Ending a turn before the build is finished
+
+The build legitimately pauses: intake questions, scope clarifications, the recall offer, a
+critic decision, an outage. Record which one it is rather than ending the turn silently, because
+the Stop gate cannot distinguish an answered question from an abandoned build unless the manifest
+says so.
+
+```text
+python scripts/manifest_tool.py state set-run-status awaiting-user --type <type> --reason "..."
+python scripts/manifest_tool.py state set-run-status checkpoint --reason "..."          # mid-run progress report
+python scripts/manifest_tool.py state set-run-status blocked-external --reason "..."    # dependency failure
+python scripts/manifest_tool.py state set-run-status active                             # resuming
+```
+
+Each `--type` is checked against build state, so record the pause the build is actually at; see
+"Run status" in `references/mesh-and-pubmed-tools.md` for the table. A status stops counting once
+the user has spoken again, so raise it in the turn that ends on it, and clear it by returning to
+`active` when work resumes.
+
+A recorded pause is not a substitute for finishing. It only explains an idle run, and every one is
+appended to `build_state.run_status_history` where `state show` and `report` surface it — so when
+the gate cannot be satisfied at all, say so plainly in the final response and name the outstanding
+checks instead of implying the strategy was validated.

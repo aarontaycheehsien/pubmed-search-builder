@@ -28,6 +28,32 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/tool_guard.py\"",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/tool_guard_hook codex",
+            "timeout": 5,
+            "statusMessage": "Checking workflow provenance"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/tool_guard.py\"",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/tool_guard_hook codex",
+            "timeout": 5,
+            "statusMessage": "Attaching the active PubMed run"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
