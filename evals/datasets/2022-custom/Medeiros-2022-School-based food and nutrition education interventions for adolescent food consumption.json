@@ -13,8 +13,8 @@
     25797051,
     23451237
   ],
-  "source": "custom fixture; gold from DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
-  "gold_source": "DOIs file (C:/Users/aaron/Downloads/education.txt); 9/10 resolved via [AID]",
+  "source": "custom fixture; gold from a local DOI source file; 9/10 resolved via [AID]",
+  "gold_source": "local DOI source file; 9/10 resolved via [AID]",
   "protocol": {
     "seeds": "none \u2014 proceed under the no-seed workflow",
     "framework": "choose the appropriate framework yourself (PICO / PECO / PIRD / PCC / SPIDER) for this question",

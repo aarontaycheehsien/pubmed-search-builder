@@ -84,6 +84,42 @@ Have an idea? Open a GitHub issue describing:
 
 ## Testing Your Changes
 
+### Repository Lifecycle Hooks
+
+This repository commits equivalent project hooks for Codex (`.codex/hooks.json`) and
+Claude Code (`.claude/settings.json`). They load run state at session and subagent start,
+screen prompts for likely secrets, require material PubMed commands to use
+`scripts/workflow_tool.py`, and run the complete-loop manifest gate before handoff.
+
+Project hooks run only after the workspace is trusted. Inspect and approve them with
+`/hooks`; Codex records trust against the current hook hash, so hook changes require a new
+review. Claude Code likewise requires workspace trust and exposes its active project hooks
+through `/hooks`. Non-managed hooks can be disabled there for diagnostics.
+
+Create or attach a run before material search work:
+
+```bash
+python scripts/workflow_tool.py init --manifest /path/to/run/run_manifest.json --topic-slug demo
+python scripts/workflow_tool.py attach --manifest /path/to/run/run_manifest.json
+python scripts/workflow_tool.py status --manifest /path/to/run/run_manifest.json
+```
+
+Use `manifest_tool.py state set-question` when the workflow legitimately pauses for a user
+decision. For a longer pause or an abandoned build, record `state set-run-status paused` or
+`abandoned` with a reason. The Stop hook allows those states; otherwise it continues an
+incomplete handoff once and then reports the remaining gaps without forming a loop.
+
+Run hook and completion tests with:
+
+```bash
+python -m unittest tests.test_codex_hooks tests.test_manifest_complete_loop tests.test_workflow_tool
+python scripts/repository_hygiene.py
+```
+
+The hooks are local-only. They read event JSON, the selected run manifest, and local
+artifacts; they do not access the network or read session transcripts. Session-to-run
+pointers live under the gitignored `.codex/state/` directory.
+
 ### For Tool Changes
 
 If you modify `pubmed_tool.py`, `mesh_tool.py`, or `hooks_tool.py`:

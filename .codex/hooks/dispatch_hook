@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python .codex/hooks/dispatcher.py --client codex

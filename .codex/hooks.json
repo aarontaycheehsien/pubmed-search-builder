@@ -1,0 +1,88 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 5,
+            "statusMessage": "Loading PubMed workflow state",
+            "additionalContextLimit": 2500
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 5,
+            "statusMessage": "Loading PubMed subagent constraints",
+            "additionalContextLimit": 2500
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 5,
+            "statusMessage": "Checking prompt safety"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 5,
+            "statusMessage": "Checking PubMed workflow order"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 5,
+            "statusMessage": "Refreshing PubMed workflow state",
+            "additionalContextLimit": 2500
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/dispatcher.py\" --client codex",
+            "commandWindows": "git -c alias.codex=!.codex/hooks/dispatch_hook codex",
+            "timeout": 30,
+            "statusMessage": "Checking PubMed completion gates"
+          }
+        ]
+      }
+    ]
+  }
+}

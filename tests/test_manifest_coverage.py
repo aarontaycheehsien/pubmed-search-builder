@@ -1,7 +1,7 @@
 """Tests for the per-block evidence coverage gate (Phase 1).
 
 `state register-blocks`/`register-block` declare the essential concept blocks; each block must,
-before final handoff, have a MeSH sweep and a block count recorded against it (or a reasoned
+before final handoff, have a MeSH sweep, text-word evidence, and a block count recorded against it (or a reasoned
 waiver). This turns the workflow's "aggressive sweep + count-test per concept" prose into a
 machine-checked precondition. The gate is opt-in here via `show --require-coverage` / the
 read-only `state coverage`; folding it into `--require-ready` is deferred to Phase 2.
@@ -86,21 +86,24 @@ class ManifestCoverageTests(unittest.TestCase):
 
     # --- evidence matching ----------------------------------------------------------------
 
-    def test_explicit_block_tag_satisfies_both_requirements(self):
+    def test_explicit_block_tag_satisfies_all_requirements(self):
         self.state("register-block", "malaria")
         self.add(kind="mesh", block="malaria", command="mesh_tool.py sweep --concept malaria --output s.json")
+        self.add(kind="term-rank", block="malaria", command="pubmed_tool.py term-rank --input terms.json")
         self.add(kind="search", block="malaria", command="pubmed_tool.py search --query-file m.txt --retmax 0", count="5")
         rc, receipt = self.state("coverage")
         self.assertEqual(rc, 0)
         self.assertTrue(receipt["ok"])
         cov = receipt["coverage"]["malaria"]
         self.assertEqual(cov["mesh_sweep"]["status"], "satisfied")
+        self.assertEqual(cov["text_word_evidence"]["status"], "satisfied")
         self.assertEqual(cov["block_count"]["status"], "satisfied")
 
     def test_label_fallback_matches_when_block_tag_absent(self):
         self.state("register-block", "malaria")
         # No --block; the free-text label contains the block key.
         self.add(kind="mesh", label="malaria block", command="mesh_tool.py sweep --concept malaria --output s.json")
+        self.add(kind="mine", label="malaria vocabulary", command="pubmed_tool.py mine --pmids 1 --output mine.json", output="mine.json")
         self.add(kind="batch", label="malaria counts", command="pubmed_tool.py batch q.json")
         rc, receipt = self.state("coverage")
         self.assertEqual(rc, 0)
@@ -126,6 +129,7 @@ class ManifestCoverageTests(unittest.TestCase):
     def test_waiver_with_reason_clears_requirement(self):
         self.state("register-block", "rdt")
         self.add(kind="mesh", block="rdt", command="mesh_tool.py sweep --concept rdt --output s.json")
+        self.state("waive-requirement", "rdt", "text_word_evidence", "not applicable to this test fixture")
         self.state("waive-requirement", "rdt", "block_count", "text-word only by design")
         rc, receipt = self.state("coverage")
         self.assertEqual(rc, 0)
@@ -156,6 +160,7 @@ class ManifestCoverageTests(unittest.TestCase):
         self.assertTrue(any("coverage gap" in i for i in receipt["issues"]))
 
         self.add(kind="mesh", block="malaria", command="mesh_tool.py sweep --output s.json")
+        self.state("waive-requirement", "malaria", "text_word_evidence", "single-concept pilot")
         self.state("waive-requirement", "malaria", "block_count", "single-concept pilot")
         rc, receipt = self.run_cli(["show", "--manifest", self.manifest, "--require-coverage", "--validate"])
         self.assertEqual(rc, 0)

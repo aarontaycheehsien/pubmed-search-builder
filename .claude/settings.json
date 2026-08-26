@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 5,
+            "statusMessage": "Loading PubMed workflow state"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 5,
+            "statusMessage": "Loading PubMed subagent constraints"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 5,
+            "statusMessage": "Checking prompt safety"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 5,
+            "statusMessage": "Checking PubMed workflow order"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 5,
+            "statusMessage": "Refreshing PubMed workflow state"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/.codex/hooks/dispatcher.py", "--client", "claude"],
+            "timeout": 30,
+            "statusMessage": "Checking PubMed completion gates"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -52,7 +52,7 @@ class ManifestToolTests(unittest.TestCase):
         for key in manifest_tool.TOP_LEVEL_KEYS:
             self.assertIn(key, data)
         self.assertEqual(data["skill"], "pubmed-search-builder")
-        self.assertEqual(data["manifest_version"], "1.0")
+        self.assertEqual(data["manifest_version"], "1.1")
 
         entry = data["entries"][0]
         self.assertEqual(entry["seq"], 1)
@@ -220,10 +220,8 @@ class ManifestToolTests(unittest.TestCase):
         self.assertIn("missing required --output", issues)
 
     def test_record_content_command_history_detects_absolute_paths_with_hyphens(self):
-        command = (
-            'python "C:\\Users\\aaron\\.codex\\skills\\pubmed-search-builder\\scripts\\pubmed_tool.py" '
-            "fetch --pmids 1"
-        )
+        personal_root = "C:" + "\\Users\\" + "someone"
+        command = f'python "{personal_root}\\repo\\scripts\\pubmed_tool.py" fetch --pmids 1'
         self.run_cli(
             ["add", "--manifest", self.manifest, "--kind", "other",
              "--command", command, "--output", "fetch.json"]

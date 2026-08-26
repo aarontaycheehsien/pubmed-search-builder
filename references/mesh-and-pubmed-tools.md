@@ -279,6 +279,8 @@ Stdin input (`python scripts/audit_markdown.py - ...`) is acceptable only for ti
 
 Use `scripts/manifest_tool.py` to maintain a canonical `run_manifest.json` provenance ledger for the build. It makes no network calls and is the single machine-readable record of every material command run, its output path, the date, the PubMed result count where relevant, and any superseded file. Only the agent can maintain it, because the PubMed and MeSH tools stream JSON to stdout and never see agent-written artifacts such as concept-block `.txt` files or `audit_*.md`.
 
+For stage-aware runs, use `scripts/workflow_tool.py` as the execution boundary. It initializes or attaches a run, reports the next unmet gate, executes material commands only in their permitted stage, and registers declared inputs and outputs with hashes after successful execution. Direct `manifest_tool.py` commands remain available for legacy manifests and manual state decisions.
+
 ```bash
 python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug pressure-ulcer
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0" --count 192246 --label "main strategy" --note "final topic-only count"
@@ -287,6 +289,7 @@ python scripts/manifest_tool.py add --manifest run_manifest.json --kind artifact
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind artifact --command "python scripts/audit_markdown.py audit_pressure-ulcer_2026-05-31.json --output audit_pressure-ulcer_2026-05-31.md --if-exists suffix" --output audit_pressure-ulcer_2026-05-31_2.md --supersedes audit_pressure-ulcer_2026-05-31.md --note "re-rendered after cleanup"
 python scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files
 python scripts/manifest_tool.py report --manifest run_manifest.json
+python scripts/manifest_tool.py show --manifest run_manifest.json --validate --check-files --require-complete-loop
 ```
 
 `add` auto-creates the manifest if it is missing, stamps each entry with a UTC timestamp and a sequence number, and, when `--supersedes` is given, records the old path as superseded by the new `--output`. `--kind` is one of `search`, `fetch`, `related`, `mine`, `sample`, `term-rank`, `recall`, `batch`, `variants`, `validate`, `qa`, `mesh`, `artifact`, or `other`; tag entries with `--label` (e.g. `main strategy`, `robopet block`) so main/block/variant counts are distinguishable, tag sweeps and block counts with `--block <label>` to feed the per-block coverage gate (see *Per-block evidence coverage* below), and flag unresolved choices with `--open-decision`. For record-content commands, prefer the matching `fetch`, `mine`, or `sample` kind and record the saved JSON with manifest-level `--output`. Record material commands (count checks, block and full-strategy tests, validate, recall, variants, audit render) and every artifact write or supersession; exploratory throwaway lookups may be summarized or omitted, and entries must reflect commands that were actually run. `show --validate` checks the manifest is well-formed (valid JSON, required keys, integer-or-null counts, known kinds, no duplicate sequence numbers); add `--check-files` before final handoff to flag recorded output paths that do not exist. `report` prints a read-only build dashboard from the manifest (entries grouped by kind, the current audit path, superseded files, and open decisions) and never reruns searches. Report the saved `run_manifest.json` path with the audit files. Adds are normally sequential, but `add` is safe under accidental concurrency: each writes atomically and holds a short-lived `run_manifest.json.lock`, so parallel adds get unique sequence numbers and never corrupt the ledger.
@@ -301,11 +304,15 @@ python scripts/manifest_tool.py state resolve-gate framework PECO
 python scripts/manifest_tool.py state resolve-gate concept resolved
 python scripts/manifest_tool.py state set-question "Promote outcome to an AND block?"
 python scripts/manifest_tool.py state clear-question
+python scripts/manifest_tool.py state complete-stage concept-gate
+python scripts/manifest_tool.py state complete-stage limited-seed-evidence --disposition not-applicable --reason "no seed PMIDs were supplied"
+python scripts/manifest_tool.py state set-run-status paused --reason "waiting for protocol-owner review"
 python scripts/manifest_tool.py state show          # read-only
 python scripts/manifest_tool.py state check-ready    # exit 1 until the concept gate is resolved and no question is pending
+python scripts/manifest_tool.py state check-complete # strict complete-loop gate
 ```
 
-Stages are the workflow stage slugs (`question-intake`, `seed-intake`, `concept-gate`, `mesh-exploration`, `block-testing`, `validation`, `final-qa`, `audit-output`, ...); gates are `framework`, `seed`, `concept`, and `filter`. The same readiness check is folded into the final manifest validation: `manifest_tool.py show --validate --check-files --require-ready` is the binding handoff gate and exits non-zero while the concept gate is unresolved or a user question is still pending (`state check-ready` runs it standalone).
+Stages are the workflow stage slugs (`question-intake`, `seed-intake`, `concept-gate`, `mesh-exploration`, `block-testing`, `validation`, `final-qa`, `audit-output`, ...); gates are `framework`, `seed`, `concept`, and `filter`. A stage is recorded as `complete` or `not-applicable`; the latter requires a rationale. Run status is `active`, `paused`, `abandoned`, or `complete`. The legacy readiness gate remains available, while `manifest_tool.py show --validate --check-files --require-complete-loop` is the strict binding handoff gate for new runs.
 
 Gate values are free-form, but record the **seed gate** as one of `provided`, `none`, or `partial` (`state resolve-gate seed none`). A `none` (no-seed) build is then auto-detected: read-only views (`state show`, `show`, `report`) surface a non-blocking `reminders` entry telling you to offer the optional heuristic recall check and gate handoff with `--require-recall-offer`. The reminder never affects exit codes; it just prevents the no-seed recall offer from being forgotten.
 
@@ -317,12 +324,13 @@ Beyond the stage/gate readiness check, `build_state` also tracks **per-essential
 python scripts/manifest_tool.py state register-blocks --blocks-file blocks.json   # seed blocks from the blocks-file labels
 python scripts/manifest_tool.py state register-block "malaria"                    # or register one label at a time
 python scripts/manifest_tool.py add --kind mesh   --block "malaria" --command "python scripts/mesh_tool.py sweep --concept malaria --output sweep_malaria.json" --output sweep_malaria.json
+python scripts/manifest_tool.py add --kind mine   --block "malaria" --command "python scripts/pubmed_tool.py mine --pmids-file seed_pmids.txt --output mine_malaria.json" --output mine_malaria.json
 python scripts/manifest_tool.py add --kind search --block "malaria" --command "python scripts/pubmed_tool.py search --query-file malaria_block.txt --retmax 0" --count 192246
 python scripts/manifest_tool.py state coverage                                    # read-only; exit 1 while any block has a pending requirement
 python scripts/manifest_tool.py show --require-coverage --validate               # opt-in coverage gate (exits non-zero on a coverage gap)
 ```
 
-Each registered block needs two requirements satisfied: `mesh_sweep` (a `--kind mesh` entry, or any command containing `mesh_tool.py sweep`, tagged to the block) and `block_count` (a `--kind search` or `--kind batch` entry tagged to the block). Entry-to-block matching prefers the explicit `--block` tag and falls back to the free-text `--label` (so a label like `malaria block` still counts for block `malaria`). When a requirement genuinely does not apply — a concept with no MeSH descriptor, or one deliberately kept text-word-only — record a **reasoned waiver** instead of leaving it pending; the reason is mandatory and is surfaced in `state coverage`, `report`, and the audit:
+Each registered block needs three requirements satisfied: `mesh_sweep` (a `--kind mesh` entry, or any command containing `mesh_tool.py sweep`), `text_word_evidence` (a tagged mining or term-ranking entry), and `block_count` (a `--kind search` or `--kind batch` entry). Entry-to-block matching prefers the explicit `--block` tag and falls back to the free-text `--label` (so a label like `malaria block` still counts for block `malaria`). When a requirement genuinely does not apply — a concept with no MeSH descriptor, for example — record a **reasoned waiver** instead of leaving it pending; the reason is mandatory and is surfaced in `state coverage`, `report`, and the audit:
 
 ```bash
 python scripts/manifest_tool.py state waive-requirement "rapid diagnostic test" mesh_sweep "no MeSH descriptor exists; SCR/text-word coverage only"
@@ -347,7 +355,7 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 
 ## Tool-to-stage quick map
 
-`references/workflow.md` owns the canonical build sequence and stage order; this section does not restate it. The map below only says which bundled command belongs to each workflow stage. Throughout, maintain the run manifest with `scripts/manifest_tool.py`: run `init` once at the start, `add` after each material command or artifact, and `show --validate --check-files --require-ready` at the end (see the Run Manifest Tool section above).
+`references/workflow.md` owns the canonical build sequence and stage order; this section does not restate it. The map below only says which bundled command belongs to each workflow stage. Throughout a stage-aware run, initialize and execute material commands with `scripts/workflow_tool.py`; use `manifest_tool.py` for explicit state decisions and finish with `show --validate --check-files --require-complete-loop` (see the Run Manifest Tool section above).
 
 | Workflow stage | Bundled command(s) | Tool note |
 |---|---|---|
@@ -357,7 +365,7 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 | Text-word / block testing | `pubmed_tool.py search`, `batch` | Test text-word clusters, proximity, wildcard stems, and conditional Bramer reciprocal gap queries, then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
 | Validation | `pubmed_tool.py validate`; optional `recall --blocks-file`; no-seed: `state resolve-recall-offer` | Known-item seed retrieval; optionally estimate relative recall against a benchmark to find the bottleneck block (relative, not absolute). Diagnose missed seeds, including filter-caused misses. On a no-seed build, offer the optional heuristic recall check (`references/no-seed-recall-estimation.md`) and record the outcome. |
 | Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`; `manifest_tool.py state coverage` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). Check per-block coverage so no essential block was left unswept or untested. |
-| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-ready` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. `--require-ready` blocks handoff until the concept gate is resolved and no question is pending. |
+| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-complete-loop` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. The complete-loop gate binds stages, validation, final count, QA, audit, and artifact hashes. |
 
 ## Do Not Fabricate
 

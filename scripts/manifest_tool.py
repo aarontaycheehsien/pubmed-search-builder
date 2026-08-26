@@ -59,6 +59,7 @@ run (mirrors the "summarize tool work performed from available outputs" guardrai
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -69,7 +70,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-MANIFEST_VERSION = "1.0"
+MANIFEST_VERSION = "1.1"
 SKILL_NAME = "pubmed-search-builder"
 DEFAULT_SKILL_VERSION = "1.0.0"
 
@@ -135,13 +136,17 @@ STAGE_NAMES = (
 GATE_NAMES = ("framework", "seed", "concept", "filter")
 UNRESOLVED_GATE_VALUES = {"", "pending"}
 
-# Per-essential-block evidence requirements (Phase 1, opt-in via `state register-blocks` +
-# `show --require-coverage`). Each registered block must, before final handoff, either have
-# matching manifest evidence (a MeSH sweep and at least one block count test) or a reasoned
-# waiver. This turns the workflow's "aggressive sweep + count-test per concept" prose into a
-# machine-checked precondition instead of a model self-attestation.
-BLOCK_REQUIREMENTS = ("mesh_sweep", "block_count")
+# Per-essential-block evidence requirements (opt-in via `state register-blocks` +
+# `show --require-coverage`, and mandatory under `--require-complete-loop`). Each registered
+# block must have MeSH evidence, text-word evidence, and a block count, or a reasoned waiver.
+# This turns the workflow prose into a machine-checked precondition instead of a model
+# self-attestation.
+BLOCK_REQUIREMENTS = ("mesh_sweep", "text_word_evidence", "block_count")
 MESH_SWEEP_COMMAND_RE = re.compile(r"mesh_tool\.py[\"']?\s+sweep\b", re.IGNORECASE)
+TEXT_WORD_COMMAND_RE = re.compile(
+    r"pubmed_tool\.py[\"']?\s+(?:mine|term-rank)\b",
+    re.IGNORECASE,
+)
 
 # No-seed heuristic recall offer (opt-in via `state resolve-recall-offer` + `show --require-recall-offer`).
 # On a no-seed build the optional heuristic recall check must be offered once at the Validation stage;
@@ -155,6 +160,23 @@ RECALL_OFFER_RESOLVED = set(RECALL_OFFER_VALUES)
 # applies. Casefolded synonyms below are all treated as "no seeds supplied".
 SEED_GATE_VALUES = ("provided", "none", "partial")
 NO_SEED_GATE_VALUES = {"none", "no", "no-seed", "no-seeds", "no_seeds", "none-supplied", "noseed"}
+PROVIDED_SEED_GATE_VALUES = {"provided", "partial"}
+STAGE_DISPOSITIONS = ("complete", "not-applicable")
+RUN_STATUS_VALUES = ("active", "paused", "abandoned", "complete")
+UNVALIDATED_HANDOFF_VALUES = ("accepted", "declined")
+REQUIRED_COMPLETION_STAGES = (
+    "question-intake",
+    "seed-intake",
+    "concept-gate",
+    "pre-mesh-brainstorm",
+    "mesh-exploration",
+    "text-word-expansion",
+    "block-testing",
+    "validation",
+    "revision",
+    "final-qa",
+    "audit-output",
+)
 
 
 class ManifestError(Exception):
@@ -300,6 +322,36 @@ def parse_count(value: str | None) -> int | None:
         raise ManifestError(f"--count must be an integer, got {value!r}") from exc
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_artifact_path(value: str, *, manifest_path: Path, data: dict[str, object]) -> Path:
+    path = Path(value)
+    candidates = [path] if path.is_absolute() else [manifest_path.parent / path]
+    working_dir = data.get("working_dir")
+    if isinstance(working_dir, str) and working_dir and not path.is_absolute():
+        candidates.append(Path(working_dir) / path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return candidates[0].resolve()
+
+
+def hash_inputs(values: list[str], *, manifest_path: Path, data: dict[str, object]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for value in values:
+        resolved = resolve_artifact_path(value, manifest_path=manifest_path, data=data)
+        if not resolved.is_file():
+            raise ManifestError(f"Input artifact does not exist: {value}")
+        hashes[value] = sha256_file(resolved)
+    return hashes
+
+
 def base_receipt(operation: str, path: Path, data: dict[str, object]) -> dict[str, object]:
     return {
         "ok": True,
@@ -363,8 +415,27 @@ def validate_manifest(
         out = entry.get("output_path")
         if isinstance(out, str) and out:
             output_paths.add(out)
-            if check_files and not output_path_exists(out, manifest_path=manifest_path, data=data):
-                issues.append(f"entry seq={seq} output_path does not exist: {out}")
+            if check_files:
+                resolved_output = (
+                    resolve_artifact_path(out, manifest_path=manifest_path, data=data)
+                    if manifest_path is not None
+                    else Path(out)
+                )
+                if not resolved_output.is_file():
+                    issues.append(f"entry seq={seq} output_path does not exist: {out}")
+                elif isinstance(entry.get("output_sha256"), str) and entry.get("output_sha256"):
+                    if sha256_file(resolved_output) != entry["output_sha256"]:
+                        issues.append(f"entry seq={seq} output artifact hash no longer matches: {out}")
+        input_hashes = entry.get("input_sha256", {})
+        if input_hashes is not None and not isinstance(input_hashes, dict):
+            issues.append(f"entry seq={seq} input_sha256 is not an object")
+        elif check_files and isinstance(input_hashes, dict) and manifest_path is not None:
+            for input_path, expected_hash in input_hashes.items():
+                resolved_input = resolve_artifact_path(str(input_path), manifest_path=manifest_path, data=data)
+                if not resolved_input.is_file():
+                    issues.append(f"entry seq={seq} input artifact does not exist: {input_path}")
+                elif not isinstance(expected_hash, str) or sha256_file(resolved_input) != expected_hash:
+                    issues.append(f"entry seq={seq} input artifact hash no longer matches: {input_path}")
         command = str(entry.get("command", ""))
         command_match = RECORD_CONTENT_COMMAND_RE.search(command)
         command_kind = command_match.group(1).lower() if command_match else None
@@ -403,11 +474,14 @@ def new_build_state() -> dict[str, object]:
     return {
         "current_stage": None,
         "stages_completed": [],
+        "stage_records": {},
         "gates": {gate: "pending" for gate in GATE_NAMES},
         "pending_user_question": "",
         "open_decisions": [],
         "blocks": {},
         "recall_offer": "pending",
+        "unvalidated_handoff": {"status": "pending", "reason": ""},
+        "run_status": {"status": "active", "reason": ""},
         "updated_utc": utc_now(),
     }
 
@@ -429,6 +503,12 @@ def ensure_build_state(data: dict[str, object]) -> dict[str, object]:
             state["gates"].setdefault(gate, "pending")
     if not isinstance(state.get("blocks"), dict):
         state["blocks"] = {}
+    if not isinstance(state.get("stage_records"), dict):
+        state["stage_records"] = {}
+    if not isinstance(state.get("unvalidated_handoff"), dict):
+        state["unvalidated_handoff"] = base["unvalidated_handoff"]
+    if not isinstance(state.get("run_status"), dict):
+        state["run_status"] = base["run_status"]
     return state
 
 
@@ -444,6 +524,183 @@ def build_state_readiness(state: dict[str, object]) -> list[str]:
         issues.append(f"unresolved user question pending: {question}")
     if not gate_resolved(state.get("gates", {}).get("concept")):
         issues.append("concept gate is not resolved")
+    return issues
+
+
+def unresolved_entry_decisions(entries: list[object]) -> list[dict[str, object]]:
+    open_by_seq = {
+        int(entry.get("seq")): entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("open_decision")
+        and isinstance(entry.get("seq"), int)
+    }
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        resolved = entry.get("resolves_decision_seqs", [])
+        if isinstance(resolved, list):
+            for seq in resolved:
+                if isinstance(seq, int):
+                    open_by_seq.pop(seq, None)
+    return [open_by_seq[key] for key in sorted(open_by_seq)]
+
+
+def stage_disposition(state: dict[str, object], stage: str) -> str:
+    records = state.get("stage_records") if isinstance(state.get("stage_records"), dict) else {}
+    record = records.get(stage) if isinstance(records, dict) else None
+    if isinstance(record, dict) and record.get("status") in STAGE_DISPOSITIONS:
+        return str(record["status"])
+    completed = state.get("stages_completed") if isinstance(state.get("stages_completed"), list) else []
+    return "complete" if stage in completed else ""
+
+
+def entry_output_json(
+    entry: dict[str, object], *, manifest_path: Path, data: dict[str, object]
+) -> dict[str, object] | None:
+    value = entry.get("output_path")
+    if not isinstance(value, str) or not value.lower().endswith(".json"):
+        return None
+    path = resolve_artifact_path(value, manifest_path=manifest_path, data=data)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def strategy_hashes(entry: dict[str, object]) -> set[str]:
+    values = entry.get("input_sha256")
+    if not isinstance(values, dict):
+        return set()
+    return {
+        str(digest)
+        for path, digest in values.items()
+        if str(path).lower().endswith(".txt") and isinstance(digest, str) and digest
+    }
+
+
+def complete_loop_issues(
+    data: dict[str, object], *, manifest_path: Path
+) -> list[str]:
+    """Return deterministic reasons a completed main-branch workflow cannot be handed off."""
+    issues = validate_manifest(data, check_files=True, manifest_path=manifest_path)
+    state_value = data.get("build_state")
+    if not isinstance(state_value, dict):
+        return issues + ["build_state is not initialized"]
+    state = ensure_build_state(data)
+    entries = [entry for entry in data.get("entries", []) if isinstance(entry, dict)]
+
+    for gate in GATE_NAMES:
+        if not gate_resolved((state.get("gates") or {}).get(gate)):
+            issues.append(f"gate is unresolved: {gate}")
+    if str(state.get("pending_user_question") or "").strip():
+        issues.append("a user/protocol question is still pending")
+    if state.get("open_decisions"):
+        issues.append("build_state contains unresolved decisions")
+    for entry in unresolved_entry_decisions(entries):
+        issues.append(f"manifest entry seq={entry.get('seq')} has an unresolved decision")
+
+    required_stages = list(REQUIRED_COMPLETION_STAGES)
+    seed_value = str((state.get("gates") or {}).get("seed", "")).strip().lower()
+    if seed_value in PROVIDED_SEED_GATE_VALUES:
+        required_stages.insert(2, "limited-seed-evidence")
+    for stage in required_stages:
+        disposition = stage_disposition(state, stage)
+        if disposition not in STAGE_DISPOSITIONS:
+            issues.append(f"required stage is not recorded: {stage}")
+        elif disposition == "not-applicable":
+            record = (state.get("stage_records") or {}).get(stage, {})
+            if not isinstance(record, dict) or not str(record.get("reason") or "").strip():
+                issues.append(f"stage {stage} is not-applicable without a reason")
+
+    blocks = state.get("blocks") if isinstance(state.get("blocks"), dict) else {}
+    if not blocks:
+        issues.append("no essential blocks are registered")
+    issues.extend(f"coverage gap: {item}" for item in block_coverage_readiness(state, entries))
+
+    if seed_value in PROVIDED_SEED_GATE_VALUES:
+        validations = [entry for entry in entries if entry.get("kind") == "validate"]
+        successful_validation = any(
+            entry.get("output_sha256")
+            and (payload := entry_output_json(entry, manifest_path=manifest_path, data=data)) is not None
+            and payload.get("ok") is True
+            for entry in validations
+        )
+        if not successful_validation:
+            issues.append("seeded build lacks a known-item validation entry")
+    elif seed_value in NO_SEED_GATE_VALUES:
+        recall_value = state.get("recall_offer", "pending")
+        if recall_value not in RECALL_OFFER_RESOLVED:
+            issues.extend(recall_offer_readiness(state))
+        has_recall = any(
+            entry.get("kind") == "recall"
+            and entry.get("output_sha256")
+            and (payload := entry_output_json(entry, manifest_path=manifest_path, data=data)) is not None
+            and payload.get("ok") is True
+            for entry in entries
+        )
+        if recall_value != "done" or not has_recall:
+            unvalidated = state.get("unvalidated_handoff")
+            status = unvalidated.get("status") if isinstance(unvalidated, dict) else "pending"
+            reason = unvalidated.get("reason") if isinstance(unvalidated, dict) else ""
+            if status != "accepted" or not str(reason or "").strip():
+                issues.append("no-seed build lacks explicit acceptance of an empirically unvalidated handoff")
+
+    final_qa = next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "qa" and "final-qa" in str(entry.get("command", "")).lower()
+        ),
+        None,
+    )
+    if final_qa is None:
+        issues.append("no final-qa manifest entry exists")
+    else:
+        if not final_qa.get("output_sha256") or not strategy_hashes(final_qa):
+            issues.append("final QA is not hash-bound to its output and strategy input")
+        payload = entry_output_json(final_qa, manifest_path=manifest_path, data=data)
+        if payload is None or payload.get("ok") is not True:
+            issues.append("latest final QA artifact does not report ok=true")
+
+    final_search = next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "search"
+            and isinstance(entry.get("count"), int)
+            and strategy_hashes(entry)
+        ),
+        None,
+    )
+    if final_search is None:
+        issues.append("no hash-bound final PubMed count entry exists")
+    elif final_qa is not None and not (strategy_hashes(final_qa) & strategy_hashes(final_search)):
+        issues.append("final PubMed count and final QA do not bind to the same strategy hash")
+
+    audit = next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "artifact"
+            and str(entry.get("output_path") or "").lower().endswith(".md")
+            and "audit_markdown.py" in str(entry.get("command", "")).lower()
+        ),
+        None,
+    )
+    if audit is None:
+        issues.append("no final audit Markdown render is recorded")
+    else:
+        audit_inputs = audit.get("input_sha256")
+        has_audit_json = isinstance(audit_inputs, dict) and any(
+            str(path).lower().endswith(".json") and isinstance(digest, str) and digest
+            for path, digest in audit_inputs.items()
+        )
+        if not audit.get("output_sha256") or not has_audit_json:
+            issues.append("final audit Markdown is not hash-bound to its audit JSON input")
+        if final_qa is not None and int(audit.get("seq") or 0) <= int(final_qa.get("seq") or 0):
+            issues.append("audit Markdown was not rendered after final QA")
     return issues
 
 
@@ -508,6 +765,9 @@ def requirement_satisfied(requirement: str, entries: list[object], block_key: st
         command = str(entry.get("command", ""))
         if requirement == "mesh_sweep":
             if kind == "mesh" or MESH_SWEEP_COMMAND_RE.search(command):
+                return True
+        elif requirement == "text_word_evidence":
+            if kind in ("mine", "term-rank") or TEXT_WORD_COMMAND_RE.search(command):
                 return True
         elif requirement == "block_count":
             if kind in ("search", "batch"):
@@ -601,7 +861,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
     action = args.state_action
 
     # Read-only actions never lock or write.
-    if action in ("show", "check-ready", "coverage"):
+    if action in ("show", "check-ready", "check-complete", "coverage"):
         data = load_manifest(path)
         state = ensure_build_state(data)
         receipt = base_receipt(f"state-{action}", path, data)
@@ -611,6 +871,10 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             receipt["reminders"] = reminders
         if action == "check-ready":
             issues = build_state_readiness(state)
+            receipt["ok"] = not issues
+            receipt["issues"] = issues
+        elif action == "check-complete":
+            issues = complete_loop_issues(data, manifest_path=path)
             receipt["ok"] = not issues
             receipt["issues"] = issues
         elif action == "coverage":
@@ -637,8 +901,27 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
         elif action == "complete-stage":
             if args.stage not in STAGE_NAMES:
                 raise ManifestError(f"Unknown stage {args.stage!r}. Choose from: {', '.join(STAGE_NAMES)}.")
+            disposition = args.disposition
+            reason = str(args.reason or "").strip()
+            if disposition not in STAGE_DISPOSITIONS:
+                raise ManifestError(f"Unknown stage disposition: {disposition!r}")
+            if disposition == "not-applicable" and not reason:
+                raise ManifestError("not-applicable stages require a non-empty --reason")
+            if args.stage == "peer-review-handoff":
+                if disposition != "complete":
+                    raise ManifestError("peer-review-handoff cannot be marked not-applicable")
+                completion_issues = complete_loop_issues(data, manifest_path=path)
+                if completion_issues:
+                    raise ManifestError("peer-review-handoff is blocked: " + "; ".join(completion_issues[:5]))
             if args.stage not in state["stages_completed"]:
                 state["stages_completed"].append(args.stage)
+            state["stage_records"][args.stage] = {
+                "status": disposition,
+                "reason": reason,
+                "recorded_utc": now,
+            }
+            if args.stage == "peer-review-handoff":
+                state["run_status"] = {"status": "complete", "reason": reason, "recorded_utc": now}
         elif action == "resolve-gate":
             if args.gate not in GATE_NAMES:
                 raise ManifestError(f"Unknown gate {args.gate!r}. Choose from: {', '.join(GATE_NAMES)}.")
@@ -653,6 +936,28 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
                     f"Unknown recall-offer value {args.value!r}. Choose from: {', '.join(RECALL_OFFER_VALUES)}."
                 )
             state["recall_offer"] = args.value
+        elif action == "resolve-unvalidated-handoff":
+            reason = str(args.reason or "").strip()
+            if args.value not in UNVALIDATED_HANDOFF_VALUES:
+                raise ManifestError(f"Unknown unvalidated handoff value: {args.value!r}")
+            if not reason:
+                raise ManifestError("resolve-unvalidated-handoff requires a non-empty --reason")
+            state["unvalidated_handoff"] = {
+                "status": args.value,
+                "reason": reason,
+                "recorded_utc": now,
+            }
+        elif action == "set-run-status":
+            reason = str(args.reason or "").strip()
+            if args.value not in RUN_STATUS_VALUES:
+                raise ManifestError(f"Unknown run status: {args.value!r}")
+            if args.value in ("paused", "abandoned") and not reason:
+                raise ManifestError(f"run status {args.value!r} requires a non-empty --reason")
+            if args.value == "complete":
+                completion_issues = complete_loop_issues(data, manifest_path=path)
+                if completion_issues:
+                    raise ManifestError("run cannot be completed: " + "; ".join(completion_issues[:5]))
+            state["run_status"] = {"status": args.value, "reason": reason, "recorded_utc": now}
         elif action == "register-blocks":
             blocks = state["blocks"]
             for label in load_block_labels(args.blocks_file):
@@ -712,6 +1017,8 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
     count = parse_count(args.count)
     output_path = args.output or None
     supersedes = args.supersedes or None
+    if args.stage and args.stage not in STAGE_NAMES:
+        raise ManifestError(f"Unknown --stage {args.stage!r}. Choose from: {', '.join(STAGE_NAMES)}.")
 
     # The lock serializes the whole read-modify-write so concurrent adds get unique seqs.
     with manifest_lock(path):
@@ -719,6 +1026,12 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
         now = utc_now()
         entries = data["entries"]
         seq = len(entries) + 1
+        input_hashes = hash_inputs(args.input, manifest_path=path, data=data)
+        output_hash = None
+        if output_path:
+            resolved_output = resolve_artifact_path(output_path, manifest_path=path, data=data)
+            if resolved_output.is_file():
+                output_hash = sha256_file(resolved_output)
         entries.append(
             {
                 "seq": seq,
@@ -726,12 +1039,16 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
                 "kind": args.kind,
                 "label": args.label or "",
                 "block": args.block or "",
+                "stage": args.stage or "",
                 "command": args.command,
                 "output_path": output_path,
+                "output_sha256": output_hash,
+                "input_sha256": input_hashes,
                 "count": count,
                 "supersedes": supersedes,
                 "note": args.note or "",
                 "open_decision": bool(args.open_decision),
+                "resolves_decision_seqs": list(args.resolves_decision_seq),
             }
         )
         if supersedes:
@@ -763,7 +1080,8 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
     require_ready = getattr(args, "require_ready", False)
     require_coverage = getattr(args, "require_coverage", False)
     require_recall_offer = getattr(args, "require_recall_offer", False)
-    if args.validate or args.check_files or require_ready or require_coverage or require_recall_offer:
+    require_complete_loop = getattr(args, "require_complete_loop", False)
+    if args.validate or args.check_files or require_ready or require_coverage or require_recall_offer or require_complete_loop:
         issues = (
             validate_manifest(data, check_files=args.check_files, manifest_path=path)
             if (args.validate or args.check_files)
@@ -804,6 +1122,11 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
                 )
             else:
                 issues.extend(f"not ready for handoff: {reason}" for reason in recall_offer_readiness(state))
+        if require_complete_loop:
+            completion = complete_loop_issues(data, manifest_path=path)
+            for issue in completion:
+                if issue not in issues:
+                    issues.append(issue)
         receipt["ok"] = not issues
         receipt["issues"] = issues
     return receipt
@@ -831,7 +1154,7 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
                 "output_path": entry.get("output_path"),
             }
         )
-        if entry.get("open_decision"):
+        if entry in unresolved_entry_decisions(entries):
             open_decisions.append(
                 {
                     "seq": entry.get("seq"),
@@ -892,6 +1215,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--kind", required=True, help=f"Entry kind, one of: {', '.join(ENTRY_KINDS)}.")
     add_parser.add_argument("--command", required=True, help="The exact command or agent action this entry records.")
     add_parser.add_argument("--output", help="Output file path produced by this command, if any.")
+    add_parser.add_argument("--input", action="append", default=[], help="Input artifact to hash; repeatable.")
     add_parser.add_argument("--count", help="PubMed result count, if any (integer).")
     add_parser.add_argument("--supersedes", help="Path of a file that this entry's output replaces.")
     add_parser.add_argument("--note", default="", help="Short free-text note.")
@@ -901,7 +1225,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Essential-block label this entry supplies evidence for (links sweeps/counts to a registered block for the coverage gate).",
     )
+    add_parser.add_argument("--stage", default="", help="Canonical workflow stage associated with this entry.")
     add_parser.add_argument("--open-decision", action="store_true", help="Flag this entry as an unresolved decision to surface in report.")
+    add_parser.add_argument(
+        "--resolves-decision-seq",
+        action="append",
+        default=[],
+        type=int,
+        help="Resolve a prior open-decision entry by sequence number; repeatable.",
+    )
     add_parser.add_argument("--topic-slug", default="", help="Topic slug, used only when auto-creating the manifest.")
     add_parser.add_argument(
         "--skill-version", default=DEFAULT_SKILL_VERSION, help="Skill version, used only when auto-creating the manifest."
@@ -919,12 +1251,17 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser.add_argument(
         "--require-coverage",
         action="store_true",
-        help="Per-block evidence gate (opt-in): also fail unless every registered essential block has a MeSH sweep and a block count, or a reasoned waiver.",
+        help="Per-block evidence gate (opt-in): also fail unless every registered essential block has MeSH evidence, text-word evidence, and a block count, or a reasoned waiver.",
     )
     show_parser.add_argument(
         "--require-recall-offer",
         action="store_true",
         help="No-seed gate (opt-in): also fail unless the optional heuristic recall check was offered and its outcome recorded (resolve-recall-offer). Pass only on no-seed builds.",
+    )
+    show_parser.add_argument(
+        "--require-complete-loop",
+        action="store_true",
+        help="Combined final-handoff gate for stages, evidence, validation, QA, hashes, and audit output.",
     )
 
     report_parser = subparsers.add_parser("report", help="Read-only build dashboard from the manifest (no reruns).")
@@ -947,6 +1284,8 @@ def build_parser() -> argparse.ArgumentParser:
     set_stage.add_argument("stage", help="Stage name.")
     complete_stage = add_state_action("complete-stage", "Mark a workflow stage completed.")
     complete_stage.add_argument("stage", help="Stage name.")
+    complete_stage.add_argument("--disposition", choices=STAGE_DISPOSITIONS, default="complete")
+    complete_stage.add_argument("--reason", default="", help="Required for not-applicable; optional completion note.")
     resolve_gate = add_state_action("resolve-gate", f"Record a gate decision, gate one of: {', '.join(GATE_NAMES)}.")
     resolve_gate.add_argument("gate", help="Gate name.")
     resolve_gate.add_argument(
@@ -963,6 +1302,17 @@ def build_parser() -> argparse.ArgumentParser:
         f"Record the no-seed heuristic recall-offer outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.",
     )
     resolve_recall_offer.add_argument("value", help=f"Outcome, one of: {', '.join(RECALL_OFFER_VALUES)}.")
+
+    resolve_unvalidated = add_state_action(
+        "resolve-unvalidated-handoff",
+        "Record explicit acceptance or rejection of an empirically unvalidated no-seed handoff.",
+    )
+    resolve_unvalidated.add_argument("value", choices=UNVALIDATED_HANDOFF_VALUES)
+    resolve_unvalidated.add_argument("--reason", required=True)
+
+    set_run_status = add_state_action("set-run-status", "Set active, paused, abandoned, or complete run status.")
+    set_run_status.add_argument("value", choices=RUN_STATUS_VALUES)
+    set_run_status.add_argument("--reason", default="")
 
     register_blocks = add_state_action(
         "register-blocks", "Register essential blocks for the coverage gate from a --blocks-file."
@@ -984,6 +1334,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_state_action("show", "Print the current build-state block (read-only).", mutating=False)
     add_state_action(
         "check-ready", "Report whether the build is ready for final handoff (read-only; exit 1 if not).", mutating=False
+    )
+    add_state_action(
+        "check-complete", "Run the combined stage-aware completion gate (read-only).", mutating=False
     )
     add_state_action(
         "coverage",
