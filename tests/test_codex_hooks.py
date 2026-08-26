@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -131,7 +132,7 @@ class HookBehaviorTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
-    def attach(self, manifest, *, session="hook-test"):
+    def attach(self, manifest, *, session="hook-test", client="codex"):
         payload = event(
             "PostToolUse",
             session=session,
@@ -139,9 +140,59 @@ class HookBehaviorTests(unittest.TestCase):
             tool_input={"command": f'python scripts/workflow_tool.py attach --manifest "{manifest}"'},
             tool_response={"exit_code": 0},
         )
-        result, response = run_hook(payload)
+        result, response = run_hook(payload, client=client)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(response["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+
+    def make_complete_manifest(self, directory):
+        root = Path(directory)
+        strategy = root / "strategy.txt"
+        strategy.write_text('"Population"[Mesh]\n', encoding="utf-8")
+        qa = root / "final_qa.json"
+        qa.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        audit_json = root / "audit.json"
+        audit_json.write_text(json.dumps({"final_strategy": strategy.read_text()}), encoding="utf-8")
+        audit_md = root / "audit.md"
+        audit_md.write_text("# Audit\n", encoding="utf-8")
+        final_md = root / "final_strategy.md"
+        final_md.write_text("# Final PubMed Strategy\n", encoding="utf-8")
+
+        def digest(path):
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        now = "2026-01-01T00:00:00Z"
+        entries = [
+            {"seq": 1, "timestamp_utc": now, "kind": "mesh", "block": "population", "command": "mesh_tool.py sweep", "output_path": None, "input_sha256": {}, "count": None},
+            {"seq": 2, "timestamp_utc": now, "kind": "term-rank", "block": "population", "command": "pubmed_tool.py term-rank", "output_path": None, "input_sha256": {}, "count": None},
+            {"seq": 3, "timestamp_utc": now, "kind": "search", "block": "population", "command": "pubmed_tool.py search --query-file strategy.txt", "output_path": None, "input_sha256": {str(strategy): digest(strategy)}, "count": 10},
+            {"seq": 4, "timestamp_utc": now, "kind": "qa", "command": "hooks_tool.py final-qa --strategy-file strategy.txt", "output_path": str(qa), "output_sha256": digest(qa), "input_sha256": {str(strategy): digest(strategy)}, "count": None},
+            {"seq": 5, "timestamp_utc": now, "kind": "artifact", "command": "audit_markdown.py audit.json", "output_path": str(audit_md), "output_sha256": digest(audit_md), "input_sha256": {str(audit_json): digest(audit_json)}, "count": None},
+            {"seq": 6, "timestamp_utc": now, "kind": "artifact", "command": "export_final.py --strategy strategy.txt", "output_path": str(final_md), "output_sha256": digest(final_md), "input_sha256": {str(strategy): digest(strategy)}, "count": 10},
+        ]
+        stage_records = {
+            stage: {"status": "complete", "reason": "", "recorded_utc": now}
+            for stage in (
+                "question-intake", "seed-intake", "concept-gate", "pre-mesh-brainstorm",
+                "mesh-exploration", "text-word-expansion", "block-testing", "validation",
+                "revision", "final-qa", "audit-output",
+            )
+        }
+        manifest = root / "run_manifest.json"
+        manifest.write_text(json.dumps({
+            "manifest_version": "1.1", "skill": "pubmed-search-builder", "skill_version": "1.0.0",
+            "topic_slug": "complete", "created_utc": now, "updated_utc": now,
+            "working_dir": str(root), "entries": entries, "superseded": [],
+            "build_state": {
+                "current_stage": "audit-output", "stages_completed": list(stage_records),
+                "stage_records": stage_records,
+                "gates": {"framework": "PICO", "seed": "none", "concept": "resolved", "filter": "none"},
+                "pending_user_question": "", "open_decisions": [],
+                "blocks": {"population": {"waivers": {}}}, "recall_offer": "declined",
+                "unvalidated_handoff": {"status": "accepted", "reason": "No benchmark exists"},
+                "run_status": {"status": "active", "reason": ""},
+            },
+        }), encoding="utf-8")
+        return manifest
 
     def test_secret_block_does_not_echo_value(self):
         value = "A" * 32
@@ -168,6 +219,8 @@ class HookBehaviorTests(unittest.TestCase):
     def test_direct_material_command_is_blocked_but_maintenance_is_allowed(self):
         _result, response = run_hook(event("PreToolUse", tool_name="Bash", tool_input={"command": "python scripts/pubmed_tool.py search asthma"}))
         self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
+        _result, response = run_hook(event("PreToolUse", tool_name="Bash", tool_input={"command": "python scripts/export_final.py --strategy strategy.txt"}))
+        self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
         _result, response = run_hook(event("PreToolUse", tool_name="Bash", tool_input={"command": "python scripts/pubmed_tool.py --help"}))
         self.assertIsNone(response)
 
@@ -187,6 +240,9 @@ class HookBehaviorTests(unittest.TestCase):
             _result, response = run_hook(event("PreToolUse", tool_name="Bash", tool_input={"command": command}))
             self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertIn("out of order", response["hookSpecificOutput"]["permissionDecisionReason"])
+            export_command = f'python scripts/workflow_tool.py export-final --manifest "{manifest}" --strategy strategy.txt'
+            _result, response = run_hook(event("PreToolUse", tool_name="Bash", tool_input={"command": export_command}))
+            self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_post_tool_binding_restores_context_for_session_and_subagent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,6 +308,27 @@ class HookBehaviorTests(unittest.TestCase):
             _result, second = run_hook(event("Stop", stop_hook_active=True))
             self.assertTrue(second["continue"])
             self.assertNotIn("decision", second)
+
+    def test_stop_requires_matching_final_export_for_codex_and_claude(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.make_complete_manifest(directory)
+            for client in ("codex", "claude"):
+                session = f"hook-test-{client}-complete"
+                self.attach(manifest, session=session, client=client)
+                _result, response = run_hook(
+                    event("Stop", session=session, stop_hook_active=False), client=client
+                )
+                self.assertEqual(response, {}, client)
+
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            export = next(entry for entry in data["entries"] if "export_final.py" in entry["command"])
+            export["input_sha256"] = {str(Path(directory) / "other.txt"): "0" * 64}
+            (Path(directory) / "other.txt").write_text("other", encoding="utf-8")
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            self.attach(manifest, session="hook-test-mismatch")
+            _result, response = run_hook(event("Stop", session="hook-test-mismatch", stop_hook_active=False))
+            self.assertEqual(response["decision"], "block")
+            self.assertIn("final_strategy.md", response["reason"])
 
 
 if __name__ == "__main__":

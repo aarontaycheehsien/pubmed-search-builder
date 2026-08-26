@@ -104,6 +104,17 @@ python scripts/workflow_tool.py attach --manifest /path/to/run/run_manifest.json
 python scripts/workflow_tool.py status --manifest /path/to/run/run_manifest.json
 ```
 
+At Audit output, create the deterministic handoff through the workflow wrapper so the
+export is registered atomically with the exact strategy input hash:
+
+```bash
+python scripts/workflow_tool.py export-final --manifest /path/to/run/run_manifest.json --strategy /path/to/run/strategy.txt --output /path/to/run/final_strategy.md
+```
+
+The complete-loop and Stop gates require this export to occur after final QA and the
+final PubMed count, and require its sole strategy input hash to equal the one hash shared
+by both validation entries. Direct `export_final.py` calls are blocked by both clients.
+
 Use `manifest_tool.py state set-question` when the workflow legitimately pauses for a user
 decision. For a longer pause or an abandoned build, record `state set-run-status paused` or
 `abandoned` with a reason. The Stop hook allows those states; otherwise it continues an

@@ -281,6 +281,14 @@ Use `scripts/manifest_tool.py` to maintain a canonical `run_manifest.json` prove
 
 For stage-aware runs, use `scripts/workflow_tool.py` as the execution boundary. It initializes or attaches a run, reports the next unmet gate, executes material commands only in their permitted stage, and registers declared inputs and outputs with hashes after successful execution. Direct `manifest_tool.py` commands remain available for legacy manifests and manual state decisions.
 
+At Audit output, use the dedicated wrapper to render and register the deterministic final handoff. `export_final.py` verifies that the supplied strategy bytes match the single hash shared by the latest successful final QA and final PubMed count; `workflow_tool.py export-final` then records that strategy input hash and the exported Markdown hash atomically:
+
+```bash
+python scripts/workflow_tool.py export-final --manifest run_manifest.json --strategy strategy.txt --output final_strategy.md
+```
+
+Do not invoke `export_final.py` directly in a guarded session. The shared Codex/Claude `PreToolUse` handler requires the workflow wrapper, and the Stop gate requires the recorded `final_strategy.md` entry. Repeating an identical export is safe and byte-stable; the exporter refuses to overwrite a different existing handoff, so a revised completed strategy must use a new run directory or explicitly archive the prior run first.
+
 ```bash
 python scripts/manifest_tool.py init --manifest run_manifest.json --topic-slug pressure-ulcer
 python scripts/manifest_tool.py add --manifest run_manifest.json --kind search --command "python scripts/pubmed_tool.py search --query-file full_strategy.txt --retmax 0" --count 192246 --label "main strategy" --note "final topic-only count"
@@ -365,7 +373,7 @@ If the user accepts, `pubmed_tool.py recall --pilot-query-file pilot.txt --auto-
 | Text-word / block testing | `pubmed_tool.py search`, `batch` | Test text-word clusters, proximity, wildcard stems, and conditional Bramer reciprocal gap queries, then single blocks, pairwise blocks, and the full topic-only strategy; test topic-plus-filter separately when a filter is used. |
 | Validation | `pubmed_tool.py validate`; optional `recall --blocks-file`; no-seed: `state resolve-recall-offer` | Known-item seed retrieval; optionally estimate relative recall against a benchmark to find the bottleneck block (relative, not absolute). Diagnose missed seeds, including filter-caused misses. On a no-seed build, offer the optional heuristic recall check (`references/no-seed-recall-estimation.md`) and record the outcome. |
 | Final QA | `pubmed_tool.py search --retmax 0`; `hooks_tool.py final-qa`, `filter-check`; `manifest_tool.py state coverage` | Run hygiene, then the final validation and cleanup offer (`workflow.md` §9). Check per-block coverage so no essential block was left unswept or untested. |
-| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `manifest_tool.py show --validate --check-files --require-complete-loop` | Assemble the audit JSON from saved outputs, author the judgment placeholders, render the Markdown, and report the saved audit and `run_manifest.json` paths. The complete-loop gate binds stages, validation, final count, QA, audit, and artifact hashes. |
+| Audit output | `pubmed_tool.py audit-scaffold` → `audit_markdown.py`; `workflow_tool.py export-final`; `manifest_tool.py show --validate --check-files --require-complete-loop` | Assemble and render the audit, export hash-validated `final_strategy.md`, and report the final strategy, audit, and manifest paths. The complete-loop gate requires the export input hash to equal the single strategy hash shared by final QA and the final count. |
 
 ## Do Not Fabricate
 

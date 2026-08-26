@@ -580,6 +580,44 @@ def strategy_hashes(entry: dict[str, object]) -> set[str]:
     }
 
 
+def latest_final_qa(entries: list[dict[str, object]]) -> dict[str, object] | None:
+    return next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "qa" and "final-qa" in str(entry.get("command", "")).lower()
+        ),
+        None,
+    )
+
+
+def latest_final_search(entries: list[dict[str, object]]) -> dict[str, object] | None:
+    return next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "search"
+            and isinstance(entry.get("count"), int)
+            and strategy_hashes(entry)
+        ),
+        None,
+    )
+
+
+def latest_final_export(entries: list[dict[str, object]]) -> dict[str, object] | None:
+    return next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry.get("kind") == "artifact"
+            and str(entry.get("output_path") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+            == "final_strategy.md"
+            and "export_final.py" in str(entry.get("command", "")).lower()
+        ),
+        None,
+    )
+
+
 def complete_loop_issues(
     data: dict[str, object], *, manifest_path: Path
 ) -> list[str]:
@@ -647,14 +685,7 @@ def complete_loop_issues(
             if status != "accepted" or not str(reason or "").strip():
                 issues.append("no-seed build lacks explicit acceptance of an empirically unvalidated handoff")
 
-    final_qa = next(
-        (
-            entry
-            for entry in reversed(entries)
-            if entry.get("kind") == "qa" and "final-qa" in str(entry.get("command", "")).lower()
-        ),
-        None,
-    )
+    final_qa = latest_final_qa(entries)
     if final_qa is None:
         issues.append("no final-qa manifest entry exists")
     else:
@@ -664,20 +695,30 @@ def complete_loop_issues(
         if payload is None or payload.get("ok") is not True:
             issues.append("latest final QA artifact does not report ok=true")
 
-    final_search = next(
-        (
-            entry
-            for entry in reversed(entries)
-            if entry.get("kind") == "search"
-            and isinstance(entry.get("count"), int)
-            and strategy_hashes(entry)
-        ),
-        None,
-    )
+    final_search = latest_final_search(entries)
+    shared_strategy_hashes: set[str] = set()
     if final_search is None:
         issues.append("no hash-bound final PubMed count entry exists")
-    elif final_qa is not None and not (strategy_hashes(final_qa) & strategy_hashes(final_search)):
-        issues.append("final PubMed count and final QA do not bind to the same strategy hash")
+    elif final_qa is not None:
+        shared_strategy_hashes = strategy_hashes(final_qa) & strategy_hashes(final_search)
+        if len(shared_strategy_hashes) != 1:
+            issues.append("final PubMed count and final QA do not bind to exactly one shared strategy hash")
+
+    final_export = latest_final_export(entries)
+    if final_export is None:
+        issues.append("no deterministic final_strategy.md export is recorded")
+    else:
+        export_hashes = strategy_hashes(final_export)
+        if not final_export.get("output_sha256"):
+            issues.append("final_strategy.md export is not hash-bound to its output")
+        if len(shared_strategy_hashes) != 1 or export_hashes != shared_strategy_hashes:
+            issues.append("final_strategy.md input hash does not equal the strategy hash used by final QA and the final PubMed count")
+        latest_validation_seq = max(
+            int(final_qa.get("seq") or 0) if final_qa is not None else 0,
+            int(final_search.get("seq") or 0) if final_search is not None else 0,
+        )
+        if int(final_export.get("seq") or 0) <= latest_validation_seq:
+            issues.append("final_strategy.md was not exported after final QA and the final PubMed count")
 
     audit = next(
         (
@@ -1134,7 +1175,7 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
 
 def cmd_report(args: argparse.Namespace) -> dict[str, object]:
     """Read-only build dashboard: groups manifest entries by kind and surfaces the current audit
-    path, superseded files, and open decisions. Never reruns searches; it only reads the manifest."""
+    and final-strategy paths, superseded files, and open decisions. Never reruns searches."""
     path = Path(args.manifest)
     data = load_manifest(path)
     entries = [e for e in data.get("entries", []) if isinstance(e, dict)]
@@ -1143,6 +1184,7 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
     entries_by_kind: dict[str, list[dict[str, object]]] = {}
     open_decisions: list[dict[str, object]] = []
     audit_path: str | None = None
+    final_strategy_path: str | None = None
     for entry in entries:
         kind = str(entry.get("kind", "other"))
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
@@ -1165,7 +1207,10 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             )
         out = entry.get("output_path")
         if kind == "artifact" and isinstance(out, str) and out.endswith(".md"):
-            audit_path = out  # the latest .md artifact is the current audit report
+            if out.replace("\\", "/").rsplit("/", 1)[-1].lower() == "final_strategy.md":
+                final_strategy_path = out
+            else:
+                audit_path = out  # latest non-handoff Markdown remains the current audit report
 
     superseded = [
         {"path": item.get("path"), "superseded_by": item.get("superseded_by")}
@@ -1182,6 +1227,7 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
             "kind_counts": kind_counts,
             "entries_by_kind": entries_by_kind,
             "audit_path": audit_path,
+            "final_strategy_path": final_strategy_path,
             "open_decisions": open_decisions,
             "superseded": superseded,
             "block_coverage": block_coverage,
@@ -1261,7 +1307,7 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser.add_argument(
         "--require-complete-loop",
         action="store_true",
-        help="Combined final-handoff gate for stages, evidence, validation, QA, hashes, and audit output.",
+        help="Combined final-handoff gate for stages, evidence, validation, QA, deterministic final export, hashes, and audit output.",
     )
 
     report_parser = subparsers.add_parser("report", help="Read-only build dashboard from the manifest (no reruns).")

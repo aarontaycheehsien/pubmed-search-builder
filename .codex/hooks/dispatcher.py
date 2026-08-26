@@ -52,7 +52,7 @@ PERSONAL_PATH_PATTERNS = (
 )
 PLACEHOLDERS = ("example", "placeholder", "redacted", "changeme", "dummy", "yourkey", "yourtoken")
 MATERIAL_RE = re.compile(
-    r"(?:pubmed_tool\.py|mesh_tool\.py|hooks_tool\.py\s+final-qa|audit_markdown\.py)",
+    r"(?:pubmed_tool\.py|mesh_tool\.py|hooks_tool\.py\s+final-qa|audit_markdown\.py|export_final\.py)",
     re.IGNORECASE,
 )
 PROTECTED_EDIT_RE = re.compile(
@@ -186,9 +186,11 @@ def handle_pre_tool(event: dict[str, Any], client: str) -> dict[str, Any] | None
         return deny("PreToolUse", "Direct edits to run manifests and locked protocol receipts are blocked; use the workflow tools.")
     lowered = command.lower()
     if "workflow_tool.py" in lowered:
-        if re.search(r"workflow_tool\.py[\"']?\s+run\b", command, re.IGNORECASE):
+        is_run = bool(re.search(r"workflow_tool\.py[\"']?\s+run\b", command, re.IGNORECASE))
+        is_export = bool(re.search(r"workflow_tool\.py[\"']?\s+export-final\b", command, re.IGNORECASE))
+        if is_run or is_export:
             manifest = manifest_from_command(command, cwd)
-            stage = option_value(STAGE_OPTION_RE, command)
+            stage = "audit-output" if is_export else option_value(STAGE_OPTION_RE, command)
             if manifest is None or not manifest.is_file():
                 return deny("PreToolUse", "Initialize or attach a valid run manifest before executing a workflow stage.")
             if not stage:

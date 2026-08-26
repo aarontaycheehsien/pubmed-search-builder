@@ -231,6 +231,35 @@ def command_run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def command_export_final(args: argparse.Namespace) -> dict[str, Any]:
+    """Run the deterministic exporter through the same atomic manifest path as other material work."""
+    manifest = args.manifest.resolve()
+    run_dir = manifest.parent
+    strategy = (args.strategy if args.strategy.is_absolute() else run_dir / args.strategy).resolve()
+    output = (args.output if args.output.is_absolute() else run_dir / args.output).resolve()
+    runner_args = argparse.Namespace(
+        manifest=manifest,
+        stage="audit-output",
+        kind="artifact",
+        input=[strategy],
+        output=output,
+        count=None,
+        cwd=run_dir,
+        label="deterministic final strategy handoff",
+        block="",
+        note="Hash-bound final_strategy.md export",
+        allow_unchanged_output=True,
+        command=[
+            sys.executable,
+            str(Path(SCRIPT_DIR) / "export_final.py"),
+            "--strategy", str(strategy),
+            "--manifest", str(manifest),
+            "--output", str(output),
+        ],
+    )
+    return command_run(runner_args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run PubMed workflow commands with manifest provenance.")
     commands = parser.add_subparsers(dest="action", required=True)
@@ -257,6 +286,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--note", default="")
     run.add_argument("--allow-unchanged-output", action="store_true")
     run.add_argument("command", nargs=argparse.REMAINDER)
+
+    export_final = commands.add_parser("export-final")
+    export_final.add_argument("--manifest", type=Path, default=Path("run_manifest.json"))
+    export_final.add_argument("--strategy", type=Path, required=True)
+    export_final.add_argument("--output", type=Path, default=Path("final_strategy.md"))
     return parser
 
 
@@ -269,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = command_attach(args)
         elif args.action == "status":
             payload = command_status(args)
+        elif args.action == "export-final":
+            payload = command_export_final(args)
         else:
             payload = command_run(args)
     except (OSError, ValueError, json.JSONDecodeError, manifest_tool.ManifestError, WorkflowError) as exc:

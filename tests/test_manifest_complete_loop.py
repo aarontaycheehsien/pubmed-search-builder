@@ -76,6 +76,15 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         audit_md = self.root / "audit_demo.md"
         audit_md.write_text("# Audit\n", encoding="utf-8")
         self.add("artifact", "audit_markdown.py audit.json", output=audit_md, inputs=[audit_json])
+        final_md = self.root / "final_strategy.md"
+        final_md.write_text("# Final PubMed Strategy\n", encoding="utf-8")
+        self.add(
+            "artifact",
+            "export_final.py --strategy strategy.txt --manifest run_manifest.json --output final_strategy.md",
+            output=final_md,
+            inputs=[strategy],
+            count=10,
+        )
         self.state("resolve-recall-offer", "declined")
         self.state("resolve-unvalidated-handoff", "accepted", "--reason", "No independent benchmark exists")
         return strategy
@@ -92,6 +101,13 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             "show", "--manifest", str(self.manifest), "--validate", "--check-files", "--require-complete-loop"
         )
         self.assertEqual(code, 0, receipt)
+
+    def test_report_distinguishes_audit_from_final_strategy_handoff(self):
+        self.passing_no_seed()
+        code, receipt = self.cli("report", "--manifest", str(self.manifest))
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(Path(receipt["audit_path"]).name, "audit_demo.md")
+        self.assertEqual(Path(receipt["final_strategy_path"]).name, "final_strategy.md")
 
     def test_each_gate_is_binding(self):
         self.passing_no_seed()
@@ -150,7 +166,14 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             data["entries"] = [entry for entry in data["entries"] if entry["kind"] != "qa"]
 
         def missing_audit(data):
-            data["entries"] = [entry for entry in data["entries"] if entry["kind"] != "artifact"]
+            data["entries"] = [
+                entry for entry in data["entries"] if "audit_markdown.py" not in entry["command"]
+            ]
+
+        def missing_export(data):
+            data["entries"] = [
+                entry for entry in data["entries"] if "export_final.py" not in entry["command"]
+            ]
 
         cases = (
             ("pending question", pending_question, "question is still pending"),
@@ -164,6 +187,7 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             ("unvalidated acceptance", unvalidated_not_accepted, "explicit acceptance"),
             ("final QA", missing_qa, "no final-qa"),
             ("audit", missing_audit, "no final audit"),
+            ("final export", missing_export, "no deterministic final_strategy.md export"),
         )
         for label, mutate, expected in cases:
             with self.subTest(label=label):
@@ -194,6 +218,29 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         code, receipt = self.state("check-complete")
         self.assertEqual(code, 1)
         self.assertIn("audit Markdown was not rendered after final QA", receipt["issues"])
+
+    def test_final_export_must_match_shared_strategy_hash_and_follow_validation(self):
+        self.passing_no_seed()
+        data = json.loads(self.manifest.read_text(encoding="utf-8"))
+        export = next(entry for entry in data["entries"] if "export_final.py" in entry["command"])
+        alternate = self.root / "alternate.txt"
+        alternate.write_text('"Alternate"[Mesh]', encoding="utf-8")
+        export["input_sha256"] = {str(alternate): manifest_tool.sha256_file(alternate)}
+        self.manifest.write_text(json.dumps(data), encoding="utf-8")
+        code, receipt = self.state("check-complete")
+        self.assertEqual(code, 1)
+        self.assertTrue(any("input hash does not equal" in issue for issue in receipt["issues"]), receipt)
+
+        strategy = self.root / "strategy.txt"
+        data = json.loads(self.manifest.read_text(encoding="utf-8"))
+        export = next(entry for entry in data["entries"] if "export_final.py" in entry["command"])
+        qa = next(entry for entry in data["entries"] if entry["kind"] == "qa")
+        export["input_sha256"] = {str(strategy): manifest_tool.sha256_file(strategy)}
+        export["seq"], qa["seq"] = qa["seq"], export["seq"]
+        self.manifest.write_text(json.dumps(data), encoding="utf-8")
+        code, receipt = self.state("check-complete")
+        self.assertEqual(code, 1)
+        self.assertIn("final_strategy.md was not exported after final QA and the final PubMed count", receipt["issues"])
 
     def test_seeded_build_requires_validation(self):
         self.passing_no_seed()
