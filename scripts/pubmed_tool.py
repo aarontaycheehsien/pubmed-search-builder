@@ -3043,6 +3043,11 @@ def _scaffold_manifest_artifact(manifest_path: str, output_path: object) -> dict
     return data if isinstance(data, dict) else None
 
 
+# Run statuses that let a turn end on an unfinished build. Returning to `active` or claiming
+# `complete` is a resumption, not an idle point, so neither is disclosed as one.
+IDLE_RUN_STATUSES = frozenset({"awaiting-user", "checkpoint", "blocked-external"})
+
+
 def _scaffold_mesh_backend_evidence(
     manifest_data: dict[str, object] | None,
     sources: dict[str, str],
@@ -3326,6 +3331,19 @@ def build_audit_scaffold(
                 placeholders.append("candidate_screening.screening_notes")
             audit["candidate_screening"] = screening_copy
             filled.append("candidate_screening")
+        # Every point the run went idle. Copied mechanically and with no judgment placeholder: the
+        # reason was authored when the pause was recorded, so the audit reproduces it rather than
+        # asking for it again. A build that never paused has no rows and the section is omitted.
+        idle_state = manifest_state.get("run_status_history")
+        if isinstance(idle_state, list):
+            idle_rows = [
+                dict(item)
+                for item in idle_state
+                if isinstance(item, dict) and str(item.get("status") or "") in IDLE_RUN_STATUSES
+            ]
+            if idle_rows:
+                audit["run_status_log"] = idle_rows
+                filled.append("run_status_log")
         critic_state = manifest_state.get("critic_rounds")
         if isinstance(critic_state, list) and critic_state:
             critic_rows = []

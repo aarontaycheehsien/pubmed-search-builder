@@ -274,6 +274,37 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn("optional safety block testing", markdown)
         self.assertIn("User chose not to test the focused variant", markdown)
 
+    def test_run_status_log_renders_every_idle_point(self):
+        data = sample_data()
+        data["run_status_log"] = [
+            {
+                "status": "awaiting-user",
+                "type": "seed-intake",
+                "reason": "asked whether seed PMIDs exist",
+                "recorded_utc": "2026-08-27T01:00:00Z",
+                "stage": "intake",
+            },
+            {
+                "status": "blocked-external",
+                "type": "",
+                "reason": "PubMed E-utilities returned 503 on three retries",
+                "recorded_utc": "2026-08-27T04:12:00Z",
+                "stage": "block-testing",
+            },
+        ]
+        markdown = audit_markdown.render_audit_markdown(data, Path("audit.md"))
+
+        self.assertIn("## Run pauses and idle points", markdown)
+        self.assertIn("| Recorded (UTC) | Status | Stage | Reason |", markdown)
+        self.assertIn("awaiting-user (seed-intake)", markdown)
+        self.assertIn("asked whether seed PMIDs exist", markdown)
+        self.assertIn("PubMed E-utilities returned 503 on three retries", markdown)
+        self.assertIn("went idle 2 times", markdown)
+
+    def test_run_status_log_section_is_omitted_for_a_build_that_never_paused(self):
+        markdown = audit_markdown.render_audit_markdown(sample_data(), Path("audit.md"))
+        self.assertNotIn("Run pauses and idle points", markdown)
+
     def test_existing_output_fails_by_default_and_suffixes_when_requested(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "audit.md"

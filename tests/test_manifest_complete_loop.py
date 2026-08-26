@@ -391,6 +391,45 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         mismatch = manifest_tool.mesh_audit_disclosure_issues(data, self.manifest, disclosed)
         self.assertTrue(any("does not disclose" in issue for issue in mismatch))
 
+    def test_final_audit_must_disclose_every_idle_point(self):
+        pause = {
+            "status": "awaiting-user",
+            "type": "seed-intake",
+            "reason": "asked whether seed PMIDs exist",
+            "recorded_utc": "2026-08-27T01:00:00Z",
+            "stage": "intake",
+        }
+        blocker = {
+            "status": "blocked-external",
+            "type": "",
+            "reason": "E-utilities returned 503",
+            "recorded_utc": "2026-08-27T04:12:00Z",
+            "stage": "block-testing",
+        }
+        # Resuming is not an idle point and needs no disclosure.
+        resumed = {"status": "active", "type": "", "reason": "", "recorded_utc": "2026-08-27T02:00:00Z", "stage": "intake"}
+        state = {"run_status_history": [pause, resumed, blocker]}
+
+        missing = manifest_tool.run_status_audit_disclosure_issues(state, {"final_strategy": "x"})
+        self.assertTrue(any("lacks run_status_log" in issue for issue in missing))
+        self.assertTrue(any("2 time(s)" in issue for issue in missing))
+
+        partial = manifest_tool.run_status_audit_disclosure_issues(state, {"run_status_log": [pause]})
+        self.assertTrue(any("blocked-external" in issue for issue in partial))
+
+        complete = manifest_tool.run_status_audit_disclosure_issues(state, {"run_status_log": [pause, blocker]})
+        self.assertEqual(complete, [])
+
+        # A reason rewritten between the manifest and the audit is not a disclosure.
+        rewritten = dict(blocker, reason="minor delay")
+        altered = manifest_tool.run_status_audit_disclosure_issues(state, {"run_status_log": [pause, rewritten]})
+        self.assertTrue(any("does not disclose" in issue for issue in altered))
+
+    def test_a_run_that_never_paused_needs_no_run_status_log(self):
+        for state in ({}, {"run_status_history": []}, {"run_status_history": [{"status": "active"}]}):
+            with self.subTest(state=state):
+                self.assertEqual(manifest_tool.run_status_audit_disclosure_issues(state, {}), [])
+
     def test_superseded_or_old_scope_reduced_mesh_does_not_block_final_audit(self):
         reduced = {"operation": "sweep", "status": "complete", "reduced_fidelity_present": True}
         data = manifest_tool.new_manifest("demo", "1.0")

@@ -168,6 +168,39 @@ class BuildScaffoldTests(unittest.TestCase):
         self.assertIn("condition_mesh.json", projected["automatic_peer_review_attention_points"][0])
         self.assertIn("condition_mesh.json", audit["peer_review_attention_points"][0])
 
+    def test_idle_points_are_projected_and_resumptions_are_not(self):
+        history = [
+            {
+                "status": "awaiting-user",
+                "type": "seed-intake",
+                "reason": "asked whether seed PMIDs exist",
+                "recorded_utc": "2026-08-27T01:00:00Z",
+                "stage": "intake",
+            },
+            {"status": "active", "type": "", "reason": "", "recorded_utc": "2026-08-27T02:00:00Z", "stage": "intake"},
+            {
+                "status": "checkpoint",
+                "type": "",
+                "reason": "reporting block counts",
+                "recorded_utc": "2026-08-27T03:00:00Z",
+                "stage": "block-testing",
+            },
+        ]
+        m = manifest([], build_state={"run_status_history": history})
+        audit, receipt = self.build(manifest_data=m)
+
+        self.assertEqual([row["status"] for row in audit["run_status_log"]], ["awaiting-user", "checkpoint"])
+        self.assertIn("run_status_log", receipt["fields_filled"])
+        # Mechanical copy: the reason was authored at pause time, so it is not re-asked for.
+        self.assertEqual(audit["run_status_log"][0]["reason"], "asked whether seed PMIDs exist")
+        self.assertNotIn("run_status_log", " ".join(receipt["placeholder_fields"]))
+
+    def test_a_run_that_never_paused_has_no_run_status_log(self):
+        for state in ({}, {"run_status_history": []}):
+            with self.subTest(state=state):
+                audit, _ = self.build(manifest_data=manifest([], build_state=state))
+                self.assertNotIn("run_status_log", audit)
+
     def test_superseded_mesh_evidence_is_not_projected(self):
         m = manifest(
             [

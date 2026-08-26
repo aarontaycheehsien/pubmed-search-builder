@@ -423,6 +423,36 @@ def render_stage_trace(data: dict[str, Any]) -> list[str]:
     ]
 
 
+def render_run_status_log(data: dict[str, Any]) -> list[str]:
+    """Every point the build stopped short of finishing, and what it was waiting on.
+
+    A peer reviewer reading only the finished strategy cannot tell a build that ran straight
+    through from one that went idle a dozen times waiting on decisions that were never resolved.
+    Omitted entirely when the run never paused, so a clean build gains no empty section.
+    """
+
+    rows = []
+    for item in as_list(data.get("run_status_log")):
+        if not isinstance(item, dict):
+            rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS, DEFAULT_STATUS])
+            continue
+        status = item.get("status")
+        if item.get("type"):
+            status = f"{status} ({item.get('type')})"
+        rows.append([item.get("recorded_utc"), status, item.get("stage") or DEFAULT_STATUS, item.get("reason")])
+    if not rows:
+        return []
+    return [
+        "## Run pauses and idle points",
+        "",
+        markdown_table(["Recorded (UTC)", "Status", "Stage", "Reason"], rows),
+        "",
+        f"The build went idle {len(rows)} time{'s' if len(rows) != 1 else ''} before handoff. "
+        "Each row is copied from the run manifest's `run_status_history`.",
+        "",
+    ]
+
+
 def render_user_decisions(data: dict[str, Any]) -> list[str]:
     decisions = as_list(first_value(data, ["user_decisions", "optional_concept_decisions"], []))
     seed_pmids = first_value(data, ["seed_validation.seed_pmids_tested", "seed_pmids"], [])
@@ -1314,6 +1344,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_search_structure(data))
     lines.extend(render_retrieval_scope(data))
     lines.extend(render_stage_trace(data))
+    lines.extend(render_run_status_log(data))
     lines.extend(render_user_decisions(data))
     lines.extend(render_decision_ledger(data))
     lines.extend(render_candidate_screening(data))

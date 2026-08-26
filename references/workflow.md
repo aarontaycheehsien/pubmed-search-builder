@@ -245,7 +245,9 @@ Each `--type` is checked against build state, so record the pause the build is a
 the user has spoken again, so raise it in the turn that ends on it, and clear it by returning to
 `active` when work resumes.
 
-A recorded pause is not a substitute for finishing. It only explains an idle run, and every one is
-appended to `build_state.run_status_history` where `state show` and `report` surface it — so when
-the gate cannot be satisfied at all, say so plainly in the final response and name the outstanding
-checks instead of implying the strategy was validated.
+A recorded pause is not a substitute for finishing. Every one is appended to
+`build_state.run_status_history`, projected into the audit by `audit-scaffold`, and rendered as
+**Run pauses and idle points**; the complete-loop gate requires the final audit to disclose each one
+with its original reason. A peer reviewer therefore sees where the build went idle and what it was
+waiting on. When the gate cannot be satisfied at all, say so plainly in the final response and name
+the outstanding checks instead of implying the strategy was validated.

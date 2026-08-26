@@ -1576,6 +1576,49 @@ def current_mesh_entries(data: dict[str, object], manifest_path: Path) -> list[d
     return rows
 
 
+def run_status_audit_disclosure_issues(
+    state: dict[str, object],
+    audit_payload: dict[str, object],
+) -> list[str]:
+    """Require the final audit to disclose every point the run went idle.
+
+    Pausing is legitimate, so this does not reject a paused build; it rejects a handoff that keeps
+    the pauses to itself. Without it the scaffold's disclosure could simply be deleted before the
+    render, and `run_status_history` would document the build only to whoever opened the manifest.
+    """
+    history = state.get("run_status_history") if isinstance(state.get("run_status_history"), list) else []
+    expected = [
+        item
+        for item in history
+        if isinstance(item, dict) and str(item.get("status") or "") in STOP_ALLOWED_RUN_STATUSES
+    ]
+    if not expected:
+        return []
+    disclosed = audit_payload.get("run_status_log")
+    if not isinstance(disclosed, list):
+        return [
+            f"final audit lacks run_status_log; the run went idle {len(expected)} time(s) and each "
+            "must be disclosed (rerun `pubmed_tool.py audit-scaffold --manifest ...`)"
+        ]
+    issues: list[str] = []
+    for item in expected:
+        matching = [
+            row
+            for row in disclosed
+            if isinstance(row, dict)
+            and str(row.get("recorded_utc") or "") == str(item.get("recorded_utc") or "")
+            and str(row.get("status") or "") == str(item.get("status") or "")
+            and str(row.get("type") or "") == str(item.get("type") or "")
+            and str(row.get("reason") or "") == str(item.get("reason") or "")
+        ]
+        if not matching:
+            issues.append(
+                "final audit does not disclose a recorded idle point: "
+                f"{item.get('status')} at {item.get('recorded_utc')}"
+            )
+    return issues
+
+
 def mesh_audit_disclosure_issues(
     data: dict[str, object],
     manifest_path: Path,
@@ -2515,6 +2558,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 if scope.get("lock_mode") == "protocol":
                     issues.extend(protocol_binding_issues(core_payload, scope, "final audit input"))
                 issues.extend(mesh_audit_disclosure_issues(data, manifest_path, core_payload))
+                issues.extend(run_status_audit_disclosure_issues(state, core_payload))
                 unvalidated = state.get("unvalidated_handoff") if isinstance(state.get("unvalidated_handoff"), dict) else {}
                 if unvalidated.get("status") == "accepted":
                     reporting = core_payload.get("reporting_notes") if isinstance(core_payload.get("reporting_notes"), dict) else {}

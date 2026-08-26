@@ -451,7 +451,7 @@ Each condition checks a stage as well as a field. That is deliberate: `recall_of
 
 A status is **stale** once the user has spoken again: it was raised for an earlier exchange, so it stops excusing a stop and the complete-loop gate applies.
 
-No pause the tool records is unforgeable by an agent that drives the tool, so the guarantee is visibility rather than prevention: every status change appends to `build_state.run_status_history` and is surfaced by `state show`, `report`, and `check-stop` (`idle_events`). A build that keeps going idle says so on its own dashboard.
+No pause the tool records is unforgeable by an agent that drives the tool, so the guarantee is visibility rather than prevention. Every status change appends to `build_state.run_status_history`; `state show`, `report`, and `check-stop` (`idle_events`) surface it, `audit-scaffold` projects the idle points into `run_status_log`, and `audit_markdown.py` renders them as **Run pauses and idle points**. The complete-loop gate then requires the final audit to disclose every recorded idle point with its original reason, so the disclosure cannot be scaffolded and then deleted before the render. A build that never paused has no rows and no section.
 
 ### Per-block evidence coverage
 

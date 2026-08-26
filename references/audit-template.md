@@ -50,6 +50,14 @@ Include this section when the locked protocol sets `review.framework.profile_id`
 |---|---|---|---|---|---|
 | [stage name] | [exact reference files in force] | [work performed in this stage] | [work explicitly deferred or blocked] | [decision needed, or none] | [answer, protocol decision, or not yet resolved] |
 
+## Run pauses and idle points
+
+Generated from the run manifest's `run_status_history` by `pubmed_tool.py audit-scaffold`; do not author it by hand. Omitted entirely when the build never went idle. The complete-loop gate requires every recorded idle point to appear here with its original reason.
+
+| Recorded (UTC) | Status | Stage | Reason |
+|---|---|---|---|
+| [timestamp] | [awaiting-user (type) / checkpoint / blocked-external] | [stage when recorded] | [reason recorded at the time] |
+
 ## User decisions on optional concept blocks
 
 - **Explicit user choice:** **[Optional or sensitivity-dangerous concept]** was asked because [why it could narrow retrieval] -> user chose **[omit/include/test as variant/filter]**. [How handled in the strategy.]
