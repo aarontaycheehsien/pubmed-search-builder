@@ -119,7 +119,7 @@ class SkillContractTests(DocContractTestCase):
             "scoping reviews",
             "mesh",
             "prescreen",
-            "held-out",
+            "development-validation",
             "press-informed",
             "prisma-s",
         ):
@@ -299,7 +299,7 @@ class WorkflowContractTests(DocContractTestCase):
         self.assertIn("revision_guard.py", workflow)
         for phrase in (
             "named defect fixed",
-            "held-out retrieval preserved",
+            "development-validation retrieval preserved",
             "no unjustified required block",
             "syntax and translation stable",
             "scope unchanged or explicitly versioned",
@@ -364,10 +364,10 @@ class CandidateEvidenceTests(DocContractTestCase):
         for phrase in (
             "user seed",
             "discovery record",
-            "held-out validation record",
+            "development-validation record",
             "heuristic neighbor",
             "include`, `exclude`, or `uncertain`",
-            "`discovery`, `holdout`, `both`, `heuristic`, or `neither`",
+            "`discovery`, `development-validation` (legacy `holdout`), `both`, `heuristic`, or `neither`",
             "scripts/candidate_ledger.py",
         ):
             self.assertIn(phrase, doc)

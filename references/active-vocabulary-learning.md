@@ -50,7 +50,7 @@ Candidate terms are attributed per record rather than per term, so a record assi
 
 For later rounds, pass the prior final vocabulary-learning artifact with `--previous-learning` so only newly included records contribute new proposals, and so the previous round's retained tail is not proposed again.
 
-Every authored `accepted` proposal then passes the seven checks in `no-harm-revisions.md`. The tool adopts only changes that fix the vocabulary gap, preserve prior held-out retrieval, stay inside the locked concept, avoid syntax/translation drift, preserve protocol scope, and report before/after workload. Failed proposals automatically revert or remain a labelled experimental-only variant.
+Every authored `accepted` proposal then passes the seven checks in `no-harm-revisions.md`. The tool adopts only changes that fix the vocabulary gap, preserve prior development-validation retrieval, stay inside the locked concept, avoid syntax/translation drift, preserve protocol scope, and report before/after workload. Failed proposals automatically revert or remain a labelled experimental-only variant.
 
 ## Adjudicate and retest
 
@@ -74,7 +74,7 @@ python scripts/vocabulary_learning.py retest \
   --output vocabulary_learning_1.json
 ```
 
-Every accepted term is tested as `current block OR term` against the frozen independent holdout when available and through an exact `(expanded block) NOT (current block)` differential with fetched records. If no independent holdout exists, the artifact records that limitation; the differential remains mandatory.
+Every accepted term is tested as `current block OR term` against the frozen disjoint development-validation set when available and through an exact `(expanded block) NOT (current block)` differential with fetched records. If no disjoint development-validation set exists, the artifact records that limitation; the differential remains mandatory.
 
 Do not retest or adopt proposals while `scope_reentry_required` is true. Reopen scope, issue a new scope version, revisit affected screening decisions and block roles, then rerun extraction. Vocabulary learning may add coverage inside a locked `OR` block; it may not add a concept, reinterpret eligibility, or promote excluded-record language into the search.
 

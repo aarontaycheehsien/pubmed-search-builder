@@ -1633,6 +1633,8 @@ def validate_recall_blocks(raw: object) -> None:
 
 def extract_benchmark_pmids(data: object, *, min_seed_overlap: int) -> list[str]:
     """Pull a PMID list from a benchmark JSON payload (related/mine output or a bare list)."""
+    if isinstance(data, dict) and str(data.get("artifact_type", "")).startswith("final-test/"):
+        raise PubMedError("Sealed final-test artifacts are not development benchmarks; use final_test_tool.py evaluate")
     pmids: list[str] = []
     if isinstance(data, list):
         items = data
@@ -2338,8 +2340,8 @@ def candidate_ledger_pmids(
     """Resolve role-safe PMIDs from a validated candidate ledger.
 
     Discovery consumers receive only screened-in ``discovery``/``both`` records. Validation
-    consumers receive frozen ``holdout`` records when available, otherwise screened-in ``both``
-    records and are explicitly marked non-independent.
+    consumers receive ``development-validation`` (legacy ``holdout``) records when available,
+    otherwise screened-in ``both`` records. Neither is an independent final test.
     """
     data = load_json_file(path)
     if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
@@ -2370,6 +2372,8 @@ def candidate_ledger_pmids(
             raise PubMedError(f"Candidate ledger record {index} is not an object: {path}")
         pmid = str(item.get("pmid") or "").strip()
         use = str(item.get("use") or "").strip()
+        if use == "development-validation":
+            use = "holdout"  # legacy internal key, never a final test
         if not pmid.isdigit():
             raise PubMedError(f"Candidate ledger record {index} has an invalid PMID: {path}")
         if pmid in seen_pmids:
@@ -2397,16 +2401,16 @@ def candidate_ledger_pmids(
         eligible[use].append(pmid)
     if purpose == "discovery":
         pmids = dedup_preserving_order(eligible["discovery"] + eligible["both"])
-        independent = False
+        disjoint = False
         uses = ["discovery", "both"]
     elif purpose == "validation":
         if eligible["holdout"]:
             pmids = dedup_preserving_order(eligible["holdout"])
-            independent = True
+            disjoint = True
             uses = ["holdout"]
         else:
             pmids = dedup_preserving_order(eligible["both"])
-            independent = False
+            disjoint = False
             uses = ["both"]
     else:  # pragma: no cover - internal contract
         raise PubMedError(f"Unknown candidate-ledger purpose: {purpose}")
@@ -2419,7 +2423,10 @@ def candidate_ledger_pmids(
         "protocol_sha256": actual_protocol_sha,
         "purpose": purpose,
         "uses": uses,
-        "independent": independent,
+        "independent": False,
+        "disjoint_from_discovery": disjoint,
+        "validation_stage": "development-validation" if purpose == "validation" else "discovery",
+        "final_test_status": "not-performed",
         "pmid_count": len(pmids),
     }
 
@@ -4340,7 +4347,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_query_input_arguments(validate_parser)
     validate_source = validate_parser.add_mutually_exclusive_group(required=True)
     validate_source.add_argument("--pmids", nargs="+")
-    validate_source.add_argument("--candidate-ledger", help="Validated candidate ledger; validates only holdout PMIDs, or both when no independent holdout exists.")
+    validate_source.add_argument("--candidate-ledger", help="Validated candidate ledger; validates only holdout PMIDs, or both when no disjoint development-validation set exists.")
 
     recall_parser = subparsers.add_parser(
         "recall",

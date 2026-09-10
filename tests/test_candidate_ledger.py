@@ -83,7 +83,8 @@ class CandidateLedgerTests(unittest.TestCase):
         self.assertEqual(summary["eligible_discovery_pmids"], ["1"])
         self.assertEqual(summary["holdout_pmids"], ["2"])
         self.assertEqual(summary["heuristic_pmids"], ["3"])
-        self.assertTrue(summary["independent_holdout_available"])
+        self.assertFalse(summary["independent_holdout_available"])
+        self.assertTrue(summary["development_validation_available"])
 
     def test_unscreened_or_uncertain_record_cannot_drive_discovery(self):
         data = {
@@ -131,7 +132,7 @@ class CandidateLedgerTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["summary"]["non_independent_validation_pmids"], ["9"])
 
-    def test_holdout_allocator_is_reproducible_and_independent_for_six_records(self):
+    def test_development_allocator_is_reproducible_and_disjoint_for_six_records(self):
         data = {
             "scope_version": 1,
             "records": [
@@ -149,7 +150,7 @@ class CandidateLedgerTests(unittest.TestCase):
         first, metadata = candidate_ledger.allocate_holdout(json.loads(json.dumps(data)), seed="fixed")
         second, _ = candidate_ledger.allocate_holdout(json.loads(json.dumps(data)), seed="fixed")
         self.assertEqual(first, second)
-        self.assertEqual(metadata["assignment"], "independent-holdout")
+        self.assertEqual(metadata["assignment"], "development-validation")
         self.assertEqual(len(metadata["holdout_pmids"]), 2)
         issues, summary = candidate_ledger.validate_ledger(first)
         self.assertEqual(issues, [])

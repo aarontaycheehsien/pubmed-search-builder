@@ -311,11 +311,33 @@ def render_candidate_screening(data: dict[str, Any]) -> list[str]:
         f"- **Decision counts:** {compact_text(summary.get('decision_counts'))}",
         f"- **Use-role counts:** {compact_text(summary.get('use_counts'))}",
         f"- **Eligible discovery PMIDs:** {compact_text(summary.get('eligible_discovery_pmids'))}",
-        f"- **Independent holdout PMIDs:** {compact_text(summary.get('holdout_pmids'))}",
+        f"- **Development-validation PMIDs:** {compact_text(summary.get('holdout_pmids'))}",
         f"- **Non-independent validation PMIDs:** {compact_text(summary.get('non_independent_validation_pmids'))}",
         f"- **Heuristic PMIDs:** {compact_text(summary.get('heuristic_pmids'))}",
         f"- **Screening/holdout rationale:** {compact_text(screening.get('screening_notes') or screening.get('reason'))}",
         "",
+    ]
+
+
+def render_final_test(data: dict[str, Any]) -> list[str]:
+    lines = ["## Sealed final test", ""]
+    source = data.get("final_test_result_file")
+    if not source:
+        return lines + ["Not performed. Development validation may guide revisions and is not an independent final evaluation.", ""]
+    import final_test_tool
+    try:
+        final_test_tool.verify(Path(source))
+        result = final_test_tool.read(Path(source))
+    except (ValueError, OSError) as exc:
+        raise AuditMarkdownError(f"Invalid or stale final-test result: {exc}") from exc
+    return lines + [
+        f"- **Result file:** {source}",
+        f"- **Frozen strategy SHA-256:** {result['strategy']['sha256']}",
+        f"- **Retrieved / reachable:** {result['retrieved_records']} / {result['reachable_records']}",
+        f"- **Unreachable records:** {result['unreachable_records']}",
+        f"- **Known-set recall:** {compact_text(result['recall'])}",
+        f"- **Independence basis:** {result['independence_basis']}",
+        f"- **Limitation:** {result['limitation']}", "",
     ]
 
 
@@ -1317,6 +1339,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_user_decisions(data))
     lines.extend(render_decision_ledger(data))
     lines.extend(render_candidate_screening(data))
+    lines.extend(render_final_test(data))
     lines.extend(render_record_content_evidence(data))
     lines.extend(render_final_strategy(data))
     lines.extend(render_line_set(data))

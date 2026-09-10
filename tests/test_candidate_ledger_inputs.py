@@ -33,7 +33,9 @@ class CandidateLedgerInputTests(unittest.TestCase):
             self.assertEqual(discovery, ["1", "3"])
             self.assertEqual(validation, ["2"])
             self.assertFalse(discovery_meta["independent"])
-            self.assertTrue(validation_meta["independent"])
+            self.assertFalse(validation_meta["independent"])
+            self.assertTrue(validation_meta["disjoint_from_discovery"])
+            self.assertEqual(validation_meta["validation_stage"], "development-validation")
 
     def test_validation_falls_back_to_both_and_marks_non_independent(self):
         with tempfile.TemporaryDirectory() as td:

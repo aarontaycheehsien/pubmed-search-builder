@@ -46,7 +46,7 @@
       "canonical_owner": "references/candidate-screening.md",
       "assertions": [
         "discovery record",
-        "held-out validation record",
+        "development-validation record",
         "heuristic neighbor",
         "include`, `exclude`, or `uncertain`",
         "do not feed a related-record set directly to `term-rank`",
@@ -102,7 +102,7 @@
       "canonical_owner": "references/no-harm-revisions.md",
       "assertions": [
         "named defect fixed",
-        "held-out retrieval preserved",
+        "development-validation retrieval preserved",
         "no unjustified required block",
         "syntax and translation stable",
         "scope unchanged or explicitly versioned",

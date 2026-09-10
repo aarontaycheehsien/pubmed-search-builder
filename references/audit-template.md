@@ -82,7 +82,7 @@ Include this section when the locked protocol sets `review.framework.profile_id`
 - **Counts by decision:** [include / exclude / uncertain]
 - **Counts by use:** [discovery / holdout / both / heuristic / neither]
 - **Eligible discovery PMIDs:** [list]
-- **Independent holdout PMIDs:** [list]
+- **Development-validation set PMIDs:** [list]
 - **Non-independent validation PMIDs:** [list]
 - **Heuristic PMIDs:** [list]
 - **Screening and holdout rationale:** [eligibility evidence, exclusions/uncertainties, representativeness, and independence limits]
@@ -180,7 +180,7 @@ If a validated filter or focused variant was also tested:
 - **Labels:** [likely relevant / irrelevant / uncertain counts by variant and stratum]
 - **Precision:** [weighted estimate, 95% confidence interval, uncertain-label lower/upper bounds]
 - **Screening burden:** [estimated records screened per relevant report and confidence interval]
-- **Incremental comparison:** [exact workload change and held-out recall change versus main]
+- **Incremental comparison:** [exact workload change and development-validation recall change versus main]
 - **Recall gate:** [minimum required recall, qualifying variants, whether burden was permitted to select, recommendation or none]
 
 ## Search strategy (numbered line set)

@@ -124,6 +124,10 @@ CONTRACTS: dict[str, ArtifactContract] = {
     "prior-review-benchmark/evidence": ArtifactContract(
         "prior-review-benchmark/evidence", requires_scope_binding=True, validator=_required_fields("benchmark_kind", "source_tier_counts")
     ),
+    "final-test/receipt": ArtifactContract("final-test/receipt", requires_scope_binding=True),
+    "final-test/sealed": ArtifactContract("final-test/sealed", requires_scope_binding=True),
+    "final-test/freeze": ArtifactContract("final-test/freeze", requires_scope_binding=True),
+    "final-test/result": ArtifactContract("final-test/result", requires_scope_binding=True),
     "audit/evidence": ArtifactContract("audit/evidence", requires_scope_binding=True),
     "workflow/receipt": ArtifactContract("workflow/receipt"),
     "input/file": ArtifactContract("input/file"),
@@ -141,6 +145,9 @@ def artifact_type_for_operation(operation: str) -> str:
     """
 
     normalized = operation.strip().casefold()
+    final_operations = {"seal-final-test": "final-test/receipt", "freeze-final-strategy": "final-test/freeze", "evaluate-final-test": "final-test/result"}
+    if normalized in final_operations:
+        return final_operations[normalized]
     if normalized.startswith("review-retrieval-sources"):
         return "review-retrieval/sources"
     if normalized.startswith("review-retrieval-profile"):

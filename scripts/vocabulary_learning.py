@@ -106,7 +106,7 @@ def load_ledger(
         raise VocabularyLearningError("Candidate ledger protocol binding does not match the review protocol")
     by_pmid = {str(item.get("pmid")): item for item in records if isinstance(item, dict) and str(item.get("pmid") or "").isdigit()}
     discovery = [pmid for pmid, item in by_pmid.items() if item.get("decision") == "include" and item.get("use") in {"discovery", "both"}]
-    holdout = [pmid for pmid, item in by_pmid.items() if item.get("decision") == "include" and item.get("use") == "holdout"]
+    holdout = [pmid for pmid, item in by_pmid.items() if item.get("decision") == "include" and item.get("use") in {"development-validation", "holdout"}]
     return by_pmid, discovery, holdout
 
 
@@ -554,7 +554,7 @@ def retest_learning(
             current_retrieved = pubmed_tool.retrieve_against_pmids(client, current_query, holdout)
             expanded_retrieved = pubmed_tool.retrieve_against_pmids(client, expanded_query, holdout)
             holdout_test = {
-                "status": "independent-holdout-tested",
+                "status": "development-validation-tested",
                 "tested_pmids": holdout,
                 "current_retrieved": [pmid for pmid in holdout if pmid in current_retrieved],
                 "expanded_retrieved": [pmid for pmid in holdout if pmid in expanded_retrieved],
@@ -562,7 +562,7 @@ def retest_learning(
                 "remaining_missed_pmids": [pmid for pmid in holdout if pmid not in expanded_retrieved],
             }
         else:
-            holdout_test = {"status": "unavailable-no-independent-holdout", "tested_pmids": [], "rescued_pmids": []}
+            holdout_test = {"status": "unavailable-no-development-validation", "tested_pmids": [], "rescued_pmids": []}
         differential_query = f"({expanded_query}) NOT ({current_query})"
         search = pubmed_tool.esearch(client, differential_query, retmax=max(1, sample_size), retstart=0, sort=None)
         pmids = [str(value) for value in search.get("pmids", [])]

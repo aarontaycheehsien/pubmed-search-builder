@@ -16,10 +16,10 @@ from typing import Any
 PROVENANCE = {"user-seed", "pilot-anchor", "similar", "citedin", "reference", "prior-review", "other"}
 DECISIONS = {"include", "exclude", "uncertain"}
 TEMPLATE_DECISIONS = DECISIONS | {"pending"}
-USES = {"discovery", "holdout", "both", "heuristic", "neither"}
+USES = {"discovery", "development-validation", "holdout", "both", "heuristic", "neither"}
 DISCOVERY_USES = {"discovery", "both"}
-VALIDATION_USES = {"holdout", "both"}
-EVIDENCE_USES = DISCOVERY_USES | {"holdout"}
+VALIDATION_USES = {"development-validation", "holdout", "both"}
+EVIDENCE_USES = DISCOVERY_USES | {"development-validation", "holdout"}
 
 # How a screening decision was reached, mirroring screening_tool.py.
 DECIDED_BY = {"human", "model", "rule", "human_verified_model"}
@@ -107,7 +107,7 @@ def validate_template(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         if decision not in TEMPLATE_DECISIONS:
             issues.append(f"{prefix} decision must be pending, include, exclude, or uncertain")
         requested = str(record.get("requested_role") or record.get("requested_use") or "").strip()
-        if requested and requested not in {"discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"}:
+        if requested and requested not in {"discovery-candidate", "development-validation-candidate", "holdout-candidate", "both-candidate", "heuristic"}:
             issues.append(f"{prefix} requested_role is invalid")
     summary = {
         "scope_version": scope_version,
@@ -190,6 +190,9 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             "non_independent_validation_pmids": [],
             "heuristic_pmids": [],
             "independent_holdout_available": False,
+            "development_validation_available": False,
+            "validation_stage": "development-validation",
+            "final_test_status": "not-performed",
         }
 
     seen: set[str] = set()
@@ -243,7 +246,7 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             issues.append(f"{prefix} excluded records must use neither")
         if decision == "uncertain" and use not in {"heuristic", "neither"}:
             issues.append(f"{prefix} uncertain records may use only heuristic or neither")
-        if use in {"discovery", "holdout", "both"}:
+        if use in EVIDENCE_USES:
             if decision != "include":
                 issues.append(f"{prefix} {use} use requires decision include")
             if reviewed is not True:
@@ -262,7 +265,7 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         if pmid and decision == "include" and reviewed is True and reason:
             if use in DISCOVERY_USES:
                 discovery_pmids.append(pmid)
-            if use == "holdout":
+            if use in {"development-validation", "holdout"}:
                 holdout_pmids.append(pmid)
             elif use == "both":
                 both_pmids.append(pmid)
@@ -280,7 +283,11 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         "holdout_pmids": holdout_pmids,
         "non_independent_validation_pmids": both_pmids,
         "heuristic_pmids": heuristic_pmids,
-        "independent_holdout_available": bool(holdout_pmids),
+        "independent_holdout_available": False,  # deprecated; development is not a final test
+        "development_validation_available": bool(holdout_pmids),
+        "development_validation_pmids": holdout_pmids,
+        "validation_stage": "development-validation",
+        "final_test_status": "not-performed",
         "screening_provenance": {
             "decided_by_counts": dict(sorted(decided_by_counts.items())),
             # Records driving vocabulary or validation that carry no screening provenance at all.
@@ -332,9 +339,9 @@ def allocate_holdout(
     else:
         holdout_n = min(len(ranked) - 1, max(2, math.ceil(len(ranked) * max(0.0, fraction))))
         holdout_pmids = {normalize_pmid(record.get("pmid")) for record in ranked[:holdout_n]}
-        assignment = "independent-holdout"
+        assignment = "development-validation"
         for record in ranked:
-            record["use"] = "holdout" if normalize_pmid(record.get("pmid")) in holdout_pmids else "discovery"
+            record["use"] = "development-validation" if normalize_pmid(record.get("pmid")) in holdout_pmids else "discovery"
     metadata = {
         "method": "sha256-deterministic",
         "seed": seed,
@@ -342,6 +349,8 @@ def allocate_holdout(
         "minimum_confirmed": minimum_confirmed,
         "fraction": fraction,
         "assignment": assignment,
+        "validation_stage": "development-validation",
+        "final_test_status": "not-performed",
         "holdout_pmids": sorted(holdout_pmids),
     }
     data["holdout_allocation"] = metadata

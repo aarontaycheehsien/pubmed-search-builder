@@ -427,6 +427,15 @@ def protocol_packet_binding(path: Path) -> dict[str, Any]:
     }
 
 
+def reject_final_test_evidence(path: Path) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError):
+        return
+    if isinstance(payload, dict) and str(payload.get("artifact_type", "")).startswith("final-test/"):
+        raise CriticArtifactError("Final-test artifacts must not enter the development critic; finish critique before final evaluation")
+
+
 def build_evidence_bundle(items: list[str], output: Path) -> dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
     roles: set[str] = set()
@@ -441,6 +450,7 @@ def build_evidence_bundle(items: list[str], output: Path) -> dict[str, Any]:
             raise CriticArtifactError(f"Evidence role is empty or duplicated: {role!r}")
         if not path.is_file():
             raise CriticArtifactError(f"Evidence file does not exist: {path}")
+        reject_final_test_evidence(path)
         roles.add(role)
         if role in {"critic_packet", "protocol-packet"}:
             if packet_binding is not None:
@@ -489,6 +499,10 @@ def validate_evidence_bundle(path: Path) -> tuple[list[str], dict[str, Any]]:
         elif not expected or sha256_file(file_path) != expected:
             issues.append(f"evidence artifact {role!r} hash does not match")
         else:
+            try:
+                reject_final_test_evidence(file_path)
+            except CriticArtifactError as exc:
+                issues.append(str(exc))
             resolved_artifacts[role] = {"path": str(file_path.resolve()), "sha256": expected}
         if role in {"critic_packet", "protocol-packet"} and file_path.is_file():
             try:

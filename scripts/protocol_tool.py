@@ -32,7 +32,7 @@ CORE_DERIVATIVE_TYPES = frozenset({
 })
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 PROTOCOL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-SEED_ROLES = {"discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"}
+SEED_ROLES = {"discovery-candidate", "development-validation-candidate", "holdout-candidate", "both-candidate", "heuristic"}
 CONCEPT_ROLES = {"essential", "optional"}
 FRAGILITY = {"stable", "fragile", "very_fragile"}
 DECISION_TYPES = {"filter", "limit"}

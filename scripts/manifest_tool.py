@@ -1869,7 +1869,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 retest = item.get("retest") if isinstance(item.get("retest"), dict) else {}
                 holdout_test = retest.get("holdout_test") if isinstance(retest.get("holdout_test"), dict) else {}
                 differential_sample = retest.get("differential_sample") if isinstance(retest.get("differential_sample"), dict) else {}
-                if holdout_test.get("status") not in {"independent-holdout-tested", "unavailable-no-independent-holdout"}:
+                if holdout_test.get("status") not in {"development-validation-tested", "unavailable-no-development-validation", "independent-holdout-tested", "unavailable-no-independent-holdout"}:
                     issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a held-out retest status")
                 if not isinstance(differential_sample.get("count"), int) or not isinstance(differential_sample.get("records"), list):
                     issues.append(f"accepted vocabulary proposal {item.get('proposal_id')!r} lacks a differential sample")
@@ -2148,7 +2148,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
 
     screening_summary = screening.get("summary") if isinstance(screening.get("summary"), dict) else {}
     needs_validation = str(gates.get("seed") or "").strip().lower() in {"provided", "partial"}
-    needs_validation = needs_validation or bool(screening_summary.get("independent_holdout_available"))
+    needs_validation = needs_validation or bool(screening_summary.get("development_validation_available") or screening_summary.get("independent_holdout_available"))
     validation_entries = [
         entry for entry in entries
         if isinstance(entry, dict) and entry.get("kind") in {"validate", "recall"}
@@ -2352,6 +2352,17 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                     caveat = str(reporting.get("remaining_caveats") or "").casefold()
                     if "empirically-unvalidated" not in caveat and "empirically unvalidated" not in caveat:
                         issues.append("accepted empirically-unvalidated handoff is not labelled in the final audit caveats")
+                if core_payload.get("final_test_result_file"):
+                    import final_test_tool
+                    try:
+                        test_path = resolve_artifact_path(str(core_payload["final_test_result_file"]), manifest_path)
+                        final_test_tool.verify(test_path)
+                        tested = final_test_tool.read(test_path)
+                        current_text = str(core_payload.get("final_strategy") or core_payload.get("strategy") or core_payload.get("final_pubmed_strategy") or "").strip()
+                        if Path(tested["strategy"]["path"]).read_text(encoding="utf-8-sig").strip() != current_text:
+                            issues.append("final-test result describes a different strategy from the final audit")
+                    except (ValueError, OSError) as exc:
+                        issues.append(f"final-test result is invalid or stale: {exc}")
                 audit_strategy = str(
                     core_payload.get("final_strategy")
                     or core_payload.get("strategy")

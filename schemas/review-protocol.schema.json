@@ -294,7 +294,7 @@
       "required": ["pmid", "role", "rationale"],
       "properties": {
         "pmid": {"type": "string", "pattern": "^[1-9][0-9]*$"},
-        "role": {"enum": ["discovery-candidate", "holdout-candidate", "both-candidate", "heuristic"]},
+        "role": {"enum": ["discovery-candidate", "development-validation-candidate", "holdout-candidate", "both-candidate", "heuristic"]},
         "rationale": {"type": "string", "minLength": 1}
       }
     },

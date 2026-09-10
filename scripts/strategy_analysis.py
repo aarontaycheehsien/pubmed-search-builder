@@ -666,8 +666,8 @@ def ledger_sets(
     }
     development, development_meta = pubmed_tool.candidate_ledger_pmids(path, "discovery", **binding)
     holdout, holdout_meta = pubmed_tool.candidate_ledger_pmids(path, "validation", **binding)
-    independent = bool(holdout_meta.get("independent"))
-    if not independent:
+    disjoint = bool(holdout_meta.get("disjoint_from_discovery"))
+    if not disjoint:
         holdout = []
     return development, holdout, {"development": development_meta, "validation": holdout_meta}
 
