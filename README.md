@@ -166,6 +166,12 @@ python scripts/pubmed_tool.py cache --clear
 python scripts/pubmed_tool.py --no-cache search --query-file final_strategy.txt --retmax 0
 ```
 
+Cache clearing removes only verified entries from a directory carrying the
+`.pubmed-cache-owner` marker. Unrelated files are preserved. Old unmarked caches
+remain readable but require explicit `cache --adopt-legacy` before writing or
+clearing; adoption refuses mixed-content directories and links. See
+[safe installation and cache maintenance](INSTALL.md) for migration and recovery.
+
 Configure with `NCBI_CACHE`, `NCBI_CACHE_DIR`, `NCBI_CACHE_TTL_HOURS`, and
 `NCBI_RECORD_CACHE_TTL_DAYS`; see [`.env.example`](.env.example).
 

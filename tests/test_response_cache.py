@@ -17,6 +17,7 @@ import pubmed_tool  # noqa: E402
 
 from pubmed_search_builder.infrastructure.cache import (  # noqa: E402
     DEFAULT_CACHE_DIRNAME,
+    CACHE_OWNER_FILE,
     ResponseCache,
     is_enabled_value,
 )
@@ -225,6 +226,65 @@ class CorruptionTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+    def test_clear_preserves_unrelated_files_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = cache_at(root)
+            cache.put("esearch.fcgi", SEARCH_PARAMS, b"body")
+            unrelated = root / "run_manifest.json"
+            unrelated.write_text('{"important":true}', encoding="utf-8")
+            invalid = cache.entry_path("esearch.fcgi", SEARCH_PARAMS).parent / ("f" * 64 + ".json")
+            invalid.write_text('{"not":"cache"}', encoding="utf-8")
+            self.assertEqual(cache.clear()["cleared"], 1)
+            self.assertEqual(cache.clear()["cleared"], 0)
+            self.assertTrue(unrelated.is_file())
+            self.assertTrue(invalid.is_file())
+            self.assertTrue((root / CACHE_OWNER_FILE).is_file())
+
+    def test_unowned_legacy_cache_requires_explicit_verified_adoption(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = cache_at(root)
+            cache.put("esearch.fcgi", SEARCH_PARAMS, b"body")
+            (root / CACHE_OWNER_FILE).unlink()
+            with self.assertRaises(ValueError):
+                cache.clear()
+            cache.put("efetch.fcgi", SEARCH_PARAMS, b"new")
+            self.assertEqual(cache.describe()["entries"], 1)
+            unrelated = root / "notes.txt"
+            unrelated.write_text("keep", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                cache.adopt_legacy()
+            unrelated.unlink()
+            self.assertTrue(cache.adopt_legacy()["adopted"])
+            self.assertEqual(cache.clear()["cleared"], 1)
+
+    def test_clear_refuses_roots_repositories_and_linked_buckets(self):
+        for target in (ROOT, ROOT / ".git" / "objects", Path.home(), Path(ROOT.anchor)):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                cache_at(target).clear()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "cache"
+            outside = Path(td) / "outside"
+            outside.mkdir()
+            sentinel = outside / "important.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            cache = cache_at(root)
+            cache.put("esearch.fcgi", SEARCH_PARAMS, b"body")
+            link = root / "ff"
+            if os.name == "nt":
+                import subprocess
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True)
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+            try:
+                with self.assertRaises(ValueError):
+                    cache.clear()
+                self.assertEqual(sentinel.read_text(), "keep")
+                self.assertEqual(cache.describe()["entries"], 1)
+            finally:
+                link.rmdir() if os.name == "nt" else link.unlink()
+
     def test_stats_report_activity_for_disclosure(self):
         with tempfile.TemporaryDirectory() as td:
             cache = cache_at(td)

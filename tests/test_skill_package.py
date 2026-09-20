@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,80 @@ SPEC.loader.exec_module(package_skill)
 
 
 class SkillPackageTests(unittest.TestCase):
+    def test_shared_repository_and_junction_are_never_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repository = root / "pubmed-search-builder"
+            repository.mkdir()
+            subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(repository), "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                            "commit", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
+            worktree = root / "development"
+            subprocess.run(["git", "-C", str(repository), "worktree", "add", "--detach", str(worktree)], check=True, capture_output=True)
+            (worktree / "SKILL.md").write_text("fixture", encoding="utf-8")
+            with patch.object(package_skill.shutil, "rmtree") as remove:
+                with self.assertRaises(package_skill.PackageError):
+                    package_skill.package_skill(worktree, repository, replace=True)
+                remove.assert_not_called()
+            self.assertTrue((repository / ".git").is_dir())
+            link = root / "linked"
+            if sys.platform == "win32":
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(repository)], check=True, capture_output=True)
+            else:
+                link.symlink_to(repository, target_is_directory=True)
+            try:
+                with self.assertRaises(package_skill.PackageError):
+                    package_skill.package_skill(worktree, link, replace=True)
+            finally:
+                if sys.platform == "win32":
+                    link.rmdir()
+                else:
+                    link.unlink()
+
+    def test_unmanaged_directory_and_protected_roots_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pubmed-search-builder"
+            output.mkdir()
+            sentinel = output / "important.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            for target in (output, Path.home(), Path(ROOT.anchor)):
+                with self.subTest(target=target), self.assertRaises(package_skill.PackageError):
+                    package_skill.package_skill(ROOT, target, replace=True)
+            self.assertEqual(sentinel.read_text(), "keep")
+
+    def test_replace_preserves_credentials_and_recoverable_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pubmed-search-builder"
+            first = package_skill.package_skill(ROOT, output)
+            self.assertTrue(first["source_commit"])
+            (output / ".env").write_text("LOCAL_SETTING=fixture", encoding="utf-8")
+            (output / "local-notes.txt").write_text("keep", encoding="utf-8")
+            receipt = package_skill.package_skill(ROOT, output, replace=True)
+            backup = Path(receipt["backup"])
+            self.assertEqual((backup / "local-notes.txt").read_text(), "keep")
+            self.assertEqual((output / ".env").read_text(), "LOCAL_SETTING=fixture")
+            self.assertIn("SKILL.md", json.loads((output / package_skill.OWNERSHIP_FILE).read_text())["sha256"])
+
+    def test_build_and_promotion_failures_preserve_previous_installation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pubmed-search-builder"
+            package_skill.package_skill(ROOT, output)
+            original = (output / package_skill.OWNERSHIP_FILE).read_bytes()
+            with patch.object(package_skill, "build_package", side_effect=OSError("copy failed")):
+                with self.assertRaises(OSError):
+                    package_skill.package_skill(ROOT, output, replace=True)
+            self.assertEqual((output / package_skill.OWNERSHIP_FILE).read_bytes(), original)
+            rename = Path.rename
+            def fail_promotion(path, destination):
+                if ".stage-" in str(path.parent):
+                    raise OSError("promotion failed")
+                return rename(path, destination)
+            with patch.object(Path, "rename", fail_promotion):
+                with self.assertRaises(package_skill.PackageError):
+                    package_skill.package_skill(ROOT, output, replace=True)
+            self.assertEqual((output / package_skill.OWNERSHIP_FILE).read_bytes(), original)
+            self.assertFalse(output.with_name(f".{output.name}.package.lock").exists())
+
     def test_package_contains_runtime_files_and_excludes_repository_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "pubmed-search-builder"

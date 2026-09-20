@@ -87,6 +87,13 @@ If you see errors or warnings:
 
 Keep repository-only material (`tests`, `evals`, setup guides, and examples) outside the installed skill. Package only runtime files:
 
+Keep the source repository and its development worktrees separate from the installed
+package. If the destination below already contains your repository (including the
+shared `.git` directory used by worktrees), do not replace it. Use a new installation
+location and migrate the app's skill registration separately. The packager refuses
+repositories, worktrees, protected roots, junctions/symbolic links, and existing
+directories without its `.pubmed-package.json` ownership receipt.
+
 ```powershell
 python tools\package_skill.py --output "$env:USERPROFILE\.codex\skills\pubmed-search-builder" --replace
 ```
@@ -98,6 +105,24 @@ python tools/package_skill.py --output "${CODEX_HOME:-$HOME/.codex}/skills/pubme
 ```
 
 Re-run the command after pulling updates. The package intentionally excludes `.env`; set NCBI variables in the process environment or pass an explicit file before the subcommand, for example `python scripts/pubmed_tool.py --env-file <path-to-pubmed.env> search ...`. The tools never load `.env` from the current working directory implicitly.
+
+New packages are built and validated in a temporary sibling directory before
+installation. Their ownership receipt records the source commit and SHA-256 file
+inventory. `--replace` accepts only a previously managed package; it retains the old
+directory at the `backup` path printed in the receipt. Existing `.env*` files are
+carried forward. Other local files and edits remain recoverable in that backup;
+they are not automatically copied into the new runtime.
+
+A failed promotion restores the previous installation when possible. If restoration
+fails, the error identifies the retained backup. To roll back, stop active runs,
+move the new installation aside, and rename that backup to the installation's original
+path. An interrupted process may leave a sibling `.package.lock` file: remove only
+that lock after confirming no packaging process is active and inspecting the reported
+installation, backup, and staging directories. Backups are never automatically deleted.
+
+Older installations without an ownership receipt are not adopted automatically.
+Build into a fresh location, verify it, then migrate registration while preserving
+the old installation and its local configuration.
 
 ---
 
@@ -180,7 +205,28 @@ git pull origin main
 python tools/package_skill.py --output "${CODEX_HOME:-$HOME/.codex}/skills/pubmed-search-builder" --replace
 ```
 
-Your `.env` file will not be affected (it's in `.gitignore`).
+The source `.env` is not packaged. An existing managed installation's `.env*` files
+are preserved during replacement, independently of Git ignore rules.
+
+### Cache maintenance
+
+New empty cache directories receive a `.pubmed-cache-owner` marker on their first
+successful write. `cache --clear` requires that marker and deletes only verified,
+hash-addressed cache entries. It preserves the directory, marker, unrelated files,
+and invalid/unrecognized entries. Linked directories and Git metadata cause refusal.
+
+Older unmarked caches remain readable, but cannot be written or cleared until
+explicitly adopted. After checking the path, run:
+
+```powershell
+python scripts/pubmed_tool.py --cache-dir "C:\path\to\run\.ncbi_cache" cache --adopt-legacy
+python scripts/pubmed_tool.py --cache-dir "C:\path\to\run\.ncbi_cache" cache --clear
+```
+
+Adoption succeeds only when the directory contains verified cache entries and their
+bucket directories, with no unrelated files or links. If it is refused, use a fresh
+cache directory and retain the old one for inspection. Never select a project or run
+root as the cache directory.
 
 ---
 

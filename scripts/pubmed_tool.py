@@ -795,7 +795,7 @@ def build_response_cache(*, enabled: bool = True, directory: str | None = None) 
                     "refusing NCBI_CACHE_DIR outside the run workspace; use the explicit "
                     "--cache-dir option to authorize an external cache"
                 )
-            directory = str(resolved)
+            directory = configured
     return ResponseCache.for_workspace(
         enabled=True,
         directory=directory,
@@ -4505,7 +4505,9 @@ def build_parser() -> argparse.ArgumentParser:
         "cache",
         help="Inspect or clear this workspace's NCBI response cache (no network).",
     )
-    cache_parser.add_argument("--clear", action="store_true", help="Delete every cached response for this workspace.")
+    cache_actions = cache_parser.add_mutually_exclusive_group()
+    cache_actions.add_argument("--clear", action="store_true", help="Delete verified entries from an owned cache; preserve unrelated files.")
+    cache_actions.add_argument("--adopt-legacy", action="store_true", help="Mark an existing cache as owned only if every file is a verified cache entry.")
 
     return parser
 
@@ -4526,8 +4528,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "cache":
             payload: dict[str, object] = {"operation": "ncbi-cache", "ok": True}
-            if args.clear:
-                payload.update(cache.clear())
+            try:
+                if args.clear:
+                    payload.update(cache.clear())
+                elif args.adopt_legacy:
+                    payload.update(cache.adopt_legacy())
+            except (OSError, ValueError) as exc:
+                write_json({"operation": "ncbi-cache", "ok": False, "error": str(exc)})
+                return 2
             payload.update(cache.describe())
             write_json(payload)
             return 0

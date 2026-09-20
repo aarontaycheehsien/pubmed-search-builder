@@ -29,7 +29,6 @@ import base64
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 import time
 from collections import Counter
@@ -38,10 +37,13 @@ from pathlib import Path
 from typing import Mapping
 
 from pubmed_search_builder.core.workspace import skill_root
+from pubmed_search_builder.core.filesystem_safety import checked_directory, is_link, reject_tree_links_and_git
 from pubmed_search_builder.infrastructure.transport import SECRET_PARAMETER_NAMES
 
 CACHE_SCHEMA_VERSION = 1
 DEFAULT_CACHE_DIRNAME = ".ncbi_cache"
+CACHE_OWNER_FILE = ".pubmed-cache-owner"
+CACHE_OWNER = {"owner": "pubmed-search-builder/ncbi-cache", "version": 1}
 
 # Parameters that identify the caller rather than the request. Excluding them keeps one
 # cache usable across contributors and across an api-key rotation.
@@ -83,7 +85,8 @@ class ResponseCache:
         query_ttl_seconds: float = DEFAULT_QUERY_TTL_SECONDS,
         clock: "callable[[], float]" = time.time,
     ) -> None:
-        self.directory = Path(directory).resolve() if directory is not None else None
+        self._requested_directory = Path(os.path.abspath(Path(directory).expanduser())) if directory is not None else None
+        self.directory = self._requested_directory.resolve() if self._requested_directory is not None else None
         self.enabled = bool(enabled and self.directory is not None)
         self.disabled_reason = disabled_reason if not self.enabled else ""
         self.record_ttl_seconds = float(record_ttl_seconds)
@@ -117,7 +120,7 @@ class ResponseCache:
         if not enabled:
             return cls.disabled("disabled by configuration")
         if directory:
-            resolved = Path(directory).expanduser().resolve()
+            resolved = Path(directory).expanduser().absolute()
         else:
             root = Path(workspace).resolve() if workspace else Path.cwd().resolve()
             resolved = root / DEFAULT_CACHE_DIRNAME
@@ -136,6 +139,73 @@ class ResponseCache:
         )
 
     # -- keying -------------------------------------------------------------------
+
+    def _safe_root(self) -> Path:
+        assert self._requested_directory is not None
+        root = checked_directory(self._requested_directory, protected=(skill_root(), Path.cwd()))
+        if root != self.directory:
+            raise ValueError("Cache directory target changed")
+        return root
+
+    def _owned(self, root: Path) -> bool:
+        marker = root / CACHE_OWNER_FILE
+        if is_link(marker):
+            raise ValueError("Cache ownership marker must not be linked")
+        try:
+            return json.loads(marker.read_text(encoding="utf-8")) == CACHE_OWNER
+        except (FileNotFoundError, UnicodeError, json.JSONDecodeError):
+            return False
+
+    def _prepare_write(self) -> Path:
+        root = self._safe_root()
+        root.mkdir(parents=True, exist_ok=True)
+        if not self._owned(root):
+            if any(root.iterdir()):
+                raise ValueError("Unmarked cache is read-only; explicitly adopt it with cache --adopt-legacy")
+            self._atomic_write(root / CACHE_OWNER_FILE, CACHE_OWNER)
+        return root
+
+    def _recognized_entry(self, path: Path) -> bool:
+        """Only an actual, hash-addressed cache entry may be removed."""
+        if is_link(path) or is_link(path.parent) or not path.is_file():
+            return False
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(entry, dict) or entry.get("schema_version") != CACHE_SCHEMA_VERSION:
+                return False
+            endpoint, params = entry.get("endpoint"), entry.get("params")
+            if not isinstance(endpoint, str) or not isinstance(params, dict) or self._decode_body(entry) is None:
+                return False
+            digest = self.cache_key(endpoint, params)
+            return path.name == f"{digest}.json" and path.parent.name == digest[:2]
+        except (OSError, ValueError, UnicodeError, TypeError):
+            return False
+
+    def _entry_paths(self) -> list[Path]:
+        if self.directory is None or not self.directory.is_dir():
+            return []
+        paths = []
+        for bucket in self.directory.iterdir():
+            if len(bucket.name) == 2 and all(c in "0123456789abcdef" for c in bucket.name):
+                if bucket.is_dir() and not is_link(bucket):
+                    paths.extend(p for p in bucket.iterdir() if self._recognized_entry(p))
+        return paths
+
+    def adopt_legacy(self) -> dict[str, object]:
+        if not self.enabled:
+            raise ValueError("Cannot adopt a disabled cache")
+        root = self._safe_root()
+        if self._owned(root):
+            return {"adopted": False, "directory": str(root)}
+        if not root.is_dir():
+            raise ValueError("Legacy cache directory does not exist")
+        reject_tree_links_and_git(root)
+        entries = set(self._entry_paths())
+        buckets = {p.parent for p in entries}
+        if not entries or any(p not in entries and p not in buckets for p in root.rglob("*")):
+            raise ValueError("Legacy adoption requires only verified cache entries; unrelated or invalid files found")
+        self._atomic_write(root / CACHE_OWNER_FILE, CACHE_OWNER)
+        return {"adopted": True, "directory": str(root), "entries": len(entries)}
 
     def identifying_params(self, params: Mapping[str, str]) -> dict[str, str]:
         return {
@@ -172,11 +242,14 @@ class ResponseCache:
             return None
         path = self.entry_path(endpoint, params)
         try:
+            self._safe_root()
+            if is_link(path.parent) or is_link(path):
+                return None
             entry = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             self._counts["misses"] += 1
             return None
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, ValueError, UnicodeDecodeError):
             self._counts["unreadable"] += 1
             return None
         if not isinstance(entry, dict) or entry.get("schema_version") != CACHE_SCHEMA_VERSION:
@@ -220,9 +293,13 @@ class ResponseCache:
             entry["body"] = base64.b64encode(body).decode("ascii")
             entry["body_encoding"] = "base64"
         try:
-            self._atomic_write(self.entry_path(endpoint, params), entry)
+            self._prepare_write()
+            path = self.entry_path(endpoint, params)
+            if is_link(path.parent) or is_link(path):
+                raise ValueError("Refusing linked cache entry")
+            self._atomic_write(path, entry)
             self._counts["writes"] += 1
-        except OSError:
+        except (OSError, ValueError):
             self._counts["write_errors"] += 1
 
     @staticmethod
@@ -294,7 +371,7 @@ class ResponseCache:
         fresh = 0
         bytes_on_disk = 0
         now = self._clock()
-        for path in self.directory.rglob("*.json"):
+        for path in self._entry_paths():
             if not path.is_file():
                 continue
             entries += 1
@@ -311,7 +388,20 @@ class ResponseCache:
         return info
 
     def clear(self) -> dict[str, object]:
-        before = self.describe()
-        if self.enabled and self.directory is not None and self.directory.is_dir():
-            shutil.rmtree(self.directory, ignore_errors=True)
-        return {"cleared": before.get("entries", 0), "directory": before.get("directory")}
+        if not self.enabled:
+            return {"cleared": 0, "directory": str(self.directory) if self.directory else None}
+        root = self._safe_root()
+        if not root.exists():
+            return {"cleared": 0, "directory": str(root)}
+        if not self._owned(root):
+            raise ValueError("Refusing to clear an unowned cache; use cache --adopt-legacy after checking its location")
+        # Validate before deleting anything. Neither directory links nor junctions are traversed.
+        reject_tree_links_and_git(root)
+        cleared = 0
+        for path in self._entry_paths():
+            self._safe_root()
+            if is_link(path.parent) or not self._recognized_entry(path):
+                raise ValueError("Cache entry changed during clear")
+            path.unlink()
+            cleared += 1
+        return {"cleared": cleared, "directory": str(root)}
