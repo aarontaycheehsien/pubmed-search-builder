@@ -37,7 +37,7 @@ A locked protocol may set `review.depth` to `full` (default), `standard`, or `ra
 
 ### Existing-strategy review or resumed build
 
-Require the plain-language question before inspecting the supplied strategy. Treat its terms, blocks, filters, and line structure as review objects, never as scope evidence. If a prior audit and manifest exist, read them and resume from the latest resolved scope version and critic round.
+Require the plain-language question before inspecting the supplied strategy. Treat its terms, blocks, filters, and line structure as review objects, never as scope evidence. If a prior audit and manifest exist, read them and resume from the latest resolved scope version and critic round. Run `manifest_tool.py report --manifest run_manifest.json` first. Its `next_actions` list is the completion gate's open issues grouped by stage in build order, each with the commands to run and the reference to read. Work from the first entry, reading only the references the open stages name.
 
 Do not search PubMed or the web to answer the substantive evidence question. The deliverable is the strategy, empirical QA, and audit.
 
@@ -90,7 +90,7 @@ For a completed build, save:
 - the final Markdown audit, preferably `audit_<topic-slug>_YYYY-MM-DD.md`;
 - the canonical append-only `run_manifest.json`.
 
-Run `scripts/manifest_tool.py show --validate --check-files --require-complete-loop` before handoff. This combined gate must confirm resolved intake/scope decisions, candidate-screening status, per-block evidence, required validation, a passing final critic round, final QA, audit output, and no pending user question or must-fix finding.
+Run `scripts/manifest_tool.py show --validate --check-files --require-complete-loop` before handoff. When it fails, its `next_actions` list gives the remaining work in order. This combined gate must confirm resolved intake/scope decisions, candidate-screening status, per-block evidence, required validation, a passing final critic round, final QA, audit output, and no pending user question or must-fix finding.
 
 In `pubmed-plus-external-validation` mode, also require completed/declined/unavailable status for every enabled registry source, complete trial screening and publication linking, evaluation of all eligible linked PubMed PMIDs, and resolution of every PubMed miss. In `pubmed-only` mode, no registry artifact is required; the audit must state that review-level completeness was not assessed.
 

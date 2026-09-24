@@ -81,6 +81,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_artifact, mesh_evidence_issues
+from next_actions import plan_next_actions
 from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
 from pubmed_search_builder.domain.review_depth import depth_disclosure, protocol_depth, waived_checks
 
@@ -2761,6 +2762,7 @@ def cmd_state(args: argparse.Namespace) -> dict[str, object]:
             issues = complete_loop_readiness(data, path)
             receipt["ok"] = not issues
             receipt["issues"] = issues
+            receipt["next_actions"] = plan_next_actions(issues)
         elif action == "check-stop":
             verdict = stop_readiness(data, path, str(getattr(args, "since", "") or "").strip())
             receipt.update(verdict)
@@ -3395,6 +3397,8 @@ def cmd_show(args: argparse.Namespace) -> dict[str, object]:
             issues.extend(f"complete-loop gap: {reason}" for reason in complete_loop_readiness(data, path))
         receipt["ok"] = not issues
         receipt["issues"] = issues
+        if issues:
+            receipt["next_actions"] = plan_next_actions(issues)
     return receipt
 
 
@@ -3487,6 +3491,9 @@ def cmd_report(args: argparse.Namespace) -> dict[str, object]:
     reminders = build_state_reminders(state) if isinstance(state, dict) else []
     if reminders:
         receipt["reminders"] = reminders
+    # Ordered to-do list derived from the gate: the first action is the next thing to do.
+    receipt["next_actions"] = plan_next_actions(list(receipt["complete_loop_issues"]))
+    receipt["handoff_ready"] = not receipt["complete_loop_issues"]
     return receipt
 
 

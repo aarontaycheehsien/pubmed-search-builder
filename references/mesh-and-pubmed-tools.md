@@ -388,6 +388,8 @@ python scripts/manifest_tool.py report --manifest run_manifest.json
 
 Use `workflow_tool.py` for executable stages. It resolves and hashes every declared input before launch, runs the command without a shell, rejects input mutation, failed commands, payloads with `ok: false`, and unchanged pre-existing outputs, then records return code, scope version, and input/output SHA-256 hashes. Use `--allow-unchanged-output` only for an intentionally idempotent stage. Direct `manifest_tool.py add` remains for already-created/manual artifacts. `show --validate --check-files` detects later file mutation; `--require-complete-loop` also parses validation and final-QA contents rather than accepting file existence alone.
 
+`report`, `state check-complete`, and a failing `show --require-...` add `next_actions`. It groups the gate's open issues by workflow stage (intake, scope lock, screening, block evidence, fragility, vocabulary learning, block testing, validation, revision, critic, final QA, audit), in build order. Each entry gives the action, the commands, the reference to read, and the exact issues it resolves. `report` also returns `handoff_ready`. Issues the classifier does not recognise are kept under `other`, never dropped.
+
 ### Build-state tracking
 
 `manifest_tool.py state` keeps a live `build_state` block inside `run_manifest.json` so the current stage, gate decisions, and the one open user question are read from a file instead of reconstructed from the conversation each turn. It is lazily created on first use, so manifests written only with `init`/`add` are unchanged.
