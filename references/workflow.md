@@ -10,7 +10,7 @@ Track the detailed stages in `run_manifest.json`, but show users only four conci
 2. `scope-lock` - validate, compile, and lock review protocol version 1 before record evidence is mined.
 3. `review-discovery` - conditional on an explicit evidence-synthesis target: compile the report-retrieval profile, retain branch provenance, classify every candidate, and evaluate final retrieval by eligible report type.
 4. `candidate-discovery` - fetch supplied seeds and discover pilot/related/prior-review candidates.
-5. `candidate-screening` - screen candidates and freeze discovery/holdout roles.
+5. `candidate-screening` - screen candidates and freeze discovery/development-validation roles.
 6. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
 7. `block-testing` - build blocks and run reversible counts, samples, gaps, variants, and filter comparisons.
 8. `validation` - run development-validation checks; sealed final testing is a separate post-freeze step in `final-test-validation.md`.
@@ -39,7 +39,7 @@ Require an independently stated plain-language review question. Pasted Boolean s
 
 When `review_protocol*.json` is supplied, read `references/protocol-dsl.md`, then run `protocol_tool.py validate ... --mode lock` and `protocol_tool.py compile ...` before any candidate-record, MeSH, or PubMed work. The protocol question satisfies the independent-question requirement. Its decisions satisfy user gates only when lock validation passes. Preserve the source protocol and compile receipt in the run; do not edit compiled ledgers to change scope.
 
-For a new build, ask once whether known-relevant seed PMIDs exist and stop for the answer. Seeds are optional and the build proceeds without them, but do not assume their absence: seed status is resolved only when the user supplies PMIDs, states there are none, or asks to proceed without them. Skip the question only when the user already supplied PMIDs or a valid locked protocol encodes `seeds.records`. Normalize and deduplicate supplied numeric PMIDs, but do not fetch, mine, or expand them until scope version 1 is locked.
+For a new build, ask once whether known-relevant seed PMIDs exist and stop for the answer. Seeds may also be given as DOIs, PMCIDs, or citations. Seeds are optional and the build proceeds without them, but do not assume their absence: seed status is resolved only when the user supplies PMIDs, states there are none, or asks to proceed without them. Skip the question only when the user already supplied PMIDs or a valid locked protocol encodes `seeds.records`. Normalize and deduplicate supplied numeric PMIDs and resolve DOIs/PMCIDs with `resolve_seeds.py --identifiers-only`, but do not fetch, mine, or expand seed content until scope version 1 is locked; resolve citations after lock (`seed-pmid-validation.md`).
 
 For an existing-strategy review, confirm the plain-language question first. Then accept the draft as a review object and preserve it as version 0; do not infer eligibility, essential concepts, or filters from its structure.
 
@@ -81,18 +81,18 @@ After the scope is locked:
 
 1. Fetch supplied seeds and inspect saved record JSON for identity, retraction, scope, title, abstract, publication type, and indexing.
 2. With supplied seeds, discover additional candidates through related/citation/prior-review methods. With no seeds, run the six-family orthogonal-pilot workflow in `no-seed-recall-estimation.md` and keep provenance hidden during screening.
-3. Compile the screening rubric from the locked protocol with `screening_tool.py compile-rubric`, then screen every record that may influence term mining. Each decision needs a verdict per criterion (`yes`/`no`/`unclear`/`not_reported`), evidence quoted verbatim from the hash-bound record, and a `decided_by` provenance. An include requires affirmative evidence on every required criterion; an exclude requires an evidenced decisive failure; anything unresolved stays `uncertain`. Rule-only decisions may triage but cannot supply discovery or holdout records without adjudication. Then re-screen a decision-stratified sample (at least 15%) with `screening_tool.py replicate`, which runs an isolated fresh-context child that sees only the rubric and the sampled records, or prepares a blank worksheet for a named human second screener. Never write the replicate yourself. Run `screening_tool.py agreement`, adjudicate every disagreement and evidence divergence, and build the ledger with `to-ledger --agreement`. Quoted evidence is verified to exist, not to support its verdict; the second reading is what tests that.
-4. Assign `discovery`, `holdout`, `both`, `heuristic`, or `neither` roles.
+3. Compile the screening rubric from the locked protocol with `screening_tool.py compile-rubric`, then screen every record that may influence term mining. Each decision needs a verdict per criterion (`yes`/`no`/`unclear`/`not_reported`), evidence quoted verbatim from the hash-bound record, and a `decided_by` provenance. An include requires affirmative evidence on every required criterion; an exclude requires an evidenced decisive failure; anything unresolved stays `uncertain`. Rule-only decisions may triage but cannot supply discovery or development-validation records without adjudication. Then re-screen a decision-stratified sample (at least 15%) with `screening_tool.py replicate`, which runs an isolated fresh-context child that sees only the rubric and the sampled records, or prepares a blank worksheet for a named human second screener. Never write the replicate yourself. Run `screening_tool.py agreement`, adjudicate every disagreement and evidence divergence, and build the ledger with `to-ledger --agreement`. Quoted evidence is verified to exist, not to support its verdict; the second reading is what tests that.
+4. Assign `discovery`, `development-validation`, `both`, `heuristic`, or `neither` roles (`holdout` is the legacy name for `development-validation`).
 5. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`; use deterministic `--allocate-holdout` when roles are not already frozen.
 6. Record the ledger with `manifest_tool.py state record-candidate-screen`.
 
-Seed entries compiled from `seeds.records` are candidate-role instructions, not relevance judgements. Fetch and screen them under the same rules as user-supplied seeds before discovery or holdout use.
+Seed entries compiled from `seeds.records` are candidate-role instructions, not relevance judgements. Fetch and screen them under the same rules as user-supplied seeds before discovery or development-validation use.
 
 Only screened-in `discovery` or `both` records may feed term mining. Do not feed high-overlap related records directly into `term-rank`. Unscreened neighbors may remain a separately labelled heuristic benchmark.
 
-Freeze held-out records before mining. When no disjoint development-validation set is feasible, record validation as non-independent.
+Freeze development-validation records before mining. When no disjoint development-validation set is feasible, record validation as reused rather than disjoint.
 
-For no-seed builds, do not begin term mining until repeated rounds add neither screened-in relevant studies nor vocabulary, no retrieval safety cap remains unresolved, and `no_seed_discovery.py adjudicate` has frozen discovery/holdout roles.
+For no-seed builds, do not begin term mining until repeated rounds add neither screened-in relevant studies nor vocabulary, no retrieval safety cap remains unresolved, and `no_seed_discovery.py adjudicate` has frozen discovery/development-validation roles.
 
 Unless the locked protocol's `review.depth` is `rapid`, read `references/active-vocabulary-learning.md`. After each screening round, extract terminology only from newly included discovery records and map it only to already locked concepts. Keep excluded-record diagnosis separate. A new concept or eligibility interpretation triggers `state reopen-scope`; do not adopt its terms under the current version. Reason every disposition on the bounded review shortlist and retest accepted terms against the fixed development-validation set when available plus differential samples. Candidates retained below the review threshold were never reviewed and carry no disposition; the gate reconciles their count against total generated candidates instead.
 
@@ -137,18 +137,18 @@ At `full` depth, read `references/screening-burden.md` for multi-strand or mater
 
 ## 6. Validate
 
-Prefer held-out screened-in records that did not contribute vocabulary. Report:
+Prefer development-validation records: screened-in records that did not contribute vocabulary. Report:
 
-- holdout retrieval overall and by block;
+- development-validation retrieval overall and by block;
 - missed-record diagnosis and bottleneck blocks;
 - topic-only versus filtered losses;
-- whether validation is independent, non-independent reused-seed, or heuristic.
+- whether validation used a disjoint development-validation set, reused seeds, or a heuristic benchmark. Development validation is repeated during the build, so it is never independent; only a sealed final test (`final-test-validation.md`) supports an independence claim.
 
-When no seeds or holdout exist, the pilot-related recall check in `references/no-seed-recall-estimation.md` may identify leaks, but it is not validated sensitivity. Low heuristic recall is evidence to inspect misses, not permission to widen scope automatically.
+When no seeds or development-validation records exist, the pilot-related recall check in `references/no-seed-recall-estimation.md` may identify leaks, but it is not validated sensitivity. Low heuristic recall is evidence to inspect misses, not permission to widen scope automatically.
 
 When intervention trials are eligible, consider the optional `pubmed-plus-external-validation` path in `references/external-trial-registry-validation.md`, especially for empty or thin discovery. Prior reviews and citation searching remain important for broad or historical psychotherapy questions because trial registries are incomplete for older studies. Eligible registry-linked PubMed misses are query leaks; non-PubMed, unpublished, registry-only, and ongoing trials are coverage findings. No eligible registry trials provide no reassurance.
 
-Never hand off a final strategy with an unexplained missed in-scope holdout, seed, or gold-standard PMID. Classify every miss as query failure or documented out-of-scope evidence.
+Never hand off a final strategy with an unexplained missed in-scope development-validation, seed, or gold-standard PMID. Classify every miss as query failure or documented out-of-scope evidence.
 
 ## 7. Run the critic and revise
 
@@ -191,12 +191,12 @@ The audit must include:
 
 - the current retrieval-scope artifact and prior superseded versions;
 - the locked review protocol, its scope-version history, compile receipt, and verification result when the DSL was used;
-- candidate-screening counts, decisions, evidence roles, and holdout independence;
+- candidate-screening counts, decisions, evidence roles, and whether validation was disjoint from discovery;
 - concept/MeSH/text-word evidence and saved record-content files reviewed;
 - strategy variants, counts, samples, validation, and filter effects;
 - concept-ablation recommendations and differential samples; for fragile topics, both strategy strands, known-item losses, unique records, workload estimates, and narrowing rationales;
-- empirical fragility metrics, dimension scores, hard flags, and any reasoned human override; for no-seed builds, orthogonal pilot coverage, blinded screening, saturation history, and holdout freeze;
-- active vocabulary-learning rounds, newly included records, excluded-record diagnosis, candidate-generation totals with the review-shortlist policy, shortlist term dispositions, scope challenges, held-out effects, and differential samples;
+- empirical fragility metrics, dimension scores, hard flags, and any reasoned human override; for no-seed builds, orthogonal pilot coverage, blinded screening, saturation history, and development-validation freeze;
+- active vocabulary-learning rounds, newly included records, excluded-record diagnosis, candidate-generation totals with the review-shortlist policy, shortlist term dispositions, scope challenges, development-validation effects, and differential samples;
 - stratified sampling design and seed, label counts including uncertainty, precision confidence intervals, estimated records screened per relevant report, and recall-gated incremental workload comparisons;
 - every critic round and the revision-cycle ledger;
 - final QA, caveats, and external peer-review attention points.
@@ -220,7 +220,7 @@ Stop only when:
 - candidate screening is complete or explicitly not applicable;
 - every essential block has required MeSH and count evidence or a reasoned waiver;
 - every current reduced-fidelity MeSH artifact is disclosed in the final audit with its RDF-confirmation follow-up;
-- held-out/seed/heuristic validation is correctly labelled and all in-scope misses are resolved;
+- development-validation, seed, or heuristic validation is correctly labelled and all in-scope misses are resolved;
 - the latest critic round passes and all required re-probes are recorded;
 - final QA and low-count/filter checks pass where applicable;
 - the audit and manifest exist and the complete-loop gate passes;

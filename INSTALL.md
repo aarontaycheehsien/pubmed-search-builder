@@ -125,6 +125,19 @@ Older installations without an ownership receipt are not adopted automatically.
 Build into a fresh location, verify it, then migrate registration while preserving
 the old installation and its local configuration.
 
+#### What a package does not include: the repository hooks
+
+The repository's session hooks are not part of the package: `.claude/settings.json` and `.codex/hooks.json`, which run `.codex/hooks/`. They cover:
+
+- the Stop gate, which blocks ending a turn on an unfinished build without a recorded pause;
+- the provenance guard, which requires evidence-producing commands to run through `workflow_tool.py`;
+- the session-context loader, which restores the active run on resume;
+- the prompt secret guard.
+
+Claude Code and Codex load these hooks only when the session's project is a repository checkout. They then protect builds run under that checkout's `runs/<topic-slug>/`. A build run from a packaged copy, or from any other project, has none of them. Its safeguards are the tools' own checks (the complete-loop gate, `workflow_tool.py` hashing, the no-harm guard) plus the skill's instructions, and nothing stops an agent from skipping `workflow_tool.py` or ending a turn early.
+
+For protected builds, open the session in a repository checkout and keep runs under its `runs/` directory, as `workflow_tool.py init --workspace runs/<topic-slug>` does.
+
 ---
 
 ## Getting an NCBI Email
