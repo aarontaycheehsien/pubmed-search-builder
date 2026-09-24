@@ -8,12 +8,28 @@ Seeds may support candidate discovery, objective vocabulary, and validation, but
 
 After the plain-language question is confirmed, ask once whether the user has known-relevant seed PMIDs and stop for the answer. Do not treat silence, or your own inference that none exist, as a "no seeds" decision; seed status is resolved only by the user supplying PMIDs, stating there are none, asking to proceed without them, or by a valid locked protocol that encodes `seeds.records`. Before scope lock:
 
-1. Normalize and deduplicate numeric PMIDs while preserving order.
+1. Normalize and deduplicate numeric PMIDs while preserving order. Convert DOIs and PMCIDs with `resolve_seeds.py --identifiers-only`, which verifies each against the matching record but reports only identifiers, never titles or journals. Record citations exactly as supplied; they are seeds, so seed status is resolved, but they are resolved only after scope lock.
 2. Record malformed entries and do not pass them to PubMed.
 3. Do not fetch, mine, inspect, expand, or use the PMIDs as concept evidence.
 4. Validate, compile, and lock `review_protocol_v1.json` from question/protocol evidence.
 
 This separation prevents the seed set from anchoring which eligibility elements become required search blocks.
+
+## Resolve non-PMID seeds
+
+Before scope lock, run the command below with `--identifiers-only`: DOIs and PMCIDs resolve to PMIDs for `seeds.records`, and citations come back `deferred`. After scope lock, run it without the flag on the deferred citations. Their confirmed PMIDs enter the candidate ledger with `user-seed` provenance and are screened like any other seed.
+
+```bash
+python scripts/workflow_tool.py --manifest run_manifest.json --kind fetch --label "seed resolution" \
+  --input seeds.txt --output seed_resolution.json -- \
+  python scripts/resolve_seeds.py --input-file seeds.txt --output seed_resolution.json --table seed_resolution.md
+```
+
+- **Identifiers resolve exactly.** A DOI or PMCID resolves only to the PubMed record that carries that identifier. PubMed indexes DOIs as a publisher ID and has no PMCID field, so each search hit is verified against the fetched record.
+- **Citations only produce candidates.** A citation returns up to three title candidates with journal and year, marked `needs-confirmation`. The same article is often co-published in several journals under one title, so never pick for the user. Show `seed_resolution.md` and add a PMID only when the user chooses it.
+- **Not-found items carry a reason.** Ask for the DOI or PMID rather than guessing.
+
+Resolved PMIDs are then fetched and screened below like any supplied seed. Resolution judges identity, not relevance.
 
 ## Fetch and screen after scope lock
 

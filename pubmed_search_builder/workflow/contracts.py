@@ -183,7 +183,7 @@ def artifact_type_for_operation(operation: str) -> str:
         return "qa/evidence"
     if normalized.startswith("mesh-") or normalized in {"lookup", "details", "terms", "tree", "sweep", "sparql"}:
         return "mesh/evidence"
-    if normalized in {"search", "search-update", "fetch", "mine", "related", "study-family", "sample", "term-diff", "term-rank", "recall", "variants", "batch"}:
+    if normalized in {"search", "search-update", "seed-resolution", "fetch", "mine", "related", "study-family", "sample", "term-diff", "term-rank", "recall", "variants", "batch"}:
         return "pubmed/evidence"
     if normalized in {"audit-markdown", "audit-scaffold", "audit-workbook"}:
         return "audit/evidence"

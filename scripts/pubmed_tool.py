@@ -1079,6 +1079,12 @@ def parse_article(article: ET.Element) -> dict[str, object]:
             if node.attrib.get("IdType") == "doi":
                 doi = element_text(node)
                 break
+    pmcid = ""
+    if pubmed_data is not None:
+        for node in pubmed_data.findall("./ArticleIdList/ArticleId"):
+            if node.attrib.get("IdType") == "pmc":
+                pmcid = element_text(node)
+                break
 
     publication_types = []
     if article_node is not None:
@@ -1127,6 +1133,7 @@ def parse_article(article: ET.Element) -> dict[str, object]:
         "journal_iso": journal_iso,
         "year": year,
         "doi": doi,
+        "pmcid": pmcid,
         "publication_types": publication_types,
         "mesh_headings": mesh_headings,
         "keywords": keywords,

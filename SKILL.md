@@ -27,6 +27,10 @@ When a structured review protocol is supplied, read `references/protocol-dsl.md`
 
 Require an independently stated plain-language research/review question. If it is missing, ask only for it and stop. Once confirmed, ask once for optional known-relevant seed PMIDs and stop for the answer.
 
+Accept seeds as PMIDs, DOIs, PMCIDs, or citations. Seed content must not shape scope, so resolution happens in two steps (see `references/seed-pmid-validation.md`):
+- Before scope lock, `resolve_seeds.py --identifiers-only` verifies DOIs and PMCIDs to exact PMIDs without reporting titles, for `seeds.records`.
+- After scope lock, citations are resolved to title candidates. Add a citation's PMID only after the user picks one.
+
 Seeds are useful but not required, and the build proceeds without them. "No seeds" must still be the user's stated choice rather than an assumption: seed status is resolved only when the user supplies PMIDs, states there are none, or asks to proceed without them. The no-seed branch licenses the broader-workflow default in the scope breadth check, so assuming it silently changes which concept becomes an essential `AND` block. Skip the question only when seed status is already resolved — the user supplied PMIDs unprompted, or a valid locked protocol encodes `seeds.records`.
 
 If the user supplies `review_protocol*.json`, use its plain-language question and resolved decisions after `protocol_tool.py validate --mode lock` passes. Do not ask again about decisions already encoded in a valid locked protocol.
