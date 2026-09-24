@@ -304,9 +304,11 @@ against the working directory.
 
 `workflow_tool.py` snapshots declared inputs before launch and registers a stage only when the process succeeds, its JSON output does not report `ok: false`, inputs remain unchanged, and a pre-existing output was actually refreshed (unless explicitly allowed). The complete-loop gate parses validation and final-QA artifacts, verifies cross-artifact hashes, and requires an evidence-backed version-2 critic.
 
-### Contract-driven workflow v2
+### Contract-driven workflow v2 (experimental, parked)
 
-New builds can use the append-only v2 manifest, whose stage state is derived from typed artifact references rather than command labels or mutable checklist fields:
+The v2 engine is parked until its migration is finished; the skill does not use it. Builds use the v1.1 `run_manifest.json` flow above, and `manifest_tool.py show --validate --check-files --require-complete-loop` is the only authoritative completion gate. The v2 gate does not implement several current rules (for example, review depth waivers), so a v2 `status` of handoff-ready does not mean a build is complete.
+
+For development of the migration only, v2 uses an append-only manifest whose stage state is derived from typed artifact references rather than command labels or mutable checklist fields:
 
 ```bash
 python scripts/workflow_tool.py init --workspace runs/demo --topic-slug demo
@@ -315,7 +317,7 @@ python scripts/workflow_tool.py run --manifest run_manifest_v2.json --stage scop
 python scripts/workflow_tool.py status --manifest run_manifest_v2.json
 ```
 
-Use `workflow_tool.py migrate --manifest run_manifest.json --output run_manifest_v2.json` to create a v2 sibling from a v1.1 manifest; it never changes the source manifest. Existing `manifest_tool.py` and generic `workflow_tool.py --kind …` commands remain supported for legacy runs. The generated [`workflow contract`](references/workflow-contracts.md) is the executable source for v2 stage roles and conditional branches.
+Use `workflow_tool.py migrate --manifest run_manifest.json --output run_manifest_v2.json` to create a v2 sibling from a v1.1 manifest; it never changes the source manifest. `manifest_tool.py` and the generic `workflow_tool.py --kind …` commands are the supported build path. The generated [`workflow contract`](references/workflow-contracts.md) describes v2 stage roles and conditional branches for migration work only.
 
 ---
 

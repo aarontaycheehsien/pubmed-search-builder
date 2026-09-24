@@ -2,6 +2,8 @@
 
 This file is generated from `pubmed_search_builder.workflow.stages`. Do not edit it manually.
 
+> **Experimental, not used by the skill.** This describes the contract-driven v2 engine, which is parked until its migration is finished. Builds use the v1.1 `run_manifest.json` flow in `workflow.md`; the authoritative definition of a complete build is `manifest_tool.py show --validate --check-files --require-complete-loop`. Where this table and that gate differ (for example, review depth waivers), the gate is correct.
+
 | Stage | Legacy aliases | Required inputs | Accepted input types | Required outputs | Accepted output types | Condition |
 | --- | --- | --- | --- | --- | --- | --- |
 | `intake` | question-intake, seed-intake | — | — | — | — | always |

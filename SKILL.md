@@ -104,7 +104,7 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 
 - `references/protocol-dsl.md` - versioned review-protocol authoring, validation, compilation, verification, and legacy migration.
 - `references/workflow.md` - canonical loop, re-entry paths, stop criteria, and artifact sequence.
-- `references/workflow-contracts.md` - generated stage aliases, typed input/output roles, and executable conditions.
+- `references/workflow-contracts.md` - experimental v2 engine contract, parked; do not read or use it for builds (the complete-loop gate is authoritative).
 - `references/framework-selection.md` - question type and framework selection.
 - `references/methods-evaluation-framework.md` - method/tool performance-evaluation profile, canonical slots, ambiguity check, and evidence-target rule.
 - `references/concept-analysis-and-gating.md` - scope artifact, concept roles, fragility, and `AND`-block admission.

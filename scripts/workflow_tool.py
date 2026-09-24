@@ -208,7 +208,12 @@ def build_v2_parser() -> argparse.ArgumentParser:
     ``--manifest``.  This lets existing agents and runbooks keep working.
     """
 
-    parser = argparse.ArgumentParser(description="Contract-driven workflow v2 controls.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Contract-driven workflow v2 controls (experimental, parked). Builds use the v1.1 "
+            "run_manifest.json flow; manifest_tool.py --require-complete-loop is the authoritative gate."
+        )
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init = subparsers.add_parser("init", help="Create an empty append-only v2 run manifest.")
