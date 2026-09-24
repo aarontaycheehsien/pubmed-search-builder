@@ -116,12 +116,18 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
     defect_fixed = defect.get("fixed") is True
     defect_pass = bool(defect_id and defect_description and isinstance(defect_evidence, list) and defect_evidence and defect_fixed)
 
-    baseline_heldout = normalize_pmids(baseline.get("heldout_retrieved_pmids", []), "baseline.heldout_retrieved_pmids")
-    revised_heldout = normalize_pmids(revised.get("heldout_retrieved_pmids", []), "revised.heldout_retrieved_pmids")
+    # Evidence lists must be stated explicitly, even when empty: a missing key would otherwise
+    # compare equal on both sides and pass its check without any evidence behind it.
+    for key, value in (("baseline", baseline), ("revised", revised)):
+        for field in ("heldout_retrieved_pmids", "required_block_ids"):
+            if not isinstance(value.get(field), list):
+                raise RevisionGuardError(f"{key}.{field} must be an explicit list (use [] when none apply)")
+    baseline_heldout = normalize_pmids(baseline["heldout_retrieved_pmids"], "baseline.heldout_retrieved_pmids")
+    revised_heldout = normalize_pmids(revised["heldout_retrieved_pmids"], "revised.heldout_retrieved_pmids")
     lost_heldout = sorted(set(baseline_heldout) - set(revised_heldout), key=int)
 
-    baseline_blocks = {str(value) for value in baseline.get("required_block_ids", [])}
-    revised_blocks = {str(value) for value in revised.get("required_block_ids", [])}
+    baseline_blocks = {str(value) for value in baseline["required_block_ids"]}
+    revised_blocks = {str(value) for value in revised["required_block_ids"]}
     authorized_blocks = {str(value) for value in data.get("authorized_required_block_ids", [])}
     added_blocks = sorted(revised_blocks - baseline_blocks)
     removed_blocks = sorted(baseline_blocks - revised_blocks)
@@ -150,7 +156,12 @@ def evaluate_payload(data: dict[str, Any], *, base: Path) -> dict[str, Any]:
             and baseline_protocol != revised_protocol
         )
     else:
-        scope_pass = baseline_scope == revised_scope and baseline_protocol == revised_protocol
+        scope_pass = (
+            _nonneg_int(baseline_scope)
+            and baseline_scope > 0
+            and baseline_scope == revised_scope
+            and baseline_protocol == revised_protocol
+        )
     if changed and scope_pass:
         required_blocks_pass = bool(authorized_blocks) and revised_blocks == authorized_blocks
     else:

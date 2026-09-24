@@ -83,6 +83,29 @@ class RevisionGuardTests(unittest.TestCase):
         result = guard.evaluate_payload(payload, base=self.root)
         self.assertIn("required-blocks-justified", result["failed_checks"])
 
+    def test_missing_heldout_or_block_evidence_is_rejected_not_passed(self):
+        for side in ("baseline", "revised"):
+            for field in ("heldout_retrieved_pmids", "required_block_ids"):
+                payload = self.payload()
+                del payload[side][field]
+                with self.subTest(side=side, field=field), self.assertRaises(guard.RevisionGuardError):
+                    guard.evaluate_payload(payload, base=self.root)
+
+    def test_explicit_empty_heldout_lists_remain_valid(self):
+        payload = self.payload()
+        payload["baseline"]["heldout_retrieved_pmids"] = []
+        payload["revised"]["heldout_retrieved_pmids"] = []
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertEqual(result["disposition"], "adopt")
+
+    def test_unrecorded_scope_version_fails_scope_check(self):
+        payload = self.payload()
+        del payload["baseline"]["scope_version"]
+        del payload["revised"]["scope_version"]
+        result = guard.evaluate_payload(payload, base=self.root)
+        self.assertIn("scope-unchanged-or-explicit", result["failed_checks"])
+        self.assertEqual(result["disposition"], "revert-to-baseline")
+
     def test_no_low_signal_makes_narrowing_check_not_applicable(self):
         result = guard.evaluate_payload(self.payload(), base=self.root)
         self.assertFalse(result["low_signal_active"])

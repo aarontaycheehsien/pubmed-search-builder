@@ -20,6 +20,15 @@ class FakeClient:
         return {"tool": "test"}
 
 
+class EraVariationMatchingTests(unittest.TestCase):
+    def test_concept_terms_match_whole_words_only(self):
+        records = [{"pmid": "1", "year": "2015", "title": "Chronic pain and affect", "abstract": "", "keywords": [], "mesh_headings": []}]
+        result = strategy_analysis.era_variation(records, set(), set(), set(), {"ai", "ct", "chronic pain"})
+        era = next(row for row in result["eras"] if row["era"] == "2010-2019")
+        # "chronic pain" is present; "ai" (in "pain") and "ct" (in "affect") are not words here.
+        self.assertEqual(era["vocabulary_term_count"], 1)
+
+
 class StrategyAnalysisTests(unittest.TestCase):
     def test_focused_variant_reduction_threshold_boundary_and_override(self):
         block = {"label": "optional", "role": "optional", "fragility": "fragile"}

@@ -132,6 +132,33 @@ class RelativeRecallTests(unittest.TestCase):
         self.assertEqual(result["retrieved_pmids"], ["1", "3", "5"])
         self.assertEqual(result["relative_recall_percent"], 60.0)
 
+    def test_duplicate_block_labels_are_rejected(self):
+        blocks = [{"label": "A", "query": "A1"}, {"label": "A", "query": "A2"}]
+        with self.assertRaisesRegex(pubmed_tool.PubMedError, "unique"):
+            self.run_recall({"STRATEGY": {"1"}}, ["1"], blocks=blocks)
+
+    def test_validate_chunks_dedups_and_sums_counts(self):
+        calls = []
+        original_chunk, original_esearch = pubmed_tool.RECALL_UID_CHUNK, pubmed_tool.esearch
+        pubmed_tool.RECALL_UID_CHUNK = 2
+        pubmed_tool.esearch = fake_esearch_factory({"STRATEGY": {"1", "3", "5"}}, calls)
+        try:
+            result = pubmed_tool.validate(FakeClient(), "STRATEGY", ["1", "2", "2", "3", "4", "5"])
+        finally:
+            pubmed_tool.RECALL_UID_CHUNK, pubmed_tool.esearch = original_chunk, original_esearch
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(result["validation_query_chunks"], 3)
+        self.assertEqual(result["provided_pmids"], ["1", "2", "3", "4", "5"])
+        self.assertEqual(result["retrieved_pmids"], ["1", "3", "5"])
+        self.assertEqual(result["missed_pmids"], ["2", "4"])
+        self.assertEqual(result["search_count"], 3)
+
+    def test_validate_rejects_empty_and_non_numeric_pmids(self):
+        with self.assertRaises(pubmed_tool.PubMedError):
+            pubmed_tool.validate(FakeClient(), "STRATEGY", [])
+        with self.assertRaises(pubmed_tool.PubMedError):
+            pubmed_tool.validate(FakeClient(), "STRATEGY", ["12", "abc"])
+
     def test_empty_benchmark_raises(self):
         with self.assertRaises(pubmed_tool.PubMedError):
             pubmed_tool.relative_recall(FakeClient(), "STRATEGY", [], benchmark_source="test")

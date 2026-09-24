@@ -418,6 +418,11 @@ class DiscriminateTests(unittest.TestCase):
             "genuinely-sparse",
         )
 
+    def test_classify_discrimination_verdict_keeps_docstring_and_validates_thresholds(self):
+        self.assertIn("single-concept-proxy", no_seed.classify_discrimination_verdict.__doc__ or "")
+        with self.assertRaises(no_seed.NoSeedDiscoveryError):
+            no_seed.classify_discrimination_verdict(10, "topic-core", sparse_ceiling=1000, bottleneck_floor=500)
+
 
 FAMILY_POOL = sorted(no_seed.PILOT_TYPES)
 

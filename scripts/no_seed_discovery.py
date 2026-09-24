@@ -71,7 +71,6 @@ def classify_discrimination_verdict(
     sparse_ceiling: int,
     bottleneck_floor: int,
 ) -> str:
-    validate_volume_thresholds(sparse_ceiling, bottleneck_floor)
     """Map a measured broad-topic volume to a verdict, respecting the basis confidence.
 
     A ``single-concept-proxy`` volume is the max over single essential-concept counts,
@@ -83,6 +82,7 @@ def classify_discrimination_verdict(
     reported as a false, over-confident bottleneck. A ``topic-core`` basis directly
     measures the core, so all three verdicts remain reachable.
     """
+    validate_volume_thresholds(sparse_ceiling, bottleneck_floor)
     verdict = classify_topic_volume(
         discriminating_volume, sparse_ceiling=sparse_ceiling, bottleneck_floor=bottleneck_floor
     )

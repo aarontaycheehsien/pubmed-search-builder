@@ -138,6 +138,16 @@ def instantiate_template(data: dict[str, Any], template_path: Path) -> dict[str,
     return ledger
 
 
+def is_rule_only(record: dict[str, Any]) -> bool:
+    """True when a mechanical rule decided the record and nobody adjudicated it."""
+    screening = record.get("screening")
+    if not isinstance(screening, dict):
+        return False
+    return str(screening.get("decided_by") or "").strip() == "rule" and not str(
+        screening.get("adjudicated_by") or ""
+    ).strip()
+
+
 def screening_provenance_issues(prefix: str, record: dict[str, Any], use: str) -> list[str]:
     """Check a record's screening provenance, when it carries any.
 
@@ -308,7 +318,7 @@ def allocate_holdout(
     records = data.get("records")
     if not isinstance(records, list):
         raise CandidateLedgerError("records must be a list before holdout allocation")
-    eligible = [
+    screened_in = [
         record
         for record in records
         if isinstance(record, dict)
@@ -316,8 +326,13 @@ def allocate_holdout(
         and record.get("title_abstract_reviewed") is True
         and normalize_pmid(record.get("pmid"))
     ]
+    # A rule-only include was deliberately kept heuristic by screening; allocation must not
+    # promote it to an evidence role that validation would then reject.
+    rule_only = [record for record in screened_in if is_rule_only(record)]
+    eligible = [record for record in screened_in if not is_rule_only(record)]
     if not eligible:
-        raise CandidateLedgerError("no screened-in records are eligible for discovery/holdout allocation")
+        detail = f" ({len(rule_only)} rule-only include(s) need adjudication first)" if rule_only else ""
+        raise CandidateLedgerError(f"no screened-in records are eligible for discovery/holdout allocation{detail}")
     ranked = sorted(
         eligible,
         key=lambda record: hashlib.sha256(
@@ -343,6 +358,7 @@ def allocate_holdout(
         "fraction": fraction,
         "assignment": assignment,
         "holdout_pmids": sorted(holdout_pmids),
+        "rule_only_pmids_not_allocated": sorted(normalize_pmid(record.get("pmid")) for record in rule_only),
     }
     data["holdout_allocation"] = metadata
     return data, metadata
@@ -408,12 +424,13 @@ def main(argv: list[str] | None = None) -> int:
         issues, summary = validate_template(data) if args.validate_template else validate_ledger(data)
     except CandidateLedgerError as exc:
         issues, summary = [str(exc)], {}
-    validated_path = Path(args.ledger_output if allocation is not None else args.ledger).resolve()
+    validated_source = args.ledger_output if allocation is not None else args.ledger
+    validated_path = Path(validated_source).resolve() if validated_source else None
     receipt = {
         "operation": "candidate-ledger-validate",
         "ledger": args.ledger,
-        "artifact_path": str(validated_path),
-        "artifact_sha256": sha256_file(validated_path) if validated_path.is_file() else "",
+        "artifact_path": str(validated_path) if validated_path else "",
+        "artifact_sha256": sha256_file(validated_path) if validated_path and validated_path.is_file() else "",
         "ok": not issues,
         "issues": issues,
         "summary": summary,

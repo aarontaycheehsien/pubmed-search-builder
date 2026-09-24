@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -174,6 +176,35 @@ class CandidateLedgerTests(unittest.TestCase):
         allocated, metadata = candidate_ledger.allocate_holdout(data)
         self.assertEqual(metadata["assignment"], "non-independent-both")
         self.assertTrue(all(record["use"] == "both" for record in allocated["records"]))
+
+    def test_allocation_keeps_rule_only_includes_heuristic(self):
+        def record(pmid, decided_by="human"):
+            return {
+                "pmid": str(pmid),
+                "provenance": "similar",
+                "decision": "include",
+                "use": "heuristic" if decided_by == "rule" else "both",
+                "title_abstract_reviewed": True,
+                "eligibility_reason": "meets all criteria",
+                "screening": {"rubric_sha256": "r", "record_sha256": "c", "decided_by": decided_by, "adjudicated_by": ""},
+            }
+
+        data = {"scope_version": 1, "records": [record(i) for i in range(1, 8)] + [record(99, decided_by="rule")]}
+        allocated, metadata = candidate_ledger.allocate_holdout(data)
+        rule_only = next(item for item in allocated["records"] if item["pmid"] == "99")
+        self.assertEqual(rule_only["use"], "heuristic")
+        self.assertEqual(metadata["eligible_count"], 7)
+        self.assertEqual(metadata["rule_only_pmids_not_allocated"], ["99"])
+        issues, _summary = candidate_ledger.validate_ledger(allocated)
+        self.assertEqual(issues, [])
+
+    def test_missing_ledger_path_reports_error_instead_of_crashing(self):
+        with contextlib.redirect_stdout(io.StringIO()) as stream:
+            code = candidate_ledger.main([])
+        self.assertEqual(code, 1)
+        receipt = json.loads(stream.getvalue())
+        self.assertFalse(receipt["ok"])
+        self.assertIn("ledger path is required", receipt["issues"])
 
 
 if __name__ == "__main__":

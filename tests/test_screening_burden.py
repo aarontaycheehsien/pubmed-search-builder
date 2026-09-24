@@ -113,6 +113,15 @@ class ScreeningBurdenTests(unittest.TestCase):
         self.assertEqual(result["selection"]["focused_prioritization_label"], "focused")
         self.assertTrue(result["selection"]["main_remains_authoritative"])
 
+    def test_sampled_pmid_without_label_is_a_clear_error(self):
+        sample = self.labelled_sample()
+        sample["label_queue"] = [item for item in sample["label_queue"] if item["pmid"] != "4"]
+        with mock.patch.object(burden.pubmed_tool, "retrieve_against_pmids", return_value={"10", "11"}):
+            with self.assertRaisesRegex(burden.ScreeningBurdenError, "no label_queue entry: 4"):
+                burden.estimate_burden(
+                    FakeClient(), sample, scope_version=1, heldout_pmids=["10", "11"], heldout_source="test", minimum_recall=1.0
+                )
+
     def test_provided_retrieval_frame_must_match_query(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "frames.json"

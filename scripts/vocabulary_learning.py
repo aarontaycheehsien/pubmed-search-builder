@@ -534,7 +534,9 @@ def retest_learning(
         reason = str(proposal.get("decision_reason") or "").strip()
         if not reason:
             raise VocabularyLearningError(f"Proposal {proposal.get('proposal_id') or index} requires decision_reason")
-        row = dict(proposal)
+        # Store the normalized disposition so the summary counts below and the manifest gate
+        # see the same decision this loop acted on.
+        row = {**proposal, "decision": decision}
         if decision != "accepted":
             row["retest"] = {"required": False, "reason": f"term was {decision}"}
             retested.append(row)

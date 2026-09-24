@@ -479,7 +479,9 @@ def era_variation(
         searchable_text = pubmed_tool.normalize_for_match(
             " ".join([str(record.get("title") or ""), str(record.get("abstract") or "")] + list(pubmed_tool.record_mesh_set(record)))
         )
-        matched_terms = {term for term in concept_terms if term and term in searchable_text}
+        # Match whole normalized tokens: a bare substring test lets "ai" match "pain".
+        padded_text = f" {searchable_text} "
+        matched_terms = {term for term in concept_terms if term and f" {term} " in padded_text}
         bucket["vocabulary"].update((observed & concept_terms) | matched_terms)
     rows = []
     vocabularies: list[set[str]] = []

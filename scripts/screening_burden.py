@@ -414,6 +414,19 @@ def estimate_burden(
         if pmid in label_map and label_map[pmid] != label:
             raise ScreeningBurdenError(f"PMID {pmid} has inconsistent labels")
         label_map[pmid] = label
+    sampled = {
+        str(pmid)
+        for row in sample.get("variants", [])
+        if isinstance(row, dict)
+        for stratum in row.get("strata", [])
+        if isinstance(stratum, dict)
+        for pmid in stratum.get("sample_pmids", [])
+    }
+    unlabelled = sorted(sampled - set(label_map), key=lambda pmid: (not pmid.isdigit(), int(pmid) if pmid.isdigit() else 0, pmid))
+    if unlabelled:
+        raise ScreeningBurdenError(
+            f"{len(unlabelled)} sampled PMID(s) have no label_queue entry: {', '.join(unlabelled[:10])}"
+        )
     variants = []
     baseline_label = str(sample.get("baseline_label") or "")
     baseline_count = next(

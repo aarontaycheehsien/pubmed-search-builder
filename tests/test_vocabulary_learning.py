@@ -135,6 +135,27 @@ class VocabularyLearningTests(unittest.TestCase):
         self.assertEqual(result["accepted_term_count"], 0)
         self.assertEqual(result["reverted_term_count"], 1)
 
+    def test_capitalised_accepted_decision_is_counted_consistently(self):
+        extraction = self.extract()
+        proposal = next(item for item in extraction["proposals"] if item["normalized_term"] == "bronchial hyperreactivity")
+        proposal.update({"decision": " Accepted ", "decision_reason": "in concept", "within_locked_concept_attested": True})
+        extraction["proposals"] = [proposal]
+        blocks = self.write("blocks_case.json", [{"label": "condition", "query": "asthma[tiab]"}])
+
+        def fake_retrieve(client, query, pmids):
+            return {"3"} if "bronchial" in query else set()
+
+        with (
+            mock.patch.object(vocabulary.pubmed_tool, "retrieve_against_pmids", side_effect=fake_retrieve),
+            mock.patch.object(vocabulary.pubmed_tool, "esearch", return_value={"count": 5, "pmids": [], "query_translation": "ok"}),
+        ):
+            result = vocabulary.retest_learning(FakeClient(), extraction, blocks, scope_version=1, sample_size=5)
+        row = result["proposals"][0]
+        self.assertEqual(row["decision"], "accepted")
+        self.assertEqual(row["effective_decision"], "adopted")
+        self.assertEqual(result["accepted_term_count"], 1)
+        self.assertEqual(result["authored_accepted_term_count"], 1)
+
     def test_failed_revision_requires_label_to_remain_experimental(self):
         extraction = self.extract()
         proposal = extraction["proposals"][0]

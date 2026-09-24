@@ -240,6 +240,14 @@ class EutilsErrorTests(unittest.TestCase):
     def test_non_json_payloads_are_left_alone(self):
         self.assertIsNone(pubmed_tool.eutils_hard_error(b"<?xml version='1.0'?><PubmedArticleSet/>"))
 
+    def test_an_efetch_xml_error_envelope_is_detected(self):
+        raw = b"<?xml version='1.0'?>\n<eFetchResult>\n\t<ERROR>Unable to obtain query #1</ERROR>\n</eFetchResult>"
+        self.assertEqual(pubmed_tool.eutils_hard_error(raw), "Unable to obtain query #1")
+
+    def test_escaped_error_text_inside_a_record_is_not_an_error(self):
+        raw = b"<PubmedArticleSet><PubmedArticle><ArticleTitle>An &lt;ERROR&gt; tag</ArticleTitle></PubmedArticle></PubmedArticleSet>"
+        self.assertIsNone(pubmed_tool.eutils_hard_error(raw))
+
     class _Response:
         def __init__(self, body): self.body = body
         def read(self): return self.body

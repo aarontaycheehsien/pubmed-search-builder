@@ -806,6 +806,7 @@ def build_response_cache(*, enabled: bool = True, directory: str | None = None) 
 
 EUTILS_ERROR_RETRIES = 3
 EUTILS_ERROR_BACKOFF_SECONDS = 1.0
+EUTILS_XML_ERROR_PATTERN = re.compile(rb"<ERROR>(.*?)</ERROR>", re.DOTALL)
 
 
 def eutils_hard_error(raw: bytes) -> str | None:
@@ -821,8 +822,17 @@ def eutils_hard_error(raw: bytes) -> str | None:
     Distinct from ``esearchresult.errorlist``, which lists individual phrases PubMed could not
     match. That is ordinary, useful output and is left alone.
     """
-    if not raw or not raw.lstrip()[:1] == b"{":
-        return None  # efetch XML and other non-JSON payloads carry no such envelope
+    if not raw:
+        return None
+    if raw.lstrip()[:1] == b"<":
+        # eFetch reports backend failures as an <ERROR> element in an XML 200 response. Record
+        # text is always entity-escaped, so a literal <ERROR> tag can only be the envelope.
+        match = EUTILS_XML_ERROR_PATTERN.search(raw)
+        if match:
+            return match.group(1).decode("utf-8", errors="replace").strip() or "unspecified eFetch error"
+        return None
+    if raw.lstrip()[:1] != b"{":
+        return None
     try:
         payload = json.loads(raw.decode("utf-8", errors="replace"))
     except (ValueError, json.JSONDecodeError):
@@ -1526,21 +1536,40 @@ def term_diff(client: NcbiClient, mesh_query: str, tiab_query: str, retmax: int,
 
 
 def validate(client: NcbiClient, query: str, pmids: list[str]) -> dict[str, object]:
-    seed_block = " OR ".join(f"{pmid}[uid]" for pmid in pmids)
-    validation_query = f"({query}) AND ({seed_block})"
-    search_result = esearch(client, validation_query, retmax=max(len(pmids), 20), retstart=0, sort=None)
-    retrieved = set(search_result.get("pmids", []))
-    provided = [str(pmid) for pmid in pmids]
+    provided = dedup_preserving_order([str(pmid).strip() for pmid in pmids])
+    if not provided:
+        raise PubMedError("No PMIDs supplied for validation.")
+    assert_numeric_pmids(provided, source="validation PMIDs")
+    # Chunk the uid block like retrieve_against_pmids so a large holdout is not sent as one
+    # oversized OR-block. Translation evidence comes from the first chunk; the strategy part
+    # of the query is identical in every chunk.
+    retrieved: set[str] = set()
+    search_count = 0
+    first_query = ""
+    first_result: dict[str, object] = {}
+    chunk_count = 0
+    for start in range(0, len(provided), RECALL_UID_CHUNK):
+        chunk = provided[start : start + RECALL_UID_CHUNK]
+        uid_block = " OR ".join(f"{pmid}[uid]" for pmid in chunk)
+        validation_query = f"({query}) AND ({uid_block})"
+        search_result = esearch(client, validation_query, retmax=max(len(chunk), 20), retstart=0, sort=None)
+        retrieved.update(str(pmid) for pmid in search_result.get("pmids", []))
+        search_count += int(search_result.get("count", 0) or 0)
+        chunk_count += 1
+        if not first_query:
+            first_query = validation_query
+            first_result = search_result
     return {
         "query": query,
-        "validation_query": validation_query,
+        "validation_query": first_query,
+        "validation_query_chunks": chunk_count,
         "provided_pmids": provided,
         "retrieved_pmids": [pmid for pmid in provided if pmid in retrieved],
         "missed_pmids": [pmid for pmid in provided if pmid not in retrieved],
-        "search_count": search_result.get("count", 0),
-        "query_translation": search_result.get("query_translation", ""),
-        "warnings": search_result.get("warnings", {}),
-        "query_translation_hook": search_result.get("query_translation_hook", {}),
+        "search_count": search_count,
+        "query_translation": first_result.get("query_translation", ""),
+        "warnings": first_result.get("warnings", {}),
+        "query_translation_hook": first_result.get("query_translation_hook", {}),
         "request_info": client.metadata(),
     }
 
@@ -1714,6 +1743,13 @@ def relative_recall(
     benchmark = dedup_preserving_order([str(pmid) for pmid in benchmark_pmids])
     if not benchmark:
         raise PubMedError("No benchmark PMIDs resolved for relative-recall estimation.")
+    if blocks:
+        # Per-block results are keyed by label, so a repeated label would silently overwrite
+        # one block's retrieval with another's and corrupt the miss diagnosis.
+        label_counts = Counter(str(block.get("label", "")) for block in blocks)
+        repeated = sorted(label for label, count in label_counts.items() if count > 1)
+        if repeated:
+            raise PubMedError(f"Recall block labels must be unique; repeated: {', '.join(repr(label) for label in repeated)}")
 
     full_retrieved = retrieve_against_pmids(client, query, benchmark)
     retrieved_pmids = [pmid for pmid in benchmark if pmid in full_retrieved]
@@ -2023,7 +2059,7 @@ def compare_variants(
         baseline = results[0]
     baseline_count = int(baseline.get("count", 0) or 0)
     baseline_pmids = set(str(pmid) for pmid in baseline.get("pmids", []))
-    seed_pmids = [str(pmid) for pmid in (seed_pmids or [])]
+    seed_pmids = dedup_preserving_order([str(pmid).strip() for pmid in (seed_pmids or [])])
     labelled_samples = labelled_samples or {}
 
     compared = []
