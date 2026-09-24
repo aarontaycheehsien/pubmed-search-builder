@@ -28,9 +28,14 @@ python scripts/critic_tool.py --run-independent --bundle critic_evidence_1.json 
 python scripts/critic_tool.py critic_round_1.json --output critic_round_1_validation.json
 ```
 
-The independent runner verifies every bundle hash, copies only those artifacts into a temporary workspace, ignores user configuration and repository rules, disables plugins, apps, browser/computer use, image generation, and multi-agent delegation, uses an ephemeral read-only Codex child, requires schema-constrained JSON, rebinds the result to the original strategy and bundle, and validates it before writing the critic artifact. The critic artifact records execution and bundle hashes. A critic receipt fails if evidence changes after review or if the fresh-context execution evidence is absent or invalid.
+The independent runner verifies every bundle hash, copies only those artifacts into a temporary workspace, launches an ephemeral read-only child there, requires schema-constrained JSON, rebinds the result to the original strategy and bundle, and validates it before writing the critic artifact. Two runners are supported, selected with `--runner`:
 
-Use `--model` and `--reasoning-effort` when a run needs an explicit model configuration; the default reasoning effort is `high`. Use `--scope-version` only when the bundle lacks a protocol-bound critic packet. If Codex is unavailable or the child run fails, stop and report that the independent critic is incomplete. Do not substitute a same-context hand-authored JSON round: the completion gate rejects it.
+- `codex-cli`: `codex exec` with a read-only sandbox, user configuration and repository rules ignored, and plugins, apps, browser/computer use, image generation, and multi-agent delegation disabled.
+- `claude-code-cli`: `claude -p` in safe mode, which loads no CLAUDE.md, hooks, skills, plugins, or MCP servers. It keeps no session and is limited to the read-only Read, Glob, and Grep tools under `dontAsk` permissions, so any other action is refused rather than prompted.
+
+The default `auto` uses `PUBMED_ISOLATED_RUNNER` when set, otherwise Claude Code inside Claude Code and Codex elsewhere, falling back to whichever is installed. The critic artifact records the runner, its isolation policy, and the execution and bundle hashes. A critic receipt fails if evidence changes after review or if the fresh-context execution evidence is absent, invalid, or claims a looser isolation policy than its runner's.
+
+Use `--model` and `--reasoning-effort` when a run needs an explicit model configuration; the default reasoning effort is `high`. Use `--runner-bin` (or `CODEX_BIN` / `CLAUDE_BIN`) when the executable is not on `PATH`. Use `--scope-version` only when the bundle lacks a protocol-bound critic packet. If no runner is installed and signed in, or the child run fails, stop and report that the independent critic is incomplete. Do not substitute a same-context hand-authored JSON round: the completion gate rejects it.
 
 ## Required review domains
 

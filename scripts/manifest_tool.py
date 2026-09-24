@@ -1819,6 +1819,16 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                         f"screening agreement covers {coverage} of screened records; at least "
                         f"{MIN_SCREENING_AGREEMENT_COVERAGE:.0%} must be independently re-screened"
                     )
+                # A replicate written by the context that made the original decisions agrees by
+                # construction, so the second reading must show how it was kept independent.
+                independence = agreement.get("replicate_independence")
+                if not isinstance(independence, dict) or independence.get("independent") is not True:
+                    basis = independence.get("basis") if isinstance(independence, dict) else "unrecorded"
+                    issues.append(
+                        f"screening agreement re-screen is not demonstrably independent (basis: {basis}); "
+                        "produce the replicate with `screening_tool.py replicate` (isolated child) or a named "
+                        "human second screener's worksheet, rerun `agreement`, and rebuild the ledger"
+                    )
     if screening_status == "not-applicable" and not str(screening.get("reason") or "").strip():
         issues.append("candidate-screening not-applicable status lacks a reason")
 

@@ -516,6 +516,10 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         "evidence_divergence_count": 0,
         "adjudicated_pmids": [],
         "unresolved_adjudications": [],
+        "replicate_independence": {
+            "basis": "isolated-runner", "independent": True, "mechanically_verified": True,
+            "runner": "claude-code-cli", "issues": [],
+        },
     }
 
     def _screening_gate_issues(self, ledger_records, agreement="default"):
@@ -596,6 +600,19 @@ class ManifestCompleteLoopTests(unittest.TestCase):
             [self._evidenced_record()], agreement={**self.AGREEMENT, "coverage": 0.05}
         )
         self.assertTrue(any("must be independently re-screened" in issue for issue in issues), issues)
+
+    def test_gate_accepts_an_independently_produced_rescreen(self):
+        issues = self._screening_gate_issues([self._evidenced_record()])
+        self.assertFalse([issue for issue in issues if "screening agreement" in issue], issues)
+
+    def test_gate_rejects_a_rescreen_without_independence_evidence(self):
+        for independence in (None, {"basis": "unverified", "independent": False}):
+            agreement = {key: value for key, value in self.AGREEMENT.items() if key != "replicate_independence"}
+            if independence is not None:
+                agreement["replicate_independence"] = independence
+            with self.subTest(independence=independence):
+                issues = self._screening_gate_issues([self._evidenced_record()], agreement=agreement)
+                self.assertTrue(any("not demonstrably independent" in issue for issue in issues), issues)
 
     def test_gate_rejects_unresolved_adjudications(self):
         issues = self._screening_gate_issues(

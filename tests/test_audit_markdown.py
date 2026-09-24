@@ -89,6 +89,18 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn("reduced / eutils", markdown)
         self.assertIn("Confirm against MeSH RDF.", markdown)
 
+    def test_candidate_screening_discloses_who_performed_the_rescreen(self):
+        def rendered(independence):
+            summary = {"screening_provenance": {"agreement_independence": independence}}
+            return "\n".join(audit_markdown.render_candidate_screening({"candidate_screening": {"summary": summary}}))
+
+        runner_text = rendered({"basis": "isolated-runner", "independent": True, "runner": "codex-cli"})
+        self.assertIn("isolated fresh-context child (codex-cli), mechanically verified", runner_text)
+        human_text = rendered({"basis": "attested-human", "independent": True, "screener": "Second librarian"})
+        self.assertIn("human second screener (Second librarian), attested, not mechanically verifiable", human_text)
+        failed_text = rendered({"basis": "unrecorded", "independent": False})
+        self.assertIn("not demonstrably independent; independence check failed", failed_text)
+
     def test_pubmed_only_audit_disclaims_review_level_completeness(self):
         data = sample_data()
         data["information_source_mode"] = "pubmed-only"

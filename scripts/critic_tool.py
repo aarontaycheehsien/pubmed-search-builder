@@ -11,11 +11,15 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+import isolated_runner  # noqa: E402
 
 REQUIRED_DOMAINS = {
     "research-question",
@@ -31,17 +35,9 @@ CLASSIFICATIONS = {"lexical", "structural", "scope", "filter", "syntax", "report
 STATUSES = {"open", "resolved", "accepted-risk", "not-applicable"}
 OVERALL_STATUSES = {"pass", "revise"}
 DOMAIN_VERDICTS = {"pass", "finding", "not-applicable"}
-INDEPENDENT_RUNNER = "codex-cli"
 BUNDLE_EVIDENCE_ROLE = "critic_evidence"
-DISABLED_CHILD_FEATURES = (
-    "plugins",
-    "apps",
-    "browser_use",
-    "computer_use",
-    "in_app_browser",
-    "multi_agent",
-    "image_generation",
-)
+# Retained for callers that predate the shared runner module.
+DISABLED_CHILD_FEATURES = isolated_runner.CODEX_DISABLED_FEATURES
 
 
 class CriticArtifactError(ValueError):
@@ -73,23 +69,6 @@ def portable_path(path: Path, base: Path) -> str:
         return Path(os.path.relpath(path.resolve(), base.resolve())).as_posix()
     except ValueError:
         return path.resolve().as_posix()
-
-
-def find_codex() -> str:
-    """Locate Codex without importing the evaluation-only driver."""
-
-    configured = os.environ.get("CODEX_BIN")
-    if configured:
-        configured_path = Path(configured)
-        if configured_path.is_file():
-            return str(configured_path)
-        resolved = shutil.which(configured)
-        if resolved:
-            return resolved
-    resolved = shutil.which("codex")
-    if resolved:
-        return resolved
-    raise CriticArtifactError("Codex CLI was not found; install it, set CODEX_BIN, or pass --codex-bin")
 
 
 def critic_output_schema() -> dict[str, Any]:
@@ -254,10 +233,15 @@ def run_independent_critic(
     model: str | None,
     reasoning_effort: str,
     timeout_seconds: int,
-    codex_bin: str | None,
+    codex_bin: str | None = None,
     replace: bool,
+    runner: str | None = None,
+    runner_bin: str | None = None,
 ) -> dict[str, Any]:
-    """Run a schema-constrained child critic in an isolated read-only workspace."""
+    """Run a schema-constrained child critic in an isolated read-only workspace.
+
+    ``codex_bin`` is the older spelling of ``runner_bin`` and implies the Codex runner.
+    """
 
     if round_number < 1:
         raise CriticArtifactError("--round must be a positive integer")
@@ -268,10 +252,15 @@ def run_independent_critic(
     if output_path.exists() and not replace:
         raise CriticArtifactError(f"Refusing to overwrite existing critic artifact without --replace: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    executable = codex_bin or find_codex()
+    if codex_bin and (runner in (None, "auto")):
+        runner = isolated_runner.CODEX_RUNNER
+    try:
+        selected_runner = isolated_runner.resolve_runner(runner)
+    except isolated_runner.IsolatedRunnerError as exc:
+        raise CriticArtifactError(str(exc)) from exc
+    executable = runner_bin or codex_bin
 
-    with tempfile.TemporaryDirectory(prefix="pubmed-independent-critic-") as temporary:
-        workspace = Path(temporary)
+    with isolated_runner.isolated_workspace("pubmed-independent-critic-") as workspace:
         source_bundle, staged_bundle = stage_evidence_bundle(bundle_path, workspace)
         source_bundle["bundle_sha256"] = sha256_file(bundle_path)
         effective_scope = source_bundle.get("scope_version")
@@ -289,69 +278,23 @@ def run_independent_critic(
         if not strategy_path.is_file():
             raise CriticArtifactError("The evidence bundle has no readable strategy role")
 
-        schema_path = workspace / "critic_output.schema.json"
-        write_json(schema_path, critic_output_schema())
-        raw_output = workspace / "critic_response.json"
         prompt = independent_critic_prompt(
             round_number=round_number,
             evidence_roles=list(source_bundle.get("roles", [])),
         )
-        command = [
-            executable,
-            "exec",
-            "-C",
-            str(workspace),
-            "-s",
-            "read-only",
-            "-c",
-            "approval_policy=never",
-            "-c",
-            f"model_reasoning_effort={reasoning_effort}",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
-            *[value for feature in DISABLED_CHILD_FEATURES for value in ("--disable", feature)],
-            "--color",
-            "never",
-            "--output-schema",
-            str(schema_path),
-            "--json",
-            "-o",
-            str(raw_output),
-            "-",
-        ]
-        if model:
-            command[2:2] = ["-m", model]
         try:
-            process = subprocess.run(
-                command,
-                cwd=workspace,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_seconds,
+            draft, execution = isolated_runner.run_isolated(
+                runner=selected_runner,
+                workspace=workspace,
+                prompt=prompt,
+                schema=critic_output_schema(),
+                model=model,
+                reasoning_effort=reasoning_effort,
+                timeout_seconds=timeout_seconds,
+                executable=executable,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise CriticArtifactError(f"Independent critic timed out after {timeout_seconds} seconds") from exc
-        if process.returncode != 0:
-            stdout_detail = (process.stdout or "").strip()[-4000:]
-            stderr_detail = (process.stderr or "").strip()[-4000:]
-            details = []
-            if stdout_detail:
-                details.append("stdout: " + stdout_detail)
-            if stderr_detail:
-                details.append("stderr: " + stderr_detail)
-            detail = "\n".join(details)
-            raise CriticArtifactError(
-                f"Independent critic process failed with return code {process.returncode}"
-                + (f": {detail}" if detail else "")
-            )
-        if not raw_output.is_file():
-            raise CriticArtifactError("Independent critic completed without a structured output artifact")
-        draft = load_json(raw_output)
+        except isolated_runner.IsolatedRunnerError as exc:
+            raise CriticArtifactError(f"Independent critic did not complete: {exc}") from exc
 
         draft["critic_version"] = 2
         draft["round"] = round_number
@@ -364,24 +307,10 @@ def run_independent_critic(
         else:
             draft.pop("protocol_id", None)
             draft.pop("protocol_sha256", None)
-        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        events = process.stdout or ""
         draft["critic_execution"] = {
-            "mode": "fresh-context-child-agent",
-            "runner": INDEPENDENT_RUNNER,
-            "requested_model": model or "configured-default",
-            "reasoning_effort": reasoning_effort,
-            "sandbox": "read-only",
-            "ephemeral": True,
-            "user_config_ignored": True,
-            "rules_ignored": True,
-            "network_use_authorized": False,
-            "disabled_features": list(DISABLED_CHILD_FEATURES),
+            **execution,
             "source_bundle_sha256": sha256_file(bundle_path),
             "staged_bundle_sha256": sha256_file(staged_bundle),
-            "prompt_sha256": prompt_sha256,
-            "event_stream_sha256": hashlib.sha256(events.encode("utf-8")).hexdigest(),
-            "completed_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         }
         issues, summary = validate_artifact(
             draft,
@@ -401,7 +330,7 @@ def run_independent_critic(
             "evidence_bundle_sha256": sha256_file(bundle_path),
             "round": round_number,
             "scope_version": effective_scope,
-            "runner": INDEPENDENT_RUNNER,
+            "runner": selected_runner,
             "requested_model": model or "configured-default",
             "reasoning_effort": reasoning_effort,
             "summary": summary,
@@ -695,30 +624,10 @@ def validate_artifact(
     if execution is not None and not isinstance(execution, dict):
         issues.append("critic_execution must be an object when present")
     elif isinstance(execution, dict):
-        required_execution = {
-            "mode": "fresh-context-child-agent",
-            "runner": INDEPENDENT_RUNNER,
-            "sandbox": "read-only",
-            "ephemeral": True,
-            "user_config_ignored": True,
-            "rules_ignored": True,
-            "network_use_authorized": False,
-        }
-        execution_issues = []
-        for key, expected in required_execution.items():
-            if execution.get(key) != expected:
-                execution_issues.append(f"critic_execution {key} must be {expected!r}")
-        for key in ("source_bundle_sha256", "staged_bundle_sha256", "prompt_sha256", "event_stream_sha256"):
+        execution_issues = isolated_runner.execution_issues(execution, "critic_execution")
+        for key in ("source_bundle_sha256", "staged_bundle_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", str(execution.get(key) or "")):
                 execution_issues.append(f"critic_execution {key} must be a SHA-256 digest")
-        if not str(execution.get("completed_utc") or "").strip():
-            execution_issues.append("critic_execution completed_utc is required")
-        if not str(execution.get("requested_model") or "").strip():
-            execution_issues.append("critic_execution requested_model is required")
-        if not str(execution.get("reasoning_effort") or "").strip():
-            execution_issues.append("critic_execution reasoning_effort is required")
-        if execution.get("disabled_features") != list(DISABLED_CHILD_FEATURES):
-            execution_issues.append("critic_execution disabled_features does not match the isolated runner policy")
         expected_bundle_sha = (
             str(evidence_bundle.get("bundle_sha256") or "")
             if isinstance(evidence_bundle, dict)
@@ -753,6 +662,7 @@ def validate_artifact(
         "protocol_sha256": data.get("protocol_sha256"),
         "independent_execution": independent_execution,
         "critic_execution_mode": execution.get("mode") if isinstance(execution, dict) else None,
+        "critic_execution_runner": execution.get("runner") if isinstance(execution, dict) else None,
     }
     return issues, summary
 
@@ -777,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--run-independent",
         action="store_true",
-        help="Launch a fresh-context Codex child against a verified evidence bundle and write critic_version 2 JSON.",
+        help="Launch a fresh-context isolated child (Codex or Claude Code) against a verified evidence bundle and write critic_version 2 JSON.",
     )
     parser.add_argument("--evidence", action="append", default=[], help="Evidence item role=path; repeatable and must include strategy=path.")
     parser.add_argument("--bundle", help="Hash-bound critic evidence bundle for --run-independent.")
@@ -787,10 +697,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Required for --run-independent only when the bundle has no protocol-bound critic packet.",
     )
-    parser.add_argument("--model", help="Optional model override for the independent Codex child.")
+    parser.add_argument(
+        "--runner",
+        default="auto",
+        choices=["auto", *isolated_runner.RUNNERS],
+        help="Isolated child runner. auto uses PUBMED_ISOLATED_RUNNER, then prefers Claude Code inside Claude Code and Codex elsewhere.",
+    )
+    parser.add_argument("--runner-bin", help="Runner executable path; otherwise CODEX_BIN/CLAUDE_BIN or PATH is used.")
+    parser.add_argument("--model", help="Optional model override for the independent child.")
     parser.add_argument("--reasoning-effort", default="high", help="Independent child reasoning effort (default: high).")
     parser.add_argument("--timeout", type=int, default=1800, help="Independent child timeout in seconds (default: 1800).")
-    parser.add_argument("--codex-bin", help="Codex executable path; otherwise CODEX_BIN/PATH is used.")
+    parser.add_argument("--codex-bin", help="Deprecated: Codex executable path; implies --runner codex-cli.")
     parser.add_argument("--replace", action="store_true", help="Allow --run-independent to replace an existing output artifact.")
     return parser
 
@@ -824,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout,
                 codex_bin=args.codex_bin,
                 replace=args.replace,
+                runner=args.runner,
+                runner_bin=args.runner_bin,
             )
         except (CriticArtifactError, OSError, subprocess.SubprocessError) as exc:
             receipt = {"operation": "critic-independent-run", "ok": False, "issues": [str(exc)]}

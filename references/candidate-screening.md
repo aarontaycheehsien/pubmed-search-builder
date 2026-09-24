@@ -70,8 +70,13 @@ This is the guardrail against circular screening. A lexicon that excludes record
 An agreement check is not optional polish. Verifying that a quotation exists in a record cannot show that it supports the verdict; only a second independent reading tests that, so the completion gate requires one covering at least 15% of screened records with every flagged record adjudicated.
 
 ```bash
-# Select the records to re-screen independently, then screen them into a replicate worksheet.
+# Select the records to re-screen independently.
 python scripts/screening_tool.py sample screening_worksheet_1.json --fraction 0.15 --output screening_sample_1.json
+
+# Re-screen them in an isolated fresh-context child that never sees the original decisions.
+python scripts/screening_tool.py replicate screening_worksheet_1.json --sample screening_sample_1.json \
+  --rubric screening_rubric_v1.json --records-file candidate_records.json --scope-version 1 \
+  --output screening_worksheet_1_replicate.json
 
 python scripts/screening_tool.py agreement screening_worksheet_1.json \
   --replicate screening_worksheet_1_replicate.json --output screening_agreement_1.json
@@ -81,6 +86,12 @@ python scripts/screening_tool.py to-ledger screening_worksheet_1.json --rubric s
   --records-file candidate_records.json --scope-version 1 \
   --agreement screening_agreement_1.json --output candidate_ledger.json
 ```
+
+The second reading must be independent in fact, not in name. A replicate written by the context that made the original decisions has already seen every verdict it is meant to check, so it agrees by construction. `replicate` therefore runs the re-screen through the same isolated runner as the critic (Codex CLI or Claude Code, chosen with `--runner`): the child receives only the rubric, the sampled records' screenable text, and a blank worksheet. It never sees the original decisions, reasons, or candidate provenance. Its output must pass the same evidence validation as any worksheet; if it fails, the child is re-run with the validation problems, up to `--attempts`. The replicate records the runner's isolation policy, the hash of the original worksheet, and the sample's fraction and seed. `agreement` recomputes the sample from those values, so a hand-picked set of easy records cannot stand in for it.
+
+When a person does the second screening, run `replicate ... --human-screener "<name or role>"`. It writes a blank, blinded worksheet bound to the same sample. Only that person fills it in, setting `decided_by: human` on every row. The builder must never complete it. The tool can bind a human worksheet to its sample but cannot verify who screened it, so the audit reports it as attested rather than mechanically verified.
+
+`agreement` classifies the replicate under `replicate_independence` as `isolated-runner`, `attested-human`, or `unverified`. The completion gate rejects any agreement whose replicate is not demonstrably independent.
 
 The sample is stratified by decision. A simple random sample of a screening set is mostly obvious excludes and measures very little; stratifying puts includes and uncertains — where errors actually cost recall — into the check.
 

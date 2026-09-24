@@ -3,10 +3,12 @@
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:
@@ -558,6 +560,138 @@ class AgreementTests(unittest.TestCase):
         replicate["rubric_sha256"] = "0" * 64
         with self.assertRaises(screening.ScreeningError):
             screening.agreement(original, replicate)
+
+
+class IndependentReplicateTests(unittest.TestCase):
+    """A second reading counts only when it demonstrably did not see the first."""
+
+    def setUp(self):
+        self.records = [{**RECORD, "pmid": str(20000000 + index)} for index in range(4)]
+        self.rubric = rubric_for()
+        self.worksheet = worksheet_for(self.records, self.rubric)
+        for row in self.worksheet["records"]:
+            set_row(row, INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include", reason=f"original reasoning for {row['pmid']}")
+        self.sample = screening.stratified_sample(self.worksheet, fraction=0.5, seed="test")
+        self.staged = []
+        self.prompts = []
+
+    @staticmethod
+    def child_answer(workspace, evidence=INCLUDE_EVIDENCE):
+        staged = json.loads((workspace / "worksheet.json").read_text(encoding="utf-8"))
+        return {
+            "records": [
+                {
+                    "pmid": row["pmid"],
+                    "assessments": [
+                        {
+                            "criterion_id": criterion,
+                            "verdict": INCLUDE_VERDICTS[criterion],
+                            "evidence": evidence.get(criterion, []),
+                            "note": "",
+                        }
+                        for criterion in row["criterion_ids"]
+                    ],
+                    "decision": "include",
+                    "eligibility_reason": "independent reading",
+                }
+                for row in staged["records"]
+            ]
+        }
+
+    def replicate(self, answers=None, attempts=2):
+        answers = list(answers or [None])
+
+        def fake_run(command, **kwargs):
+            workspace = Path(kwargs["cwd"])
+            self.staged.append({path.name: path.read_text(encoding="utf-8") for path in workspace.iterdir()})
+            self.prompts.append(kwargs["input"])
+            answer = answers.pop(0) if answers else None
+            draft = answer(workspace) if callable(answer) else self.child_answer(workspace)
+            envelope = {"type": "result", "subtype": "success", "is_error": False, "result": "", "structured_output": draft}
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(envelope), stderr="")
+
+        with mock.patch.object(screening.isolated_runner.subprocess, "run", side_effect=fake_run):
+            return screening.run_replicate(
+                self.worksheet, self.sample, self.rubric, self.records,
+                records_path="records.json", runner="claude-code-cli", runner_bin="claude-test",
+                model=None, reasoning_effort="high", timeout_seconds=30, attempts=attempts,
+            )
+
+    def test_the_child_sees_the_rubric_and_sampled_records_but_no_original_decisions(self):
+        self.replicate()
+        staged = self.staged[0]
+        self.assertEqual(sorted(staged), ["records.json", "rubric.json", "worksheet.json"])
+        self.assertFalse(any("original reasoning" in text for text in staged.values()))
+        records = json.loads(staged["records.json"])["records"]
+        self.assertEqual(sorted(item["pmid"] for item in records), self.sample["pmids"])
+        self.assertFalse(any("provenance" in item for item in records))
+
+    def test_an_isolated_replicate_is_recognised_as_independent(self):
+        replicate = self.replicate()
+        self.assertEqual(replicate["replicate_execution"]["runner"], "claude-code-cli")
+        independence = screening.agreement(self.worksheet, replicate)["replicate_independence"]
+        self.assertEqual(independence["basis"], "isolated-runner")
+        self.assertTrue(independence["independent"], independence["issues"])
+        self.assertTrue(independence["mechanically_verified"])
+
+    def test_a_replicate_written_in_the_same_context_is_not_independent(self):
+        independence = screening.agreement(self.worksheet, copy.deepcopy(self.worksheet))["replicate_independence"]
+        self.assertEqual(independence["basis"], "unverified")
+        self.assertFalse(independence["independent"])
+
+    def test_a_replicate_detached_from_its_sample_or_worksheet_is_not_independent(self):
+        replicate = self.replicate()
+        detached = copy.deepcopy(replicate)
+        detached["replicate_execution"]["sampled_pmids"] = self.sample["pmids"][:1]
+        edited_original = copy.deepcopy(self.worksheet)
+        edited_original["records"][0]["eligibility_reason"] = "rewritten after the replicate"
+        for original, candidate in ((self.worksheet, detached), (edited_original, replicate)):
+            with self.subTest(original_edited=original is edited_original):
+                self.assertFalse(screening.replicate_independence(original, candidate)["independent"])
+
+    def test_a_hand_picked_sample_is_refused(self):
+        self.sample["pmids"] = self.sample["pmids"][:1]
+        with self.assertRaisesRegex(screening.ScreeningError, "deterministic stratified sample"):
+            self.replicate()
+
+    def test_invalid_child_output_is_retried_with_the_validation_problems(self):
+        fabricated = {**INCLUDE_EVIDENCE, "inc_population": [{"field": "title", "quote": "registered paramedics"}]}
+        replicate = self.replicate(answers=[lambda workspace: self.child_answer(workspace, fabricated), None])
+        self.assertEqual(replicate["replicate_execution"]["attempts"], 2)
+        self.assertIn("previous attempt failed validation", self.prompts[1])
+        self.assertIn("quotes text absent", self.prompts[1])
+
+    def test_output_still_invalid_after_every_attempt_is_an_error(self):
+        fabricated = {**INCLUDE_EVIDENCE, "inc_population": [{"field": "title", "quote": "registered paramedics"}]}
+        bad = lambda workspace: self.child_answer(workspace, fabricated)  # noqa: E731
+        with self.assertRaisesRegex(screening.ScreeningError, "failed validation after 2 attempt"):
+            self.replicate(answers=[bad, bad])
+
+    def test_a_named_human_screener_gets_a_blank_blinded_worksheet(self):
+        blank = screening.human_replicate(
+            self.worksheet, self.sample, self.rubric, self.records, records_path="records.json", screener="Second librarian"
+        )
+        self.assertTrue(all(row["decision"] == "pending" for row in blank["records"]))
+        self.assertNotIn("original reasoning", json.dumps(blank))
+        filled = copy.deepcopy(blank)
+        for row in filled["records"]:
+            set_row(row, INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "include", decided_by="human")
+        independence = screening.replicate_independence(self.worksheet, filled)
+        self.assertEqual(independence["basis"], "attested-human")
+        self.assertTrue(independence["independent"], independence["issues"])
+        self.assertFalse(independence["mechanically_verified"])
+        for row in filled["records"]:
+            row["decided_by"] = "model"
+        self.assertFalse(screening.replicate_independence(self.worksheet, filled)["independent"])
+
+    def test_the_ledger_carries_how_the_rescreen_was_produced(self):
+        result = screening.agreement(self.worksheet, self.replicate())
+        ledger = screening.to_ledger(self.worksheet, self.rubric, self.records, agreement_artifact=result)
+        self.assertEqual(ledger["screening_provenance"]["agreement"]["replicate_independence"]["basis"], "isolated-runner")
+        _issues, summary = candidate_ledger.validate_ledger(ledger)
+        independence = summary["screening_provenance"]["agreement_independence"]
+        self.assertEqual(independence["basis"], "isolated-runner")
+        self.assertTrue(independence["independent"])
 
 
 if __name__ == "__main__":

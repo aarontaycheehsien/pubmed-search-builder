@@ -297,6 +297,24 @@ def render_retrieval_scope(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def rescreen_independence_text(summary: dict[str, Any]) -> str:
+    """Say who performed the agreement re-screen, and whether that was mechanically verified."""
+
+    independence = as_dict(as_dict(summary.get("screening_provenance")).get("agreement_independence"))
+    basis = independence.get("basis")
+    if not basis:
+        return DEFAULT_STATUS
+    if basis == "isolated-runner":
+        text = f"isolated fresh-context child ({independence.get('runner') or 'runner unrecorded'}), mechanically verified"
+    elif basis == "attested-human":
+        text = f"human second screener ({independence.get('screener') or 'unnamed'}), attested, not mechanically verifiable"
+    else:
+        text = f"{basis}; not demonstrably independent"
+    if independence.get("independent") is not True:
+        text += "; independence check failed"
+    return text
+
+
 def render_candidate_screening(data: dict[str, Any]) -> list[str]:
     screening = as_dict(first_value(data, ["candidate_screening", "candidate_evidence_screening"], {}))
     summary = as_dict(screening.get("summary"))
@@ -314,6 +332,7 @@ def render_candidate_screening(data: dict[str, Any]) -> list[str]:
         f"- **Development-validation PMIDs:** {compact_text(summary.get('holdout_pmids'))}",
         f"- **Non-independent validation PMIDs:** {compact_text(summary.get('non_independent_validation_pmids'))}",
         f"- **Heuristic PMIDs:** {compact_text(summary.get('heuristic_pmids'))}",
+        f"- **Independent re-screen:** {rescreen_independence_text(summary)}",
         f"- **Screening/holdout rationale:** {compact_text(screening.get('screening_notes') or screening.get('reason'))}",
         "",
     ]

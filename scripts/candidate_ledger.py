@@ -180,6 +180,23 @@ def screening_provenance_issues(prefix: str, record: dict[str, Any], use: str) -
     return issues
 
 
+def agreement_independence_summary(data: dict[str, Any]) -> dict[str, Any] | None:
+    """How the agreement re-screen was produced, for the audit; None when no agreement is recorded."""
+
+    provenance = data.get("screening_provenance")
+    agreement = provenance.get("agreement") if isinstance(provenance, dict) else None
+    if not isinstance(agreement, dict):
+        return None
+    independence = agreement.get("replicate_independence")
+    if not isinstance(independence, dict):
+        return {"basis": "unrecorded", "independent": False}
+    return {
+        key: independence.get(key)
+        for key in ("basis", "independent", "mechanically_verified", "runner", "screener")
+        if independence.get(key) is not None
+    }
+
+
 def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     issues: list[str] = protocol_binding_issues(data)
     if data.get("artifact_type") == "candidate-ledger-template" or data.get("ledger_status") == "template":
@@ -304,6 +321,7 @@ def validate_ledger(data: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             # Legacy ledgers report a non-empty list here; the audit should say so.
             "evidence_roles_without_screening_provenance": unevidenced_evidence_roles,
             "all_evidence_roles_screened_with_evidence": not unevidenced_evidence_roles,
+            "agreement_independence": agreement_independence_summary(data),
         },
     }
     return issues, summary

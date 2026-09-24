@@ -7,6 +7,7 @@
 - Internet connection (for NCBI and NLM APIs)
 - An NCBI email address (recommended)
 - (Optional) NCBI API key for higher rate limits
+- The Codex CLI or Claude Code, installed and signed in. The independent critic and the independent screening re-screen run as isolated child processes through one of them, and a build cannot pass its completion gate without both. For Claude Code, run `claude auth login` once, since the child uses the CLI's own sign-in.
 
 ## Step-by-Step Installation
 
@@ -267,6 +268,8 @@ rm -rf pubmed-search-builder
 | `NCBI_EMAIL` | Recommended | (none) | Email for NCBI E-utilities compliance |
 | `NCBI_TOOL` | No | `codex-search-strategy-check` | Tool name in NCBI API requests |
 | `NCBI_API_KEY` | No | (none) | API key for higher rate limits (10 req/sec) |
+| `PUBMED_ISOLATED_RUNNER` | No | `auto` | Isolated child runner: `codex-cli` or `claude-code-cli` |
+| `CODEX_BIN` / `CLAUDE_BIN` | No | `PATH` lookup | Runner executable when it is not on `PATH` |
 
 ---
 
