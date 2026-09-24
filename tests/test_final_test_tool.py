@@ -67,8 +67,30 @@ class FinalTestTests(unittest.TestCase):
         return public
 
     @staticmethod
-    def search(client, query, retmax, retstart, sort):
-        return {'pmids': ['3'] if 'allocation[tiab]' in query else ['3', '4'], 'warnings': {}, 'errors': {}}
+    def pubmed(pmids, count=None, errors=None):
+        """An ESearch result shaped like live PubMed: zero hits always carry 'No items found.'."""
+        warnings = {} if pmids or count else {
+            'phrasesignored': [], 'quotedphrasesnotfound': [], 'outputmessages': ['No items found.'],
+        }
+        return {'count': len(pmids) if count is None else count, 'pmids': list(pmids),
+                'warnings': warnings, 'errors': errors or {}}
+
+    @classmethod
+    def search(cls, client, query, retmax, retstart, sort):
+        if '[uid]' not in query:  # preflight: the frozen strategy alone
+            return cls.pubmed([], count=1200)
+        return cls.pubmed(['3'] if 'allocation[tiab]' in query else ['3', '4'])
+
+    @classmethod
+    def searcher(cls, retrieved, *, strategy_errors=None, uid_errors=None):
+        """PubMed stand-in: the strategy retrieves `retrieved` among the reachable test records."""
+        def search(client, query, retmax, retstart, sort):
+            if '[uid]' not in query:
+                return cls.pubmed([], count=1200, errors=strategy_errors)
+            if 'allocation[tiab]' in query:
+                return cls.pubmed(retrieved, errors=uid_errors or strategy_errors)
+            return cls.pubmed(['3', '4'])
+        return search
 
     def test_aggregate_one_time_result_and_audit(self):
         public = self.seal_and_freeze()
@@ -122,20 +144,70 @@ class FinalTestTests(unittest.TestCase):
         with self.assertRaisesRegex(tool.FinalTestError, 'family'):
             tool.evaluate(self.sealed, self.frozen, self.result, client=object())
 
-    def test_failed_network_attempt_consumes_set(self):
+    def test_failed_network_attempt_during_sealed_retrieval_consumes_set(self):
         self.seal_and_freeze()
-        with patch.object(pubmed_tool, 'esearch', side_effect=pubmed_tool.PubMedError('offline')):
+        outcomes = [self.pubmed([], count=1200), pubmed_tool.PubMedError('offline')]
+        with patch.object(pubmed_tool, 'esearch', side_effect=outcomes):
             with self.assertRaises(pubmed_tool.PubMedError):
                 tool.evaluate(self.sealed, self.frozen, self.result, client=object())
         with self.assertRaisesRegex(tool.FinalTestError, 'consumed'):
             tool.evaluate(self.sealed, self.frozen, self.result, client=object())
 
-    def test_empty_reachable_denominator_not_perfect_recall(self):
+    def test_failed_preflight_touches_no_sealed_record_and_leaves_set_unconsumed(self):
         self.seal_and_freeze()
-        with patch.object(pubmed_tool, 'esearch', return_value={'pmids': [], 'warnings': {}, 'errors': {}}):
+        with patch.object(pubmed_tool, 'esearch', side_effect=pubmed_tool.PubMedError('offline')) as search:
+            with self.assertRaises(pubmed_tool.PubMedError):
+                tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+        self.assertNotIn('[uid]', search.call_args.args[1])
+        with patch.object(pubmed_tool, 'esearch', side_effect=self.search):
+            result = tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+        self.assertEqual(result['recall'], .5)
+
+    def test_empty_reachable_denominator_not_perfect_recall(self):
+        # Real PubMed answers every zero-hit search with a 'No items found.' warning.
+        self.seal_and_freeze()
+        def search(client, query, retmax, retstart, sort):
+            return self.pubmed([], count=1200) if '[uid]' not in query else self.pubmed([])
+        with patch.object(pubmed_tool, 'esearch', side_effect=search):
             result = tool.evaluate(self.sealed, self.frozen, self.result, client=object())
         self.assertIsNone(result['recall'])
         self.assertEqual(result['unreachable_records'], 2)
+
+    def test_missing_every_test_record_is_a_result_not_a_failure(self):
+        self.seal_and_freeze()
+        with patch.object(pubmed_tool, 'esearch', side_effect=self.searcher([])):
+            result = tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+        self.assertEqual(result['recall'], 0.0)
+        self.assertEqual(result['missed_records'], 2)
+
+    def test_intentional_zero_hit_strategy_term_is_tolerated_and_reported(self):
+        self.seal_and_freeze()
+        kept = {'phrasesnotfound': ['futureterm'], 'fieldsnotfound': []}
+        with patch.object(pubmed_tool, 'esearch', side_effect=self.searcher(['3'], strategy_errors=kept)):
+            result = tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+        self.assertEqual(result['recall'], .5)
+        self.assertEqual(result['strategy_translation_notices'], {'phrasesnotfound': ['futureterm']})
+
+    def test_unrecognised_field_tag_or_empty_strategy_stops_before_consuming(self):
+        self.seal_and_freeze()
+        cases = [
+            (self.searcher(['3'], strategy_errors={'phrasesnotfound': [], 'fieldsnotfound': ['tiabx']}), 'fieldsnotfound'),
+            (lambda client, query, *args: self.pubmed([]), 'retrieves no PubMed records'),
+        ]
+        for search, message in cases:
+            with self.subTest(message=message), patch.object(pubmed_tool, 'esearch', side_effect=search):
+                with self.assertRaisesRegex(tool.FinalTestError, message):
+                    tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+                self.assertFalse(self.sealed.with_name(self.sealed.name + '.used.json').exists())
+
+    def test_an_unexpected_notice_during_sealed_retrieval_still_aborts_and_consumes(self):
+        self.seal_and_freeze()
+        surprise = {'phrasesnotfound': ['unexpectedphrase'], 'fieldsnotfound': []}
+        with patch.object(pubmed_tool, 'esearch', side_effect=self.searcher(['3'], uid_errors=surprise)):
+            with self.assertRaisesRegex(tool.FinalTestError, 'unexpected PubMed notices'):
+                tool.evaluate(self.sealed, self.frozen, self.result, client=object())
+        with self.assertRaisesRegex(tool.FinalTestError, 'consumed'):
+            tool.evaluate(self.sealed, self.frozen, self.result, client=object())
 
     def test_sealed_data_cannot_enter_development_consumers(self):
         self.seal_and_freeze()

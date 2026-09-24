@@ -24,6 +24,7 @@ ROOT_DIR = str(Path(__file__).resolve().parents[1])
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+import wildcard_rules
 from mesh_evidence import build_mesh_evidence, is_mesh_artifact
 from pubmed_search_builder.core.workspace import is_within
 from pubmed_search_builder.domain.review_depth import depth_disclosure
@@ -640,6 +641,19 @@ def query_translation_drift_hook(
             ", ".join(untagged[:8]),
         )
 
+    # PubMed reports nothing when it declines a truncation, so compare the query with its
+    # translation: a word-final asterisk that vanished means the bare word was searched instead.
+    dropped = wildcard_rules.dropped_truncations(query, query_translation) if has_translation else []
+    if dropped:
+        add_translation_issue(
+            issues,
+            "warning",
+            "truncation_dropped",
+            "PubMed did not apply truncation to these terms and searched the bare word instead, losing the "
+            "intended variants; a word-final asterisk needs at least four preceding characters.",
+            ", ".join(dropped),
+        )
+
     if tags and not untagged and has_translation and "[all fields]" in lower_translation and "[all fields]" not in query.lower():
         add_translation_issue(
             issues,
@@ -727,6 +741,17 @@ def pre_command_hook(
             )
             break
 
+    for label, value in query_inputs(query=query, queries=queries):
+        count = wildcard_rules.wildcard_count(value)
+        if count > wildcard_rules.MAX_WILDCARDS:
+            add_hook_issue(
+                issues,
+                "error",
+                "too_many_wildcards",
+                f"{label} has {count} wildcards; PubMed rejects more than {wildcard_rules.MAX_WILDCARDS} and reports "
+                "it as a temporary backend failure. Replace some truncated stems with explicit variants.",
+            )
+
     if query and len(query) > INLINE_QUERY_WARNING_LENGTH and query_source(args) == "argument":
         add_hook_issue(
             issues,
@@ -808,6 +833,16 @@ def build_response_cache(*, enabled: bool = True, directory: str | None = None) 
 EUTILS_ERROR_RETRIES = 3
 EUTILS_ERROR_BACKOFF_SECONDS = 1.0
 EUTILS_XML_ERROR_PATTERN = re.compile(rb"<ERROR>(.*?)</ERROR>", re.DOTALL)
+
+
+def eutils_query_rejected(message: str) -> bool:
+    """True for an E-utilities failure caused by the query itself, which a retry cannot fix.
+
+    PubMed reports, for example, too many wildcards as "Search Backend failed ... temporarily
+    unavailable ... Cannot search because the number of wildcards (*) exceeds 256".
+    """
+
+    return "cannot search because" in str(message or "").casefold()
 
 
 def eutils_hard_error(raw: bytes) -> str | None:
@@ -914,6 +949,10 @@ class NcbiClient:
                 self.cache.put(endpoint, merged, response.body)
                 return response.body
             failure = detected
+            if eutils_query_rejected(detected):
+                # PubMed wraps some query errors in the same "temporarily unavailable" envelope as
+                # an outage; retrying cannot help, and reporting an outage would mislead.
+                raise PubMedError(f"NCBI {endpoint} rejected the query (not a transient outage): {failure}")
             self.retries_performed += 1
             if attempt < EUTILS_ERROR_RETRIES:
                 time.sleep(EUTILS_ERROR_BACKOFF_SECONDS * (2**attempt))

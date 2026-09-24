@@ -10,6 +10,12 @@ import re
 import sys
 from pathlib import Path
 
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+import wildcard_rules  # noqa: E402
+
 
 ISSUE_LEVELS = ("error", "warning", "info")
 LOW_COUNT_DECISIONS = (
@@ -639,7 +645,32 @@ def final_qa(strategy: str, warning_dispositions: dict[str, str] | None = None) 
         for value in snippets(pattern, lower):
             add_issue(issues, "warning", code, "Limits and filters can reduce recall; document the protocol justification and retrieval impact.", value)
 
+    # PubMed silently ignores a word-final asterisk with fewer than four leading characters and
+    # searches the bare word, so the intended variants are lost with no warning. That is a
+    # recall error, not a noise trade-off, so it cannot be waived with a disposition.
+    ignored_truncations = wildcard_rules.short_truncations(text)
+    for value in ignored_truncations:
+        add_issue(
+            issues,
+            "error",
+            "truncation_ignored_short_stem",
+            "PubMed ignores truncation with fewer than four characters before a word-final asterisk and "
+            "silently searches the bare word; spell out the variants or lengthen the stem.",
+            value,
+        )
+    total_wildcards = wildcard_rules.wildcard_count(text)
+    if total_wildcards > wildcard_rules.MAX_WILDCARDS:
+        add_issue(
+            issues,
+            "error",
+            "too_many_wildcards",
+            f"PubMed rejects queries with more than {wildcard_rules.MAX_WILDCARDS} wildcards, reporting it as a "
+            "temporary backend failure; replace some truncated stems with explicit variants.",
+            f"{total_wildcards} wildcards",
+        )
     for value in snippets(r"\b[a-z][a-z0-9-]{0,3}\*", text):
+        if any(term.startswith(value.rstrip("*")) for term in ignored_truncations):
+            continue
         add_issue(issues, "warning", "short_wildcard", "Short wildcard stems can add heavy noise or unstable variants; test or replace them.", value)
 
     for value in snippets(r'"[^"]*\*[^"]*"\[(?:ti|tiab|ad):~\d+\]', text):

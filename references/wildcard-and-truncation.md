@@ -39,15 +39,29 @@ paediatric*[tiab]
 ## Risky stems
 
 ```text
-cat*[tiab]
-man*[tiab]
 care*[tiab]
-arm*[tiab]
 pain*[tiab]
-rat*[tiab]
+cell*[tiab]
+gene*[tiab]
+mani*[tiab]
+rate*[tiab]
 ```
 
 Risky does not mean forbidden. It means test before keeping.
+
+## Stems PubMed will not truncate
+
+A word-final asterisk truncates only when at least four characters precede it, counted from the start of its term or quoted phrase. With fewer, PubMed silently drops the asterisk and searches the bare word. It gives no error or warning, so the intended variants are simply lost. Confirmed against live PubMed:
+
+| Query | PubMed searches |
+|---|---|
+| `cat*[tiab]` | `"cat"[Title/Abstract]` |
+| `il6*[tiab]` | `"il6"[Title/Abstract]` |
+| `tb*` | `"tb"[All Fields]` |
+| `"cat* scratch"[tiab]` | `"cat scratch"[Title/Abstract]` |
+| `"scratch cat*"[tiab]` | `"scratch cat*"[Title/Abstract]` (truncated: the phrase supplies more than four leading characters) |
+
+A mid-word wildcard such as `ca*t` or `colo*r` is not truncation and has no such minimum. Final QA (`hooks_tool.py final-qa`) rejects a word-final stem shorter than four characters as an error. The query-translation hook on every PubMed search reports `truncation_dropped` whenever an asterisk is missing from PubMed's translation. Spell out the variants (`cat[tiab] OR cats[tiab]`) or lengthen the stem.
 
 ## Candidate-generation rules
 
@@ -149,7 +163,7 @@ Current practical limits and behaviours:
 - Wildcards can appear in the middle of terms and phrases, and multiple wildcards can be used in the same term or phrase (`organi*ation*`, `colo*r`, `"colo* cancer*"`).
 - PubMed searches wildcarded terms for possible variations, which can add unintended noise.
 - Wildcards turn off Automatic Term Mapping, including MeSH mapping and explosion.
-- NLM Office Hours in June 2024 stated a limit of 256 wildcard operators per query.
+- NLM Office Hours in June 2024 stated a limit of 256 wildcard operators per query. Live ESearch confirms it: a query with 257 asterisks fails with "Search Backend failed ... Search is temporarily unavailable ... Cannot search because the number of wildcards (*) exceeds 256". The message looks like a transient outage but is a query error. `pubmed_tool.py` blocks such a query before sending it and never retries this error, and final QA rejects it.
 
 Practical implications:
 

@@ -291,6 +291,21 @@ class EutilsErrorTests(unittest.TestCase):
             # Only the successful payload is cached.
             self.assertEqual(cache.get("esearch.fcgi", {"db": "pubmed", "term": "asthma"}), self.GOOD_BODY)
 
+    # Live PubMed returns this for a query with 257 asterisks: an outage-shaped envelope around a
+    # deterministic query error.
+    WILDCARD_LIMIT_BODY = (
+        b'{"esearchresult":{"ERROR":"Search Backend failed: An error occurred while processing request. '
+        b'Status: 500. Source: /api/search/?r= Details: Search is temporarily unavailable. Please try again '
+        b'later. Details: Cannot search because the number of wildcards (*) exceeds 256."}}'
+    )
+
+    def test_a_query_rejection_is_not_retried_or_reported_as_an_outage(self):
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(pubmed_tool.time, "sleep"):
+            client, _cache, calls = self._client([self.WILDCARD_LIMIT_BODY], td)
+            with self.assertRaisesRegex(pubmed_tool.PubMedError, "rejected the query .*exceeds 256"):
+                client.request("esearch.fcgi", {"db": "pubmed", "term": "many wildcards"})
+            self.assertEqual(len(calls), 1)
+
     def test_retries_are_bounded(self):
         with tempfile.TemporaryDirectory() as td, mock.patch.object(pubmed_tool.time, "sleep"):
             client, _cache, calls = self._client([self.ERROR_BODY], td)

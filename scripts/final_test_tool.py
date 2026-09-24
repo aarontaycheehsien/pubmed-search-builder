@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import secrets
 import sys
 from datetime import datetime, timezone
@@ -59,6 +60,75 @@ def write_new(path: Path, value: dict[str, Any]) -> None:
 
 def families(records: list[dict[str, Any]]) -> set[str]:
     return {str(row["study_family_id"]) for row in records if row.get("study_family_id")}
+
+
+# ESearch reports routine outcomes through the same error and warning lists as real problems:
+# every zero-hit search carries "No items found.", and a strategy that deliberately keeps a
+# zero-hit term reports it under phrasesnotfound on every search. Those must not abort a one-time
+# evaluation. Notices the frozen strategy produces on its own are recorded before the set is
+# consumed and accepted afterwards; a field tag PubMed does not recognise means the strategy is
+# not searching what it says, so it stops the evaluation before anything is consumed.
+BENIGN_OUTPUT_MESSAGES = frozenset({"no items found."})
+ACCEPTED_STRATEGY_NOTICES = frozenset({"phrasesnotfound", "phrasesignored", "quotedphrasesnotfound"})
+UID_TERM = re.compile(r"^\d+(\[uid\])?$", re.IGNORECASE)
+
+
+def translation_notices(response: dict[str, Any]) -> dict[str, set[str]]:
+    """ESearch errorlist and warninglist entries, keyed by notice name."""
+
+    notices: dict[str, set[str]] = {}
+    for key in ("errors", "warnings"):
+        container = response.get(key)
+        if isinstance(container, dict):
+            items = container.items()
+        elif container:
+            items = [(key, container)]
+        else:
+            continue
+        for name, values in items:
+            listed = values if isinstance(values, list) else [values]
+            cleaned = {str(value).strip() for value in listed if str(value or "").strip()}
+            if cleaned:
+                notices.setdefault(str(name), set()).update(cleaned)
+    return notices
+
+
+def preflight_strategy(client: Any, query: str) -> tuple[dict[str, Any], dict[str, set[str]]]:
+    """Search the frozen strategy alone, touching no sealed record, before the set is consumed."""
+
+    response = pubmed_tool.esearch(client, query, 0, 0, None)
+    notices = translation_notices(response)
+    blocking = []
+    for name, values in sorted(notices.items()):
+        if name == "outputmessages":
+            unexpected = sorted(value for value in values if value.casefold() not in BENIGN_OUTPUT_MESSAGES)
+            if unexpected:
+                blocking.append(f"{name}: {', '.join(unexpected)}")
+        elif name not in ACCEPTED_STRATEGY_NOTICES:
+            blocking.append(f"{name}: {', '.join(sorted(values))}")
+    if blocking:
+        raise FinalTestError(
+            "The frozen strategy does not translate cleanly in PubMed (" + "; ".join(blocking)
+            + "); fix it and re-freeze. The sealed set was not consumed."
+        )
+    if int(response.get("count") or 0) <= 0:
+        raise FinalTestError("The frozen strategy retrieves no PubMed records; the sealed set was not consumed.")
+    accepted = {name: values for name, values in notices.items() if name in ACCEPTED_STRATEGY_NOTICES}
+    return response, accepted
+
+
+def unexpected_notices(response: dict[str, Any], accepted: dict[str, set[str]]) -> list[str]:
+    """Notices a test-record search raised beyond zero hits, uid terms, and the strategy's own."""
+
+    problems = []
+    for name, values in sorted(translation_notices(response).items()):
+        if name == "outputmessages":
+            extra = {value for value in values if value.casefold() not in BENIGN_OUTPUT_MESSAGES}
+        else:
+            extra = {value for value in values - accepted.get(name, set()) if not UID_TERM.match(value)}
+        if extra:
+            problems.append(f"{name}: {', '.join(sorted(extra))}")
+    return problems
 
 
 def seal(ledger_path: Path, protocol_path: Path, output: Path, receipt: Path,
@@ -174,19 +244,25 @@ def evaluate(sealed: Path, frozen: Path, output: Path, *, client=None) -> dict[s
     if families(test_records) & families(development):
         raise FinalTestError("A study family crosses development and final test")
     query = paths["strategy"].read_text(encoding="utf-8-sig").strip()
-    # Exclusive claim before any retrieval: failure also consumes the set conservatively.
-    # This state is in the custodian's directory and must persist with the sealed file.
     used = sealed.with_name(sealed.name + ".used.json")
+    if used.exists():
+        raise FinalTestError("Final test already consumed; do not retune and retest on this set")
+    client = client or pubmed_tool.NcbiClient()
+    # The preflight searches the frozen strategy alone, so it reveals nothing about the sealed
+    # records; a failure here leaves the set unconsumed and the strategy can be fixed first.
+    preflight_response, accepted_notices = preflight_strategy(client, query)
+    # Exclusive claim before any sealed-record retrieval: a failure from here on also consumes the
+    # set conservatively. This state is in the custodian's directory and must persist with the
+    # sealed file.
     claim = {"seal_id": fixed["seal_id"], "frozen_sha256": digest(frozen), "claimed_at": now(), "status": "consumed"}
     try:
         write_new(used, claim)
     except FileExistsError as exc:
         raise FinalTestError("Final test already consumed; do not retune and retest on this set") from exc
-    client = client or pubmed_tool.NcbiClient()
     reachable: set[str] = set()
     retrieved: set[str] = set()
     # Save detailed requests only in the custodian directory. Public output has aggregates.
-    requests = []
+    requests = [preflight_response]
     try:
         for start in range(0, len(pmids), pubmed_tool.RECALL_UID_CHUNK):
             chunk = pmids[start:start + pubmed_tool.RECALL_UID_CHUNK]
@@ -194,8 +270,12 @@ def evaluate(sealed: Path, frozen: Path, output: Path, *, client=None) -> dict[s
             for label, expression in (("reachable", uid), ("retrieved", f"({query}) AND ({uid})")):
                 response = pubmed_tool.esearch(client, expression, len(chunk), 0, None)
                 requests.append(response)
-                if response.get("errors") or response.get("warnings"):
-                    raise FinalTestError("Final-test retrieval returned warnings/errors; inspect private evidence")
+                problems = unexpected_notices(response, accepted_notices if label == "retrieved" else {})
+                if problems:
+                    raise FinalTestError(
+                        "Final-test retrieval returned unexpected PubMed notices (" + "; ".join(problems)
+                        + "); inspect the private evidence"
+                    )
                 found = {str(p) for p in response.get("pmids", [])} & set(chunk)
                 if label == "reachable":
                     reachable.update(found)
@@ -214,6 +294,7 @@ def evaluate(sealed: Path, frozen: Path, output: Path, *, client=None) -> dict[s
             "validation_stage": "sealed-final-test", "set_consumed": True,
             "independence_basis": public["independence_basis"],
             "study_family_check": "available-identifiers-only",
+            "strategy_translation_notices": {name: sorted(values) for name, values in sorted(accepted_notices.items())},
             "limitation": "Known-set recall, not absolute sensitivity; non-exposure is custodian-attested. Any later revision invalidates this as its final test.",
         }
         write_new(output, result)

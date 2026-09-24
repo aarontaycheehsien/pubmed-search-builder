@@ -555,6 +555,19 @@ class ManifestCompleteLoopTests(unittest.TestCase):
         )
         self.assertTrue(any("carry no screening provenance" in issue for issue in issues), issues)
 
+    def test_gate_rejects_every_evidence_role_without_screening_provenance(self):
+        for use in ("development-validation", "holdout", "both"):
+            with self.subTest(use=use):
+                issues = self._screening_gate_issues(
+                    [
+                        {
+                            "pmid": "12345678", "provenance": "user-seed", "decision": "include", "use": use,
+                            "title_abstract_reviewed": True, "eligibility_reason": "in scope",
+                        }
+                    ]
+                )
+                self.assertTrue(any("carry no screening provenance" in issue for issue in issues), issues)
+
     def test_gate_accepts_discovery_records_screened_with_evidence(self):
         issues = self._screening_gate_issues(
             [

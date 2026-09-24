@@ -80,6 +80,7 @@ ROOT_DIR = str(Path(__file__).resolve().parents[1])
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from candidate_ledger import EVIDENCE_USES as LEDGER_EVIDENCE_USES
 from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_artifact, mesh_evidence_issues
 from next_actions import plan_next_actions
 from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
@@ -1833,17 +1834,20 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
         # hash, and quoted evidence.
         ledger_payload = read_manifest_output_json(manifest_path, screening.get("artifact")) or {}
         ledger_records = ledger_payload.get("records") if isinstance(ledger_payload.get("records"), list) else []
+        # The ledger tool's own role set, so a renamed or added evidence role (such as
+        # development-validation) cannot slip past this check.
         unevidenced = sorted(
             str(record.get("pmid"))
             for record in ledger_records
             if isinstance(record, dict)
-            and str(record.get("use") or "") in {"discovery", "holdout", "both"}
+            and str(record.get("use") or "") in LEDGER_EVIDENCE_USES
             and not isinstance(record.get("screening"), dict)
         )
         if unevidenced:
             shown = ", ".join(unevidenced[:5]) + (" ..." if len(unevidenced) > 5 else "")
             issues.append(
-                f"{len(unevidenced)} discovery/holdout records carry no screening provenance ({shown}); "
+                f"{len(unevidenced)} evidence-role (discovery/development-validation/holdout/both) records "
+                f"carry no screening provenance ({shown}); "
                 "re-screen them with screening_tool.py so each decision is bound to the rubric, the "
                 "record content, and quoted evidence"
             )
