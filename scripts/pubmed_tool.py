@@ -488,6 +488,26 @@ def translation_pairs(translations: object) -> list[str]:
     return pairs
 
 
+def esearch_notices(response: dict[str, object]) -> dict[str, set[str]]:
+    """ESearch errorlist and warninglist entries from an `esearch` result, keyed by notice name."""
+
+    notices: dict[str, set[str]] = {}
+    for key in ("errors", "warnings"):
+        container = response.get(key)
+        if isinstance(container, dict):
+            items = list(container.items())
+        elif container:
+            items = [(key, container)]
+        else:
+            continue
+        for name, values in items:
+            listed = values if isinstance(values, list) else [values]
+            cleaned = {str(value).strip() for value in listed if str(value or "").strip()}
+            if cleaned:
+                notices.setdefault(str(name), set()).update(cleaned)
+    return notices
+
+
 def translation_sources(translations: object) -> list[str]:
     if not isinstance(translations, list):
         return []

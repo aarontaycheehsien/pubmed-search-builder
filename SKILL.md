@@ -39,6 +39,10 @@ A locked protocol may set `review.depth` to `full` (default), `standard`, or `ra
 
 Require the plain-language question before inspecting the supplied strategy. Treat its terms, blocks, filters, and line structure as review objects, never as scope evidence. If a prior audit and manifest exist, read them and resume from the latest resolved scope version and critic round. Run `manifest_tool.py report --manifest run_manifest.json` first. Its `next_actions` list is the completion gate's open issues grouped by stage in build order, each with the commands to run and the reference to read. Work from the first entry, reading only the references the open stages name.
 
+### Search update
+
+To re-run a finished strategy for a review update or living review, read `references/search-updates.md` and run `search_update.py check` against the frozen strategy, the build's saved final search JSON, and the last search date. It checks whether PubMed still translates the strategy as it did at build time, re-tests validation records, and retrieves the records added since the last search. On `review-required`, never edit the strategy inside the update; continue as an existing-strategy review.
+
 Do not search PubMed or the web to answer the substantive evidence question. The deliverable is the strategy, empirical QA, and audit.
 
 ## Canonical Loop
@@ -104,6 +108,7 @@ Use `references/audit-template.md` and `scripts/audit_markdown.py` for the repor
 
 - `references/protocol-dsl.md` - versioned review-protocol authoring, validation, compilation, verification, and legacy migration.
 - `references/workflow.md` - canonical loop, re-entry paths, stop criteria, and artifact sequence.
+- `references/search-updates.md` - re-running a frozen strategy for a review update: translation drift, validation re-test, dated new-record window, and PRISMA-S update statement.
 - `references/workflow-contracts.md` - experimental v2 engine contract, parked; do not read or use it for builds (the complete-loop gate is authoritative).
 - `references/framework-selection.md` - question type and framework selection.
 - `references/methods-evaluation-framework.md` - method/tool performance-evaluation profile, canonical slots, ambiguity check, and evidence-target rule.

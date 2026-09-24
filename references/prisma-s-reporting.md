@@ -94,7 +94,7 @@ If the search strategy was based on, or adapted from, an existing strategy (e.g.
 
 ### Item 12. Updates
 
-If the search will be updated, state the planned update interval. If this is a one-off search, state that no updates are planned. Within scope to flag.
+If the search will be updated, state the planned update interval. If this is a one-off search, state that no updates are planned. Within scope to flag. When an update is run, `search_update.py check` writes a `prisma_s_update` statement with the update date, date field, window, and new-record count. It also reports whether PubMed's translation of the strategy changed since the build (see `search-updates.md`).
 
 ### Item 13. Dates of searches
 

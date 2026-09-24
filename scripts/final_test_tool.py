@@ -73,24 +73,7 @@ ACCEPTED_STRATEGY_NOTICES = frozenset({"phrasesnotfound", "phrasesignored", "quo
 UID_TERM = re.compile(r"^\d+(\[uid\])?$", re.IGNORECASE)
 
 
-def translation_notices(response: dict[str, Any]) -> dict[str, set[str]]:
-    """ESearch errorlist and warninglist entries, keyed by notice name."""
-
-    notices: dict[str, set[str]] = {}
-    for key in ("errors", "warnings"):
-        container = response.get(key)
-        if isinstance(container, dict):
-            items = container.items()
-        elif container:
-            items = [(key, container)]
-        else:
-            continue
-        for name, values in items:
-            listed = values if isinstance(values, list) else [values]
-            cleaned = {str(value).strip() for value in listed if str(value or "").strip()}
-            if cleaned:
-                notices.setdefault(str(name), set()).update(cleaned)
-    return notices
+translation_notices = pubmed_tool.esearch_notices
 
 
 def preflight_strategy(client: Any, query: str) -> tuple[dict[str, Any], dict[str, set[str]]]:
