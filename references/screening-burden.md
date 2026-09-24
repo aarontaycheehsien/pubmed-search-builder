@@ -1,6 +1,6 @@
 # Screening Burden From Labelled Samples
 
-Use when comparing a recall-first strategy with focused, filter, or prioritization variants. Burden may choose between variants only after each variant meets the declared independent held-out recall requirement.
+Use when comparing a recall-first strategy with focused, filter, or prioritization variants. Burden may choose between variants only after each variant meets the declared development-validation recall requirement.
 
 ## Build a reproducible sample
 
@@ -52,9 +52,9 @@ python scripts/screening_burden.py estimate \
   --output screening_burden.json
 ```
 
-The estimator reports weighted precision, a 95% Wilson interval using Kish effective sample size, bounds treating uncertain labels as all irrelevant versus all relevant, estimated relevant reports, and estimated records screened per relevant report with an inverted confidence interval. It also reports exact total workload, held-out retrieval, and incremental workload/recall relative to the baseline.
+The estimator reports weighted precision, a 95% Wilson interval using Kish effective sample size, bounds treating uncertain labels as all irrelevant versus all relevant, estimated relevant reports, and estimated records screened per relevant report with an inverted confidence interval. It also reports exact total workload, development-validation retrieval, and incremental workload/recall relative to the baseline.
 
-An independent holdout is mandatory. A reused `both` set is rejected. `minimum-heldout-recall` is a proportion from 0 to 1 and defaults to 1.0.
+An disjoint development-validation set is mandatory. A reused `both` set is rejected. `minimum-heldout-recall` is a proportion from 0 to 1 and defaults to 1.0.
 
 The selection rule is binding: burden is used only when at least two variants meet the recall requirement and have estimable precision. A recall-failing variant is never recommended because it appears cheaper. If fewer than two qualify, `burden_used_for_selection` is false and no strategy is recommended from burden evidence.
 

@@ -207,4 +207,4 @@ As a development heuristic, overall recall below 70% or any essential block belo
 
 ## Audit
 
-Record every pilot query/anchor set, per-pilot counts and safety caps, the blinded screening artifact, separate provenance map, study/vocabulary novelty by round, saturation decision, frozen holdout allocation, benchmark size and screening status, reachable denominator, relative and per-block recall, missed-record screening, revisions, retest result, and whether the user/protocol accepted or declined the check.
+Record every pilot query/anchor set, per-pilot counts and safety caps, the blinded screening artifact, separate provenance map, study/vocabulary novelty by round, saturation decision, fixed development-validation set allocation, benchmark size and screening status, reachable denominator, relative and per-block recall, missed-record screening, revisions, retest result, and whether the user/protocol accepted or declined the check.

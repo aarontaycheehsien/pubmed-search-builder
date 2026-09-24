@@ -7,7 +7,7 @@ Use this gate for every critic-driven strategy revision and every accepted vocab
 Prove and save all seven checks:
 
 1. **Named defect fixed:** identify the critic finding or vocabulary gap and cite before/after evidence showing the change addresses it.
-2. **Held-out retrieval preserved:** every held-out PMID retrieved by the baseline remains retrieved after revision. Record the tested baseline and revised PMID sets even when the set is empty.
+2. **Development-validation retrieval preserved:** every held-out PMID retrieved by the baseline remains retrieved after revision. Record the tested baseline and revised PMID sets even when the set is empty.
 3. **No unjustified required block:** compare required block IDs and identify the protocol authorization for every addition. Vocabulary additions must remain inside an existing `OR` block.
 4. **Syntax and translation stable:** rerun the revised query and record syntax status, PubMed translation, warnings, and drift issues. A warning or unrecognized field fails the check until resolved.
 5. **Scope unchanged or explicitly versioned:** the protocol hash and scope version remain unchanged, or an authorized protocol re-entry increments the scope version and records the reason.
@@ -32,7 +32,7 @@ The signal is **active** when `low_count`, `no_included_candidates`, or an untru
 
 ## Critic revisions
 
-Create a version-1 no-harm input containing hashed baseline/revised strategy files, held-out retrieval sets, required block IDs, syntax/translation status, scope bindings, counts, the named finding, and any experimental fallback. Run:
+Create a version-1 no-harm input containing hashed baseline/revised strategy files, development-validation retrieval sets, required block IDs, syntax/translation status, scope bindings, counts, the named finding, and any experimental fallback. Run:
 
 ```bash
 python scripts/revision_guard.py revision_no_harm_input_1.json \

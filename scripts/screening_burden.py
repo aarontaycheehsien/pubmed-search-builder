@@ -380,14 +380,14 @@ def resolve_holdout(
             expected_protocol_id=policy.get("protocol_id") if policy else None,
             expected_protocol_sha256=policy.get("protocol_sha256") if policy else None,
         )
-        if meta.get("independent") is not True:
-            raise ScreeningBurdenError("Candidate ledger lacks an independent holdout; burden comparison requires held-out recall")
+        if meta.get("disjoint_from_discovery") is not True:
+            raise ScreeningBurdenError("Candidate ledger lacks an disjoint development-validation set; burden comparison requires held-out recall")
         return pmids, f"candidate-ledger:{candidate_ledger}"
     pmids = pubmed_tool.dedup_preserving_order([str(value) for value in explicit_pmids])
     pubmed_tool.assert_numeric_pmids(pmids, source="heldout PMIDs")
     if not pmids:
-        raise ScreeningBurdenError("Provide an independent candidate ledger or explicit heldout PMIDs")
-    return pmids, "explicit-independent-heldout"
+        raise ScreeningBurdenError("Provide an development-validation candidate ledger or explicit heldout PMIDs")
+    return pmids, "explicit-development-validation"
 
 
 def estimate_burden(

@@ -4,11 +4,11 @@ Use this reference after retrieval scope version 1 is locked and before candidat
 
 ## Purpose
 
-Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pilot query to redefine the review. Keep four evidence roles distinct:
+Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pilot query to redefine the review. Keep candidate evidence roles distinct; a sealed final test is stored separately (see `final-test-validation.md`):
 
 - **User seed:** supplied as likely relevant, but still checked against the locked scope.
 - **Discovery record:** screened in and permitted to contribute title/abstract, keyword, and MeSH candidates.
-- **Held-out validation record:** screened in but frozen before term mining; use only to test retrieval.
+- **Development-validation record:** screened in but frozen before term mining; use only to test retrieval.
 - **Heuristic neighbor:** unscreened or uncertain related/citation record; may support a clearly labelled heuristic benchmark, never term mining or claims of relevance.
 
 ## Required sequence
@@ -17,13 +17,13 @@ Build a candidate evidence set without allowing seeds, PubMed neighbors, or a pi
 2. Collect candidate PMIDs from supplied seeds, PubMed similar articles, citation links, or independently identified prior-review included studies. With no seeds, use the six orthogonal pilots below rather than one defining pilot.
 3. Fetch candidate metadata to saved JSON. Inspect titles and abstracts where available; receipt-only stdout is not screening evidence.
 4. Compile the screening rubric from the locked protocol and screen every candidate with `scripts/screening_tool.py` (below) as `include`, `exclude`, or `uncertain` against the locked scope. Each decision records a verdict per criterion, quoted evidence supporting it, and how the decision was made.
-5. Assign one use role: `discovery`, `holdout`, `both`, `heuristic`, or `neither`.
+5. Assign one use role: `discovery`, `development-validation` (legacy `holdout`), `both`, `heuristic`, or `neither`.
 6. Save and validate `candidate_ledger.json` with `scripts/candidate_ledger.py`. When roles have not already been frozen, use `--allocate-holdout --ledger-output <path>` for a deterministic allocation.
 7. Mine only records that the validator marks eligible for discovery.
 
 ## Screening against a frozen rubric
 
-Screening is the pivot of the workflow — only included records teach the search new vocabulary, and a subset becomes the held-out set the strategy is measured against. A decision plus a reason string only demonstrates that the form was filled in. `scripts/screening_tool.py` requires the decision to be supported by the record.
+Screening is the pivot of the workflow — only included records teach the search new vocabulary, and a subset becomes the development-validation set the strategy is measured against. A decision plus a reason string only demonstrates that the form was filled in. `scripts/screening_tool.py` requires the decision to be supported by the record.
 
 ```bash
 # Freeze the protocol's eligibility criteria as an immutable, hash-bound rubric.
@@ -128,7 +128,8 @@ Allowed provenance values are `user-seed`, `pilot-anchor`, `similar`, `citedin`,
 Use roles mean:
 
 - `discovery`: may contribute terms; not an independent validation record.
-- `holdout`: may validate retrieval; never contribute terms before the final validation run.
+- `development-validation`: may repeatedly validate retrieval and guide revisions; never directly mined. This is not an independent final test.
+- `holdout`: legacy alias for `development-validation`, with the same limits.
 - `both`: may contribute terms and validate, but validation is explicitly non-independent.
 - `heuristic`: may appear only in a labelled heuristic benchmark.
 - `neither`: retained for the screening audit but excluded from discovery and validation.
@@ -157,4 +158,4 @@ After a scope-version change, re-evaluate affected candidate decisions and recor
 
 ## Audit requirements
 
-Record candidate sources, counts by decision and use, evidence files reviewed, excluded/uncertain reasons, holdout allocation, whether validation is independent, and every ledger version. Keep heuristic neighbors separate from screened-in records throughout the audit.
+Record candidate sources, counts by decision and use, evidence files reviewed, excluded/uncertain reasons, holdout allocation, whether validation reused discovery records and whether a separate final test was performed, and every ledger version. Keep heuristic neighbors separate from screened-in records throughout the audit.

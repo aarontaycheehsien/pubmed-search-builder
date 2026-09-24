@@ -20,7 +20,7 @@ Each block object may include `role`, `fragility`, and `parent_block`. The tool 
 
 - the full count and count without the block;
 - the additional screening workload when the block is removed;
-- block, full-strategy, and leave-one-out retrieval across discovery and independent holdout records;
+- block, full-strategy, and leave-one-out retrieval across discovery and disjoint development-validation set records;
 - exact `(without block) NOT (full)` differential counts and fetched samples;
 - one recommendation: `keep-as-required`, `move-inside-another-or-block`, `handle-at-screening`, or `focused-variant-only`.
 
@@ -57,4 +57,4 @@ The focused query is always `main AND (reasoned narrowing block[s])`. The artifa
 
 Search and retain the recall-first main results. Use the focused strand only to prioritize screening or as an explicitly secondary search strand. Run the critic after both artifacts exist, and cite both in the audit.
 
-Read `screening-burden.md`. Draw and label a reproducible stratified sample for both strands, estimate precision and records screened per relevant report, and compare incremental workload with held-out recall. Burden may select a strand only if both meet the declared recall requirement; otherwise retain the recall-qualified design regardless of apparent workload savings.
+Read `screening-burden.md`. Draw and label a reproducible stratified sample for both strands, estimate precision and records screened per relevant report, and compare incremental workload with development-validation recall. Burden may select a strand only if both meet the declared recall requirement; otherwise retain the recall-qualified design regardless of apparent workload savings.

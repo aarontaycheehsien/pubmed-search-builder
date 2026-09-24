@@ -62,11 +62,12 @@ Rank by coverage and lift rather than raw frequency. Treat output as candidate t
 
 ## Development and validation separation
 
-Freeze held-out records before term mining. Prefer a representative holdout across eras, terminology, indexing status, and study types when the set is large enough.
+Allocate development-validation records before term mining. These can guide revisions but are not an independent final test. See `final-test-validation.md` for the separate custodian-held test. Prefer a representative holdout across eras, terminology, indexing status, and study types when the set is large enough.
 
 Report validation type explicitly:
 
-- **Independent holdout:** the PMID did not contribute vocabulary or scope decisions.
+- **Development-validation set:** the PMID was not directly mined, but repeated retrieval results may influence revisions.
+- **Sealed final test:** a custodian kept the record unexposed until the strategy was frozen; see `final-test-validation.md`.
 - **Non-independent reused seed:** the PMID contributed terms and was later re-found.
 - **Heuristic benchmark:** the PMID is an unscreened/uncertain related neighbor.
 

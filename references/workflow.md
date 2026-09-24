@@ -13,7 +13,7 @@ Track the detailed stages in `run_manifest.json`, but show users only four conci
 5. `candidate-screening` - screen candidates and freeze discovery/holdout roles.
 6. `objective-evidence` - mine accepted discovery records, sweep MeSH, and inspect PubMed behavior.
 7. `block-testing` - build blocks and run reversible counts, samples, gaps, variants, and filter comparisons.
-8. `validation` - test held-out records, or label reused-seed/heuristic checks as non-independent.
+8. `validation` - run development-validation checks; sealed final testing is a separate post-freeze step in `final-test-validation.md`.
    When protocol-enabled, run the separate external trial-registry sentinel after PubMed vocabulary and strategy development; registry records never enter term mining.
 9. `critic-review` - run a fresh-context PRESS-informed critic against the current artifacts.
 10. `revision` - route findings, reopen scope when structural, and rerun affected evidence.
@@ -90,11 +90,11 @@ Seed entries compiled from `seeds.records` are candidate-role instructions, not 
 
 Only screened-in `discovery` or `both` records may feed term mining. Do not feed high-overlap related records directly into `term-rank`. Unscreened neighbors may remain a separately labelled heuristic benchmark.
 
-Freeze held-out records before mining. When no independent holdout is feasible, record validation as non-independent.
+Freeze held-out records before mining. When no disjoint development-validation set is feasible, record validation as non-independent.
 
 For no-seed builds, do not begin term mining until repeated rounds add neither screened-in relevant studies nor vocabulary, no retrieval safety cap remains unresolved, and `no_seed_discovery.py adjudicate` has frozen discovery/holdout roles.
 
-Read `references/active-vocabulary-learning.md`. After each screening round, extract terminology only from newly included discovery records and map it only to already locked concepts. Keep excluded-record diagnosis separate. A new concept or eligibility interpretation triggers `state reopen-scope`; do not adopt its terms under the current version. Reason every disposition on the bounded review shortlist and retest accepted terms against the frozen holdout when available plus differential samples. Candidates retained below the review threshold were never reviewed and carry no disposition; the gate reconciles their count against total generated candidates instead.
+Read `references/active-vocabulary-learning.md`. After each screening round, extract terminology only from newly included discovery records and map it only to already locked concepts. Keep excluded-record diagnosis separate. A new concept or eligibility interpretation triggers `state reopen-scope`; do not adopt its terms under the current version. Reason every disposition on the bounded review shortlist and retest accepted terms against the fixed development-validation set when available plus differential samples. Candidates retained below the review threshold were never reviewed and carry no disposition; the gate reconciles their count against total generated candidates instead.
 
 ## 4. Build objective evidence and concept blocks
 
@@ -133,7 +133,7 @@ Inspect saved samples whenever relevance, scope, noise, or term discovery inform
 
 For a fragile or very-fragile topic, also run `strategy_analysis.py two-strand`. Keep the recall-first strategy as the authoritative main search and add reasoned narrowing blocks only to the focused prioritization strand. Report both counts, known-item losses, exact unique-record differentials, workload estimates, and narrowing rationales.
 
-Read `references/screening-burden.md` for multi-strand or material variant comparisons. Generate a complete-frame reproducible stratified sample whose frames record the exact normalized query and hash, relevance sort, and retrieval timestamp; stale or mismatched frames are invalid. Label likely relevant/irrelevant/uncertain records and estimate weighted precision with confidence intervals. Compare incremental workload with independent held-out recall. Use burden to choose only among recall-qualified authoritative variants; a focused-prioritization or diagnostic-only strand never replaces the recall-first main strategy.
+Read `references/screening-burden.md` for multi-strand or material variant comparisons. Generate a complete-frame reproducible stratified sample whose frames record the exact normalized query and hash, relevance sort, and retrieval timestamp; stale or mismatched frames are invalid. Label likely relevant/irrelevant/uncertain records and estimate weighted precision with confidence intervals. Compare incremental workload with development-validation recall. Use burden to choose only among recall-qualified authoritative variants; a focused-prioritization or diagnostic-only strand never replaces the recall-first main strategy.
 
 ## 6. Validate
 
