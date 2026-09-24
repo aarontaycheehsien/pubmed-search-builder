@@ -329,6 +329,68 @@ class ManifestProtocolTests(unittest.TestCase):
     def test_mixed_protocol_locks_and_completion_revalidates(self):
         self._assert_review_target_protocol_locks_and_revalidates("mixed")
 
+    def _depth_gate_issues(self, depth=None):
+        # Compiled protocol artifacts are immutable, so each depth gets its own run directory.
+        self.directory = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        self.manifest = self.directory / "run_manifest.json"
+        protocol = self.lock_valid_protocol()
+        if depth is not None:
+            protocol["review"]["depth"] = depth
+            protocol["review"]["depth_rationale"] = "Guideline panel needs the evidence within six weeks."
+        protocol_path = self.directory / "review_protocol_v1.json"
+        receipt_path = self.directory / "protocol-v1" / "compile.json"
+        protocol_path.write_bytes(protocol_tool.pretty_bytes(protocol))
+        protocol_tool.compile_protocol(protocol_path, self.directory / "protocol-v1", receipt_path)
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 0, error)
+        manifest = self.load()
+        ledger = self.directory / "candidate_ledger.json"
+        ledger.write_text(json.dumps({"scope_version": 1, "records": []}), encoding="utf-8")
+        manifest["build_state"]["candidate_screening"] = {
+            "status": "complete", "artifact": str(ledger), "artifact_sha256": file_hash(ledger),
+            "validation_artifact": str(ledger), "summary": {}, "reason": "",
+        }
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        return protocol, manifest_tool.complete_loop_readiness(self.load(), self.manifest)
+
+    def test_full_depth_requires_every_optimisation_step(self):
+        for depth in (None, "full"):
+            with self.subTest(depth=depth):
+                _protocol, issues = self._depth_gate_issues(depth)
+                self.assertTrue(any("requires a two-strand deliverable" in issue for issue in issues))
+                self.assertTrue(any("lacks labelled-sample screening-burden" in issue for issue in issues))
+                self.assertTrue(any("no active vocabulary-learning artifact" in issue for issue in issues))
+
+    def test_reduced_depth_waives_only_its_declared_checks(self):
+        expectations = {
+            "standard": {"two-strand": False, "screening-burden": False, "vocabulary-learning": True},
+            "rapid": {"two-strand": False, "screening-burden": False, "vocabulary-learning": False},
+        }
+        messages = {
+            "two-strand": "requires a two-strand deliverable",
+            "screening-burden": "lacks labelled-sample screening-burden",
+            "vocabulary-learning": "no active vocabulary-learning artifact",
+        }
+        for depth, required in expectations.items():
+            with self.subTest(depth=depth):
+                _protocol, issues = self._depth_gate_issues(depth)
+                for check, still_required in required.items():
+                    self.assertEqual(any(messages[check] in issue for issue in issues), still_required, (check, issues))
+                # Recall safeguards are never waived.
+                self.assertTrue(any("fragility-score" in issue for issue in issues), issues)
+                self.assertTrue(any("critic" in issue for issue in issues), issues)
+
+    def test_final_audit_must_disclose_reduced_depth_and_waived_checks(self):
+        protocol, _issues = self._depth_gate_issues("rapid")
+        disclosure = manifest_tool.depth_disclosure(protocol)
+        self.assertEqual(manifest_tool.review_depth_audit_disclosure_issues(protocol, {"review_depth": disclosure}), [])
+        self.assertTrue(manifest_tool.review_depth_audit_disclosure_issues(protocol, {}))
+        partial = {**disclosure, "waived_checks": disclosure["waived_checks"][:1]}
+        issues = manifest_tool.review_depth_audit_disclosure_issues(protocol, {"review_depth": partial})
+        self.assertTrue(any("does not disclose waived checks" in issue for issue in issues), issues)
+        full = self.lock_valid_protocol()
+        self.assertEqual(manifest_tool.review_depth_audit_disclosure_issues(full, {}), [])
+
     def test_external_validation_requires_source_status_and_resolved_benchmark(self):
         protocol = self.lock_valid_protocol()
         protocol["information_source_mode"] = "pubmed-plus-external-validation"

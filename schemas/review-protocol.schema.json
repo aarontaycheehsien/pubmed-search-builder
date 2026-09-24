@@ -62,6 +62,8 @@
       "required": ["question", "framework"],
       "properties": {
         "question": {"type": "string", "minLength": 1},
+        "depth": {"type": "string", "enum": ["full", "standard", "rapid"], "default": "full"},
+        "depth_rationale": {"type": "string", "minLength": 1},
         "framework": {
           "type": "object",
           "additionalProperties": false,

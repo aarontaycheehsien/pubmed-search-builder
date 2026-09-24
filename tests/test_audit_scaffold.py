@@ -195,6 +195,22 @@ class BuildScaffoldTests(unittest.TestCase):
         self.assertEqual(audit["run_status_log"][0]["reason"], "asked whether seed PMIDs exist")
         self.assertNotIn("run_status_log", " ".join(receipt["placeholder_fields"]))
 
+    def test_review_depth_and_waived_checks_are_copied_from_the_locked_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            protocol = {"review": {"question": "q", "depth": "rapid", "depth_rationale": "Six-week guideline deadline."}}
+            (root / "review_protocol_v1.json").write_text(json.dumps(protocol), encoding="utf-8")
+            manifest_path = root / "run_manifest.json"
+            state = {"scope": {"lock_mode": "protocol", "protocol_file": "review_protocol_v1.json", "version": 1}}
+            audit, receipt = self.build(manifest_data=manifest([], build_state=state), sources={"manifest": str(manifest_path)})
+        depth = audit["review_depth"]
+        self.assertEqual(depth["depth"], "rapid")
+        self.assertEqual(depth["rationale"], "Six-week guideline deadline.")
+        self.assertEqual(
+            [item["id"] for item in depth["waived_checks"]], ["screening-burden", "two-strand", "vocabulary-learning"]
+        )
+        self.assertIn("review_depth", receipt["fields_filled"])
+
     def test_a_run_that_never_paused_has_no_run_status_log(self):
         for state in ({}, {"run_status_history": []}):
             with self.subTest(state=state):

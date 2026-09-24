@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from pubmed_search_builder.domain.review_depth import DEFAULT_DEPTH, DEPTHS
 from pubmed_search_builder.domain.review_types import SCREENING_HANDLING, SYNTHESIS_TYPES, TARGET_MODES
 
 
@@ -319,8 +320,19 @@ def validate_protocol(data: dict[str, Any], mode: str = "lock") -> list[str]:
             if target.get(key) not in SCREENING_HANDLING:
                 issues.append(f"$.evidence_target.{key} must be include, exclude, or screen")
 
-    review = _object(data.get("review"), "$.review", {"question", "framework"}, {"question", "framework"}, issues)
+    review = _object(
+        data.get("review"), "$.review", {"question", "framework", "depth", "depth_rationale"}, {"question", "framework"}, issues
+    )
     _text(review.get("question"), "$.review.question", issues, lock=lock)
+    if "depth" in review:
+        depth = review.get("depth")
+        if depth not in DEPTHS:
+            issues.append(f"$.review.depth must be one of: {', '.join(DEPTHS)}")
+        elif depth != DEFAULT_DEPTH:
+            # A waived check is a disclosed limitation, so the reason for accepting it is required.
+            _text(review.get("depth_rationale"), "$.review.depth_rationale", issues, lock=lock)
+    elif "depth_rationale" in review:
+        issues.append("$.review.depth_rationale requires $.review.depth")
     framework = _object(review.get("framework"), "$.review.framework", {"name", "profile_id", "rationale", "slots"},
                         {"name", "rationale", "slots"}, issues)
     _text(framework.get("name"), "$.review.framework.name", issues, lock=lock)

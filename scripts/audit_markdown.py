@@ -464,6 +464,34 @@ def render_stage_trace(data: dict[str, Any]) -> list[str]:
     ]
 
 
+def render_review_depth(data: dict[str, Any]) -> list[str]:
+    """Disclose the protocol's review depth and every check it waived, as limitations."""
+
+    depth = as_dict(data.get("review_depth"))
+    if not depth:
+        return []
+    waived = [as_dict(item) for item in as_list(depth.get("waived_checks"))]
+    lines = [
+        "## Review depth",
+        "",
+        f"- **Depth:** {compact_text(depth.get('depth'))}",
+    ]
+    if not waived:
+        lines += ["- **Waived checks:** none; the full evidence loop was run.", ""]
+        return lines
+    lines += [
+        f"- **Rationale:** {compact_text(depth.get('rationale'))}",
+        "- **Waived checks (limitations of this search):**",
+        *[f"  - `{item.get('id')}`: {compact_text(item.get('description'))}" for item in waived],
+        "",
+        "Recall safeguards are not waivable at any depth: scope lock, evidence-backed screening with an "
+        "independent re-screen, per-block MeSH and count evidence, fragility scoring, concept ablation, "
+        "validation, the independent critic, no-harm revision checks, and final QA all ran.",
+        "",
+    ]
+    return lines
+
+
 def render_run_status_log(data: dict[str, Any]) -> list[str]:
     """Every point the build stopped short of finishing, and what it was waiting on.
 
@@ -1384,6 +1412,7 @@ def render_audit_markdown(data: dict[str, Any], output_path: Path | None = None)
     lines.extend(render_protocol_outline(data))
     lines.extend(render_search_structure(data))
     lines.extend(render_retrieval_scope(data))
+    lines.extend(render_review_depth(data))
     lines.extend(render_stage_trace(data))
     lines.extend(render_run_status_log(data))
     lines.extend(render_user_decisions(data))

@@ -26,6 +26,7 @@ if ROOT_DIR not in sys.path:
 
 from mesh_evidence import build_mesh_evidence, is_mesh_artifact
 from pubmed_search_builder.core.workspace import is_within
+from pubmed_search_builder.domain.review_depth import depth_disclosure
 from pubmed_search_builder.infrastructure.cache import ResponseCache, is_enabled_value
 from pubmed_search_builder.infrastructure.env import configure_env_file, read_env
 from pubmed_search_builder.infrastructure.services import ncbi_eutils_policy
@@ -3387,6 +3388,13 @@ def build_audit_scaffold(
             if idle_rows:
                 audit["run_status_log"] = idle_rows
                 filled.append("run_status_log")
+        # The locked protocol's depth and every check it waived, copied from the protocol so the
+        # limitation is reported as declared rather than re-authored.
+        if isinstance(scope_state, dict) and scope_state.get("lock_mode") == "protocol":
+            protocol_payload = _scaffold_manifest_artifact(sources.get("manifest", ""), scope_state.get("protocol_file"))
+            if protocol_payload is not None:
+                audit["review_depth"] = depth_disclosure(protocol_payload)
+                filled.append("review_depth")
         critic_state = manifest_state.get("critic_rounds")
         if isinstance(critic_state, list) and critic_state:
             critic_rows = []

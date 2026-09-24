@@ -44,6 +44,14 @@ Include this section when the locked protocol sets `review.framework.profile_id`
 |---:|---|---|---|
 | [1] | [review_protocol_v1.json / protocol_compile_v1.json] | [initial protocol-only scope lock] | [timestamp] |
 
+## Review depth
+
+Generated from the locked protocol's `review.depth` by `pubmed_tool.py audit-scaffold`; do not author it by hand. At `standard` or `rapid` depth the complete-loop gate requires this section to list the depth, its rationale, and every waived check as a limitation of the search.
+
+- **Depth:** [full / standard / rapid]
+- **Rationale:** [protocol depth_rationale]
+- **Waived checks (limitations of this search):** [each waived check id and description, or none]
+
 ## Stage Trace
 
 | Stage | Reference files | Action taken | Blocked actions | Decision needed | User/protocol decision |

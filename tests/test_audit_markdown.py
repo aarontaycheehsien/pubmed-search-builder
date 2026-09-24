@@ -89,6 +89,25 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn("reduced / eutils", markdown)
         self.assertIn("Confirm against MeSH RDF.", markdown)
 
+    def test_reduced_review_depth_is_rendered_as_disclosed_limitations(self):
+        depth = {
+            "depth": "standard",
+            "rationale": "Scoping review for a funder deadline.",
+            "waived_checks": [
+                {"id": "screening-burden", "description": "Labelled stratified screening-burden sample"},
+                {"id": "two-strand", "description": "Focused prioritisation strand"},
+            ],
+        }
+        text = "\n".join(audit_markdown.render_review_depth({"review_depth": depth}))
+        self.assertIn("## Review depth", text)
+        self.assertIn("Scoping review for a funder deadline.", text)
+        self.assertIn("`screening-burden`", text)
+        self.assertIn("`two-strand`", text)
+        self.assertIn("Recall safeguards are not waivable", text)
+        full = "\n".join(audit_markdown.render_review_depth({"review_depth": {"depth": "full", "waived_checks": []}}))
+        self.assertIn("none; the full evidence loop was run", full)
+        self.assertEqual(audit_markdown.render_review_depth({}), [])
+
     def test_candidate_screening_discloses_who_performed_the_rescreen(self):
         def rendered(independence):
             summary = {"screening_provenance": {"agreement_independence": independence}}

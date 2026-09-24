@@ -82,6 +82,7 @@ if ROOT_DIR not in sys.path:
 
 from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_artifact, mesh_evidence_issues
 from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
+from pubmed_search_builder.domain.review_depth import depth_disclosure, protocol_depth, waived_checks
 
 MANIFEST_VERSION = "1.1"
 # Share of screened records that must be independently re-screened before handoff. Verifying a
@@ -1576,6 +1577,40 @@ def current_mesh_entries(data: dict[str, object], manifest_path: Path) -> list[d
     return rows
 
 
+def review_depth_audit_disclosure_issues(
+    protocol: dict[str, object] | None,
+    audit_payload: dict[str, object],
+) -> list[str]:
+    """Require the final audit to disclose a reduced depth and every check it waived.
+
+    A full-depth build waives nothing and needs no disclosure. A reduced-depth build is a
+    legitimate choice only when a reader can see what was skipped and why.
+    """
+    expected = depth_disclosure(protocol)
+    if not expected["waived_checks"]:
+        return []
+    disclosed = audit_payload.get("review_depth")
+    if not isinstance(disclosed, dict):
+        return [
+            f"final audit lacks review_depth; the protocol runs at {expected['depth']} depth and must disclose "
+            "its waived checks (rerun `pubmed_tool.py audit-scaffold --manifest ...`)"
+        ]
+    issues: list[str] = []
+    if disclosed.get("depth") != expected["depth"]:
+        issues.append(f"final audit review_depth does not match the locked protocol depth {expected['depth']!r}")
+    disclosed_ids = {
+        str(item.get("id"))
+        for item in disclosed.get("waived_checks", [])
+        if isinstance(item, dict)
+    } if isinstance(disclosed.get("waived_checks"), list) else set()
+    missing = [item["id"] for item in expected["waived_checks"] if item["id"] not in disclosed_ids]
+    if missing:
+        issues.append("final audit does not disclose waived checks: " + ", ".join(missing))
+    if not str(disclosed.get("rationale") or "").strip():
+        issues.append("final audit review_depth lacks the protocol's depth rationale")
+    return issues
+
+
 def run_status_audit_disclosure_issues(
     state: dict[str, object],
     audit_payload: dict[str, object],
@@ -1722,6 +1757,15 @@ def low_count_review_readiness(data: dict[str, object], manifest_path: Path, thr
     ]
 
 
+def locked_protocol_payload(scope: dict[str, object], manifest_path: Path) -> dict[str, object] | None:
+    """The locked review protocol for DSL-backed builds; None for legacy scope locks."""
+
+    if scope.get("lock_mode") != "protocol":
+        return None
+    payload = read_manifest_output_json(manifest_path, scope.get("protocol_file"))
+    return payload if isinstance(payload, dict) else None
+
+
 def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> list[str]:
     """Return all reasons a completed conceptual-objective-critic loop cannot be handed off."""
     issues: list[str] = []
@@ -1746,6 +1790,10 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
     elif not output_path_exists(scope_artifact, manifest_path=manifest_path, data=data):
         issues.append(f"retrieval-scope artifact does not exist: {scope_artifact}")
     issues.extend(protocol_scope_readiness(scope, state, manifest_path))
+    locked_protocol = locked_protocol_payload(scope, manifest_path)
+    # The locked protocol's depth may waive effort-heavy optimisation steps; recall safeguards
+    # are never waivable, and the audit must disclose every waiver (checked below).
+    waived = set(waived_checks(protocol_depth(locked_protocol)))
 
     screening = state.get("candidate_screening") if isinstance(state.get("candidate_screening"), dict) else {}
     screening_status = screening.get("status")
@@ -2015,7 +2063,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
 
         vocabulary_entries = operation_entries("vocabulary-learning")
         if not vocabulary_entries:
-            issues.append("no active vocabulary-learning artifact follows candidate screening")
+            if "vocabulary-learning" not in waived:
+                issues.append("no active vocabulary-learning artifact follows candidate screening")
         else:
             vocabulary_entry = vocabulary_entries[-1]
             analysis_sequences.append(int(vocabulary_entry.get("seq") or 0))
@@ -2144,7 +2193,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
     if fragile:
         strand_entries = operation_entries("two-strand")
         if not strand_entries:
-            issues.append("fragile retrieval scope requires a two-strand deliverable")
+            if "two-strand" not in waived:
+                issues.append("fragile retrieval scope requires a two-strand deliverable")
         else:
             strand_entry = strand_entries[-1]
             analysis_sequences.append(int(strand_entry.get("seq") or 0))
@@ -2163,7 +2213,8 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
 
         burden_entries = operation_entries("screening-burden")
         if not burden_entries:
-            issues.append("fragile multi-strand deliverable lacks labelled-sample screening-burden evidence")
+            if "screening-burden" not in waived:
+                issues.append("fragile multi-strand deliverable lacks labelled-sample screening-burden evidence")
         else:
             burden_entry = burden_entries[-1]
             analysis_sequences.append(int(burden_entry.get("seq") or 0))
@@ -2569,6 +2620,7 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                     issues.extend(protocol_binding_issues(core_payload, scope, "final audit input"))
                 issues.extend(mesh_audit_disclosure_issues(data, manifest_path, core_payload))
                 issues.extend(run_status_audit_disclosure_issues(state, core_payload))
+                issues.extend(review_depth_audit_disclosure_issues(locked_protocol, core_payload))
                 unvalidated = state.get("unvalidated_handoff") if isinstance(state.get("unvalidated_handoff"), dict) else {}
                 if unvalidated.get("status") == "accepted":
                     reporting = core_payload.get("reporting_notes") if isinstance(core_payload.get("reporting_notes"), dict) else {}

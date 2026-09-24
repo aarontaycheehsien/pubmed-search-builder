@@ -31,6 +31,20 @@ The only profile is currently `methods-evaluation`, for questions asking how wel
 
 Slot labels and descriptions remain free text. Compilation then adds a `methods-evaluation-role-safety` domain and a `framework_profile` block to the critic packet, plus a "Methods-evaluation framework decisions" section to the audit outline. See `methods-evaluation-framework.md` for the slot defaults, the mandatory ambiguity check, and why an evidence-synthesis application context must not switch `evidence_target.mode`.
 
+## Review depth
+
+`review.depth` records how much of the full evidence loop the review's timeline requires: `full` (the default when absent), `standard`, or `rapid`. Any depth other than `full` requires `review.depth_rationale`, such as a guideline deadline or a rapid-review commission. Depth is a user or protocol decision, never an agent's inference. When the user describes the review as rapid or time-limited and has not chosen a depth, put the choice among the scope-lock decisions instead of assuming it.
+
+Depth waives only effort-heavy optimisation steps:
+
+| Depth | Waived checks |
+|---|---|
+| `full` | none |
+| `standard` | `screening-burden` (labelled stratified sample), `two-strand` (focused prioritisation strand) |
+| `rapid` | the `standard` waivers plus `vocabulary-learning` (iterative rounds with per-term dispositions) |
+
+Recall safeguards are never waivable at any depth: scope lock, evidence-backed screening with an independent re-screen, per-block MeSH and count evidence, fragility scoring, concept ablation, validation, the independent critic, no-harm revision checks, final QA, and the audit. A waived step may still be run; if it is, its artifact is validated as usual. Every waiver is a disclosed limitation. `audit-scaffold` copies the depth, its rationale, and the waived checks into the audit, and the completion gate rejects a final audit that omits any of them. Because depth is part of the locked protocol, changing it requires a new `scope_version`.
+
 ## Validate, compile, and verify
 
 ```bash

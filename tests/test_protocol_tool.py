@@ -245,6 +245,27 @@ class ProtocolValidationTests(unittest.TestCase):
         self.assertEqual(protocol_tool.validate_protocol(draft, "draft"), [])
         self.assertTrue(protocol_tool.validate_protocol(draft, "lock"))
 
+    def test_review_depth_is_optional_and_reduced_depth_requires_a_rationale(self):
+        protocol = valid_protocol()
+        self.assertNotIn("depth", protocol["review"])
+        cases = [
+            ({"depth": "full"}, None),
+            ({"depth": "rapid", "depth_rationale": "Six-week rapid review for a guideline panel."}, None),
+            ({"depth": "rapid"}, "depth_rationale"),
+            ({"depth": "rapid", "depth_rationale": "  "}, "depth_rationale must not be empty"),
+            ({"depth": "quick"}, "$.review.depth must be one of"),
+            ({"depth_rationale": "no depth"}, "requires $.review.depth"),
+        ]
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                candidate = valid_protocol()
+                candidate["review"].update(fields)
+                issues = protocol_tool.validate_protocol(candidate, "lock")
+                if expected is None:
+                    self.assertEqual(issues, [])
+                else:
+                    self.assertTrue(any(expected in issue for issue in issues), issues)
+
     def test_legacy_protocol_without_mode_defaults_to_pubmed_only(self):
         protocol = valid_protocol()
         self.assertEqual(protocol_tool.validate_protocol(protocol, "lock"), [])
