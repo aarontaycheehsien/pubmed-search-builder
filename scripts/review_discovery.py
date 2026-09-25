@@ -266,7 +266,10 @@ def evaluate(
         "operation": "review-filter-evaluate",
         "artifact_type": "review-filter/evaluation",
         "artifact_version": 1,
-        "ok": not misses,
+        # `ok` reports that the evaluation ran; a miss is a result to record and diagnose, not a
+        # failed command. The completion gate blocks handoff while `missed_pmids` is non-empty.
+        "ok": True,
+        "handoff_blocked": bool(misses),
         "protocol_id": profile.get("protocol_id"),
         "scope_version": profile.get("scope_version"),
         "profile_sha256": profile.get("profile_sha256"),

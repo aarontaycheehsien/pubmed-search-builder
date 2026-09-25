@@ -323,6 +323,49 @@ class ManifestProtocolTests(unittest.TestCase):
         self.assertFalse(any("current protocol verification failed" in issue for issue in issues))
         self.assertEqual(len(receipt["artifacts"]), 5)
 
+    def test_evidence_synthesis_target_requires_report_level_evidence_before_handoff(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from pubmed_search_builder.domain.review_profiles import compile_review_profile
+        import review_discovery
+
+        evidence_target = {
+            "mode": "evidence-syntheses", "eligible_types": ["systematic-review"],
+            "protocols": "exclude", "narrative_reviews": "screen", "methods_papers": "exclude",
+        }
+        protocol_path, receipt_path, protocol, _ = self.compiled_protocol(evidence_target=evidence_target)
+        rc, _, error = self.lock(protocol_path, receipt_path)
+        self.assertEqual(rc, 0, error)
+
+        def es_issues():
+            return [issue for issue in manifest_tool.complete_loop_readiness(self.load(), self.manifest) if "evidence-synthesis" in issue]
+
+        self.assertEqual(len([issue for issue in es_issues() if "requires a recorded" in issue]), 4)
+
+        profile = compile_review_profile(protocol)
+        candidates = {"operation": "review-discover", "ok": True, "protocol_id": profile["protocol_id"],
+                      "scope_version": profile["scope_version"], "profile_sha256": profile["profile_sha256"],
+                      "records": [{"pmid": "1"}, {"pmid": "2"}]}
+        decisions = {"records": [
+            {"pmid": pmid, "decision": "include", "title_abstract_reviewed": True, "eligibility_reason": "eligible SR",
+             "record_kind": "completed-synthesis", "declared_synthesis_type": "systematic-review"}
+            for pmid in ("1", "2")
+        ]}
+        classification = review_discovery.classify(candidates=candidates, decisions=decisions, profile=profile)
+        missed = review_discovery.evaluate(profile=profile, classification=classification, retrieved_pmids=["1"])
+        for name, payload in (("profile", profile), ("candidates", candidates), ("classification", classification), ("evaluation", missed)):
+            path = self.directory / f"review_{name}.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.add("artifact", f"review_discovery.py {name}", path)
+        self.assertEqual(es_issues(), ["evidence-synthesis retrieval evaluation has unresolved missed eligible reports: 2"])
+
+        complete = review_discovery.evaluate(profile=profile, classification=classification, retrieved_pmids=["1", "2"])
+        path = self.directory / "review_evaluation_2.json"
+        path.write_text(json.dumps(complete), encoding="utf-8")
+        self.add("artifact", "review_discovery.py evaluate", path)
+        self.assertEqual(es_issues(), [])
+
     def test_evidence_synthesis_protocol_locks_and_completion_revalidates(self):
         self._assert_review_target_protocol_locks_and_revalidates("evidence-syntheses")
 

@@ -84,7 +84,9 @@ class ReviewDiscoveryTests(unittest.TestCase):
             ]
         }
         result = review_discovery.evaluate(profile=profile(), classification=classification, retrieved_pmids=["1"], topic_only_count=12)
-        self.assertFalse(result["ok"])
+        # The evaluation ran, so it can be registered as evidence; the miss blocks handoff instead.
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["handoff_blocked"])
         self.assertEqual(result["missed_pmids"], ["2"])
         self.assertEqual(result["per_synthesis_type"]["meta-analysis"]["relative_recall"], 0.0)
 

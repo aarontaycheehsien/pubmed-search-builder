@@ -168,7 +168,45 @@ def resolve_existing_path(path: Path, if_exists: str) -> Path:
     raise AuditMarkdownError(f"Could not find available suffix for output path: {path}")
 
 
+class Code(str):
+    """A table cell rendered as a code span.
+
+    Search syntax must survive rendering verbatim: in a plain cell, CommonMark reads two mid-word
+    wildcards (``organi*ation*``, ``colo*r ... wom*n``) as emphasis and drops both asterisks, so
+    a strategy copied from the rendered audit silently loses its truncation.
+    """
+
+
+def query_cell(value: Any) -> Any:
+    """Mark a query, translation, or term cell for code-span rendering."""
+
+    text = compact_text(value, "")
+    return Code(text) if text and text != DEFAULT_STATUS else DEFAULT_STATUS
+
+
+def code_span(text: str) -> str:
+    """Inline code with a fence longer than any backtick run inside the text."""
+
+    text = " ".join(str(text).split())
+    longest_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest_run + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def search_terms_text(value: Any) -> str:
+    """Render logged search terms so wildcards survive: lists as code items, prose with escaped asterisks."""
+
+    if isinstance(value, list):
+        items = [compact_text(item, "") for item in value]
+        items = [item for item in items if item and item != DEFAULT_STATUS]
+        return "; ".join(code_span(item) for item in items) if items else DEFAULT_STATUS
+    return compact_text(value).replace("*", "\\*")
+
+
 def escape_table(value: Any) -> str:
+    if isinstance(value, Code):
+        return code_span(str(value)).replace("|", "\\|") if str(value).strip() else DEFAULT_STATUS
     text = compact_text(value)
     text = text.replace("\\", "\\\\").replace("|", "\\|")
     return "<br>".join(line.strip() for line in text.splitlines()) or DEFAULT_STATUS
@@ -866,7 +904,7 @@ def render_evidence_synthesis_retrieval(data: dict[str, Any]) -> list[str]:
             "",
         ])
         branch_rows = [
-            [item.get("branch_id"), item.get("kind"), item.get("indexing_dependency"), item.get("query")]
+            [item.get("branch_id"), item.get("kind"), item.get("indexing_dependency"), query_cell(item.get("query"))]
             for item in as_list(profile.get("branches")) if isinstance(item, dict)
         ]
         lines.extend(["Profile branches:", "", markdown_table(["Branch", "Kind", "Indexing dependency", "Query"], branch_rows), ""])
@@ -1000,9 +1038,9 @@ def render_ncbi_work(data: dict[str, Any]) -> list[str]:
     atm_rows = []
     for item in as_list(first_value(data, ["atm_translations", "pubmed_query_translations"], [])):
         if isinstance(item, dict):
-            atm_rows.append([item.get("query"), item.get("translation"), item.get("added_explicitly")])
+            atm_rows.append([query_cell(item.get("query")), query_cell(item.get("translation")), item.get("added_explicitly")])
         else:
-            atm_rows.append([item, DEFAULT_STATUS, DEFAULT_STATUS])
+            atm_rows.append([query_cell(item), DEFAULT_STATUS, DEFAULT_STATUS])
     lines.append(markdown_table(["Free-text query", "ATM/query translation observed", "Added explicitly?"], atm_rows))
     lines.extend(["", "### PubMed CLI checks", ""])
 
@@ -1014,7 +1052,7 @@ def render_ncbi_work(data: dict[str, Any]) -> list[str]:
     else:
         for item in as_list(checks):
             if isinstance(item, dict):
-                check_rows.append([item.get("label") or item.get("query_tested"), item.get("count")])
+                check_rows.append([item.get("label") or query_cell(item.get("query_tested")), item.get("count")])
             else:
                 check_rows.append([item, DEFAULT_STATUS])
     lines.append(markdown_table(["Block / query tested", "Result count"], check_rows))
@@ -1065,15 +1103,15 @@ def render_tiab_expansion(data: dict[str, Any]) -> list[str]:
     ]
     lines = ["## Title/abstract, proximity, and wildcard expansion log", ""]
     for label, key in fields:
-        lines.append(f"- **{label}:** {compact_text(expansion.get(key))}")
+        lines.append(f"- **{label}:** {search_terms_text(expansion.get(key))}")
     rows = []
     for item in as_list(expansion.get("morphology_review")):
         if isinstance(item, dict):
             rows.append(
                 [
                     item.get("phrase_family"),
-                    item.get("explicit_forms"),
-                    item.get("wildcard_candidate"),
+                    query_cell(item.get("explicit_forms")),
+                    query_cell(item.get("wildcard_candidate")),
                     item.get("tested"),
                     item.get("decision"),
                     item.get("rationale"),
@@ -1295,19 +1333,19 @@ def build_line_set(data: dict[str, Any]) -> tuple[list[list[str]], list[str]]:
         rows.append([
             f"#{index}",
             compact_text(block.get("label"), f"Concept {index}"),
-            compact_text(block.get("query")),
+            query_cell(block.get("query")),
             compact_text(block.get("count")),
         ])
     n = len(blocks)
     final_count = compact_text(first_value(data, ["result_count", "final_count", "topic_only_count"]))
-    rows.append([f"#{n + 1}", "Topic (combined)", hash_combination(data.get("combination"), n), final_count])
+    rows.append([f"#{n + 1}", "Topic (combined)", query_cell(hash_combination(data.get("combination"), n)), final_count])
     filt = as_dict(data.get("methodological_filter"))
     if filt.get("query"):
-        rows.append([f"#{n + 2}", "Methodological filter", compact_text(filt.get("query")), compact_text(filt.get("count"))])
+        rows.append([f"#{n + 2}", "Methodological filter", query_cell(filt.get("query")), compact_text(filt.get("count"))])
         rows.append([
             f"#{n + 3}",
             "Topic + filter",
-            f"#{n + 1} AND #{n + 2}",
+            query_cell(f"#{n + 1} AND #{n + 2}"),
             compact_text(first_value(data, ["topic_plus_filter_count", "filter_count"])),
         ])
 

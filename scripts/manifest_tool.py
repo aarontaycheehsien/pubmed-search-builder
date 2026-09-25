@@ -85,6 +85,7 @@ from mesh_evidence import build_mesh_evidence, complete_sweep_evidence, is_mesh_
 from next_actions import plan_next_actions
 from pubmed_search_builder.core.workspace import WorkspaceError, guard_run_workspace, prepare_workspace
 from pubmed_search_builder.domain.review_depth import depth_disclosure, protocol_depth, waived_checks
+from pubmed_search_builder.domain.review_types import eligible_synthesis_types, targets_evidence_syntheses
 
 MANIFEST_VERSION = "1.1"
 # Share of screened records that must be independently re-screened before handoff. Verifying a
@@ -1759,6 +1760,53 @@ def low_count_review_readiness(data: dict[str, object], manifest_path: Path, thr
     ]
 
 
+EVIDENCE_SYNTHESIS_STEPS = (
+    ("review-retrieval-profile", "evidence-synthesis retrieval profile", "review_discovery.py profile"),
+    ("review-discover", "evidence-synthesis candidate discovery", "review_discovery.py discover"),
+    ("review-classify", "evidence-synthesis candidate classification", "review_discovery.py classify"),
+    ("review-filter-evaluate", "evidence-synthesis retrieval evaluation", "review_discovery.py evaluate"),
+)
+
+
+def evidence_synthesis_readiness(protocol, scope, operation_entries, manifest_path: Path) -> list[str]:
+    """Report-level evidence a protocol targeting evidence syntheses needs before handoff.
+
+    The review artifacts carry the protocol id and scope version but not the protocol hash, so they
+    are bound through those, the eligible report types, and one shared retrieval profile.
+    """
+    issues: list[str] = []
+    payloads: dict[str, dict[str, object]] = {}
+    for operation, label, command in EVIDENCE_SYNTHESIS_STEPS:
+        entries = operation_entries(operation)
+        if not entries:
+            issues.append(f"evidence-synthesis target requires a recorded {label} (`{command}`)")
+            continue
+        payload = read_manifest_output_json(manifest_path, str(entries[-1].get("output_path") or "")) or {}
+        payloads[operation] = payload
+        if payload.get("ok") is not True:
+            issues.append(f"latest {label} did not complete successfully")
+        if payload.get("protocol_id") != scope.get("protocol_id") or payload.get("scope_version") != scope.get("version"):
+            issues.append(f"latest {label} does not match the current protocol id and scope version")
+    profile = payloads.get("review-retrieval-profile")
+    if profile is not None:
+        if sorted(profile.get("eligible_types") or []) != sorted(eligible_synthesis_types(protocol)):
+            issues.append("evidence-synthesis retrieval profile eligible types do not match the locked protocol")
+        for operation, label, _command in EVIDENCE_SYNTHESIS_STEPS[1:]:
+            payload = payloads.get(operation)
+            if payload is not None and payload.get("profile_sha256") != profile.get("profile_sha256"):
+                issues.append(f"latest {label} was not produced from the current retrieval profile")
+    evaluation = payloads.get("review-filter-evaluate")
+    if evaluation is not None:
+        missed = evaluation.get("missed_pmids")
+        if not isinstance(missed, list):
+            issues.append("evidence-synthesis retrieval evaluation lacks a missed_pmids list")
+        elif missed:
+            issues.append(
+                "evidence-synthesis retrieval evaluation has unresolved missed eligible reports: " + ", ".join(map(str, missed[:10]))
+            )
+    return issues
+
+
 def locked_protocol_payload(scope: dict[str, object], manifest_path: Path) -> dict[str, object] | None:
     """The locked review protocol for DSL-backed builds; None for legacy scope locks."""
 
@@ -1965,6 +2013,9 @@ def complete_loop_readiness(data: dict[str, object], manifest_path: Path) -> lis
                 if payload.get("handoff_blocked") is True:
                     misses = ((payload.get("summary") or {}).get("unresolved_pubmed_misses") if isinstance(payload.get("summary"), dict) else [])
                     issues.append("external PubMed benchmark has unresolved eligible linked PMID misses: " + ", ".join(str(x) for x in misses))
+
+    if isinstance(locked_protocol, dict) and targets_evidence_syntheses(locked_protocol):
+        issues.extend(evidence_synthesis_readiness(locked_protocol, scope, operation_entries, manifest_path))
 
     if scope.get("lock_mode") == "protocol":
         for operation, label in (

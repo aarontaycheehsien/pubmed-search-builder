@@ -72,6 +72,14 @@ STAGES: tuple[dict[str, Any], ...] = (
                      r"screening provenance", r"screening agreement", r"agreement check"),
     },
     {
+        "stage": "evidence-synthesis",
+        "action": "Compile the report retrieval profile, discover and classify every report candidate, and evaluate retrieval until no eligible report is missed.",
+        "commands": ["review_discovery.py profile", "review_discovery.py discover", "review_discovery.py classify",
+                     "review_discovery.py evaluate"],
+        "reference": "references/evidence-synthesis-retrieval.md",
+        "patterns": (r"evidence-synthesis",),
+    },
+    {
         "stage": "block-evidence",
         "action": "Complete per-block MeSH, count, and reciprocal gap-analysis evidence, or record a reasoned waiver.",
         "commands": ["mesh_tool.py sweep --details", "pubmed_tool.py term-diff", "pubmed_tool.py term-rank",
@@ -154,7 +162,7 @@ OTHER_STAGE = {
 }
 # Matching order: specific stages before the broad keyword stages that would otherwise claim them.
 ROUTE_ORDER = (
-    "manifest-integrity", "audit", "final-qa", "validation", "revision", "candidate-discovery",
+    "manifest-integrity", "evidence-synthesis", "audit", "final-qa", "validation", "revision", "candidate-discovery",
     "intake", "scope-lock", "protocol-binding", "candidate-screening", "block-evidence", "fragility",
     "vocabulary-learning", "block-testing", "external-validation", "critic",
 )

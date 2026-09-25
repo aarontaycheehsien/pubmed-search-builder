@@ -52,6 +52,12 @@ class RuleTests(unittest.TestCase):
                 self.assertEqual(bool(dropped), query in TRUNCATION_DROPPED_LIVE, dropped)
         self.assertEqual(wildcard_rules.dropped_truncations("cat*[tiab]", ""), [])
 
+    def test_unquoted_words_before_a_field_tag_are_one_phrase_like_pubmed_reads_them(self):
+        # Live PubMed: smith j*[au] -> "smith j*"[Author], truncated (37,737 hits).
+        self.assertEqual(wildcard_rules.short_truncations("smith j*[au]"), [])
+        self.assertEqual(wildcard_rules.search_terms("smith j*[au] OR tb* AND (cat*[tiab])"), ["smith j*", "tb*", "cat*"])
+        self.assertEqual(wildcard_rules.short_truncations("tb* OR (cat*[tiab])"), ["cat*", "tb*"])
+
     def test_field_tags_are_not_read_as_terms(self):
         self.assertEqual(wildcard_rules.short_truncations('"heart attack*"[tiab:~2] OR asthma[mh]'), [])
 

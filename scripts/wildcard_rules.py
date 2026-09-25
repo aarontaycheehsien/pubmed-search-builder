@@ -21,21 +21,43 @@ from typing import Any
 MIN_TRUNCATION_PREFIX = 4
 MAX_WILDCARDS = 256
 
-_FIELD_TAG = re.compile(r"\[[^\]]*\]")
-_TERM = re.compile(r'"([^"]*)"|([^\s()"]+)')
+_TOKEN = re.compile(r'"[^"]*"|\[[^\]]*\]|[()]|[^\s()"\[\]]+')
+_OPERATORS = frozenset({"AND", "OR", "NOT"})
 _WORD_BEFORE = re.compile(r"([A-Za-z0-9][A-Za-z0-9'-]*)$")
 
 
-def wildcard_terms(query: str) -> list[dict[str, Any]]:
-    """Every asterisk in the query with the term or phrase it belongs to.
+def search_terms(query: str) -> list[str]:
+    """The terms PubMed searches as units: quoted phrases, tagged word runs, and single words.
 
-    Field tags are removed first so their contents are never read as search terms.
+    Unquoted words directly before a field tag form one tagged phrase: PubMed reads
+    ``smith j*[au]`` as ``"smith j*"[Author]``, so its truncation counts from ``smith``.
+    Field-tag contents are never returned as terms.
     """
 
-    text = _FIELD_TAG.sub(" ", str(query or ""))
+    terms: list[str] = []
+    run: list[str] = []
+    for token in _TOKEN.findall(str(query or "")):
+        if token.startswith("["):
+            if run:
+                terms.append(" ".join(run))
+                run = []
+            continue
+        if token.startswith('"') or token in "()" or token.upper() in _OPERATORS:
+            terms.extend(run)
+            run = []
+            if token.startswith('"'):
+                terms.append(token[1:-1])
+            continue
+        run.append(token)
+    terms.extend(run)
+    return terms
+
+
+def wildcard_terms(query: str) -> list[dict[str, Any]]:
+    """Every asterisk in the query with the term or phrase it belongs to."""
+
     found: list[dict[str, Any]] = []
-    for match in _TERM.finditer(text):
-        segment = match.group(1) if match.group(1) is not None else match.group(2)
+    for segment in search_terms(query):
         for position, character in enumerate(segment):
             if character != "*":
                 continue

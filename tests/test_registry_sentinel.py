@@ -155,6 +155,13 @@ class ImportMergeAndEvaluationTests(unittest.TestCase):
         self.assertEqual(result["eligible_trials"], 0)
         self.assertIn("no reassurance", result["interpretation"].lower())
 
+    def test_a_non_numeric_linked_pmid_is_a_clear_error_not_a_crash(self):
+        records = [{"trial_id": "NCT00000001", "registry_ids": ["NCT00000001"]}]
+        with self.assertRaisesRegex(registry.RegistryError, "non-numeric PMID"):
+            registry.apply_links(records, [{"registry_id": "NCT00000001", "pmid": "PMID: 12345678", "confidence": "high"}])
+        registry.apply_links(records, [{"registry_id": "NCT00000001", "pmid": " 12345678 ", "confidence": "high"}])
+        self.assertEqual(records[0]["linked_publications"][0]["pmid"], "12345678")
+
     def test_pending_screening_and_missing_reasons_are_rejected(self):
         record = trial("NCT00000001")
         record["eligibility_decision"] = "pending"

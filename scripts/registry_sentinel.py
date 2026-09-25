@@ -335,8 +335,11 @@ def apply_links(records: list[dict[str, Any]], links: list[dict[str, Any]]) -> N
         record = by_id.get(rid) or next((r for r in records if r.get("trial_id") == rid), None)
         if record is None:
             raise RegistryError(f"Publication link references unknown trial/registry ID {rid!r}")
+        pmid = str(link.get("pmid") or "").strip()
+        if pmid and not pmid.isdigit():
+            raise RegistryError(f"Publication link for {rid!r} has a non-numeric PMID {pmid!r}; give the bare PMID digits")
         record.setdefault("linked_publications", []).append({
-            "pmid": str(link.get("pmid") or ""),
+            "pmid": pmid,
             "citation": str(link.get("citation") or ""),
             "link_method": str(link.get("link_method") or "manual"),
             "confidence": str(link.get("confidence") or "uncertain"),

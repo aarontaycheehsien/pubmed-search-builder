@@ -89,6 +89,26 @@ class AuditMarkdownTests(unittest.TestCase):
         self.assertIn("reduced / eutils", markdown)
         self.assertIn("Confirm against MeSH RDF.", markdown)
 
+    def test_query_cells_keep_mid_word_wildcards_through_markdown_rendering(self):
+        data = {
+            "concept_blocks": [
+                {"label": "Organisation", "query": "organi*ation*[tiab] OR colo*r[tiab]", "count": 10},
+                {"label": "Setting", "query": "wom*n[tiab]", "count": 5},
+            ],
+            "final_strategy": "(organi*ation*[tiab] OR colo*r[tiab]) AND (wom*n[tiab])",
+        }
+        rows, issues = audit_markdown.build_line_set(data)
+        self.assertEqual(issues, [])
+        table = "\n".join(audit_markdown.render_line_set(data))
+        # A code span is rendered literally, so no pair of asterisks can become emphasis.
+        self.assertIn("| `organi*ation*[tiab] OR colo*r[tiab]` |", table)
+        self.assertIn("| `#1 AND #2` |", table)
+        self.assertEqual(audit_markdown.escape_table(audit_markdown.Code("a[tiab] | b`c")), "``a[tiab] \\| b`c``")
+        self.assertEqual(
+            audit_markdown.search_terms_text(["organi*ation*", "colo*r"]), "`organi*ation*`; `colo*r`"
+        )
+        self.assertEqual(audit_markdown.search_terms_text("kept colo*r and wom*n"), "kept colo\\*r and wom\\*n")
+
     def test_reduced_review_depth_is_rendered_as_disclosed_limitations(self):
         depth = {
             "depth": "standard",
