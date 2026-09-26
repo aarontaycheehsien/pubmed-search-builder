@@ -117,6 +117,15 @@ the docs.
 
 ## Phase 2: harness known gaps (evals)
 
+**Status.** Done: 2.1–2.7, each with a regression test that fails on the prior harness.
+- **2.1** Scored-file binding: exit 3.
+- **2.2** Clean relaunch.
+- **2.3** `leakage_scan`: exit 5. Clean on the attempt-3 transcript.
+- **2.4** Never-reviewed recall per generated row and per source.
+- **2.5** `run-<UTC>` layout; the latest run must pass.
+- **2.6** `--runs > 1` needs `--no-cache`.
+- **2.7** Default timeout 7200 s, including the GUI, plus `elapsed_seconds`.
+
 **2.1 Bind the scored file to the gated strategy** (`evals/generate.py`). After the gate passes,
 require `final_strategy.txt` (stripped) to equal the text of the last final-topic-search input,
 using the same logic as the gate in `manifest_tool.py` ~L2720. On a mismatch, exit 3 with the

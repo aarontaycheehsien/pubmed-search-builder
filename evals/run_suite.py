@@ -66,34 +66,67 @@ class GeneratedRunError(Exception):
     """A generated strategy exists but its run did not finish."""
 
 
+def generated_run_dir(generated_root: Path, topic: str) -> Path | None:
+    """The run to score for ``topic``: a flat ``<root>/<topic>/`` copy, else the latest
+    ``<root>/<topic>/run-<UTC>/`` that generate.py wrote. The latest run is taken even if it failed,
+    so a failed rerun cannot be hidden behind an older passing one."""
+    flat = generated_root / topic
+    if (flat / "final_strategy.txt").is_file():
+        return flat
+    runs = sorted(path for path in flat.glob("run-*") if path.is_dir()) if flat.is_dir() else []
+    return runs[-1] if runs else None
+
+
+def generated_run_evidence(run_dir: Path, topic: str) -> dict:
+    """Validate a generated run and return the seen/mined PMIDs generate.py resolved for it."""
+    def load(name: str) -> dict | None:
+        try:
+            value = json.loads((run_dir / name).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    gate = load("completion_gate.json")
+    # generate.py keeps the artifacts of a run that failed the complete-loop gate, so a
+    # final_strategy.txt alone does not make a finished build.
+    if gate is None or gate.get("ok") is not True or gate.get("returncode") != 0:
+        raise GeneratedRunError(f"generated run for {topic} did not pass the completion gate ({run_dir})")
+    card = load("scorecard.json")
+    if card is None:
+        raise GeneratedRunError(f"generated run for {topic} has no scorecard.json; it was never scored ({run_dir})")
+    if (card.get("leakage_scan") or {}).get("clean") is not True:
+        raise GeneratedRunError(f"generated run for {topic} has no clean leakage scan ({run_dir})")
+    evidence = card.get("development_evidence") or {}
+    return {
+        "run_dir": str(run_dir),
+        "seen_pmids": {str(pmid) for pmid in evidence.get("reviewed_pmids") or []},
+        "mined_pmids": {str(pmid) for pmid in evidence.get("mined_pmids") or []},
+    }
+
+
 def resolve_strategy(fixture_path: Path, fixture: dict, source: str, generated_root: Path | None):
-    """Return ``(source, strategy_path, blocks_path)`` for one fixture."""
+    """Return ``(source, strategy_path, blocks_path, generated_evidence_or_None)`` for one fixture."""
     topic = str(fixture.get("id"))
     if source in {"auto", "generated"} and generated_root is not None:
-        candidate = generated_root / topic / "final_strategy.txt"
-        if candidate.is_file() and candidate.read_text(encoding="utf-8").strip():
-            # generate.py keeps the artifacts of a run that failed the complete-loop gate, so a
-            # final_strategy.txt alone does not make a finished build.
-            gate_file = generated_root / topic / "completion_gate.json"
-            try:
-                gate = json.loads(gate_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                gate = None
-            if not isinstance(gate, dict) or gate.get("ok") is not True or gate.get("returncode") != 0:
-                raise GeneratedRunError(f"generated run for {topic} did not pass the completion gate ({gate_file})")
-            blocks = generated_root / topic / "final_blocks.json"
-            return "generated", candidate, (blocks if blocks.is_file() else None)
+        run_dir = generated_run_dir(generated_root, topic)
+        candidate = run_dir / "final_strategy.txt" if run_dir else None
+        if candidate is not None and candidate.is_file() and candidate.read_text(encoding="utf-8").strip():
+            evidence = generated_run_evidence(run_dir, topic)
+            blocks = run_dir / "final_blocks.json"
+            return "generated", candidate, (blocks if blocks.is_file() else None), evidence
+        if run_dir is not None:
+            raise GeneratedRunError(f"latest generated run for {topic} wrote no final strategy ({run_dir})")
         if source == "generated":
             raise FileNotFoundError(f"no generated strategy for {topic} under {generated_root}")
     if source in {"auto", "baseline"} and fixture.get("strategy_file"):
         strategy = fixture_path.parent / fixture["strategy_file"]
         blocks = fixture_path.parent / fixture["blocks_file"] if fixture.get("blocks_file") else None
-        return "baseline", strategy, blocks
+        return "baseline", strategy, blocks, None
     if source == "baseline":
         raise FileNotFoundError(f"fixture {topic} has no baseline strategy_file")
     compiled = naive_baseline.compile_from_fixture(fixture)
     strategy, blocks = naive_baseline.write_strategy(compiled, DERIVED_DIR, topic)
-    return "naive", strategy, blocks
+    return "naive", strategy, blocks, None
 
 
 def score_topic(fixture_path: Path, tool: Path, source: str, generated_root: Path | None, runs: int, use_cache: bool) -> dict:
@@ -101,7 +134,7 @@ def score_topic(fixture_path: Path, tool: Path, source: str, generated_root: Pat
     topic = str(fixture.get("id"))
     row: dict = {"id": topic, "suite": fixture.get("suite"), "question": fixture.get("question")}
     try:
-        resolved_source, strategy, blocks = resolve_strategy(fixture_path, fixture, source, generated_root)
+        resolved_source, strategy, blocks, evidence = resolve_strategy(fixture_path, fixture, source, generated_root)
     except (FileNotFoundError, GeneratedRunError, naive_baseline.NaiveBaselineError) as exc:
         row.update({"ok": False, "error": str(exc), "strategy_source": None})
         return row
@@ -114,6 +147,8 @@ def score_topic(fixture_path: Path, tool: Path, source: str, generated_root: Pat
             tool,
             strategy_override=str(strategy),
             blocks_override=str(blocks) if blocks else None,
+            seen_pmids=(evidence or {}).get("seen_pmids"),
+            mined_pmids=(evidence or {}).get("mined_pmids"),
             use_cache=use_cache,
         )
         recalls.append(float(card.get("recall_reachable_percent") or 0.0))
@@ -141,6 +176,18 @@ def score_topic(fixture_path: Path, tool: Path, source: str, generated_root: Pat
             "zero_recall": bool((card.get("sanity") or {}).get("zero_recall")),
         }
     )
+    if evidence is not None:
+        # A generated build may have screened most of the gold set during candidate discovery,
+        # so its headline recall can be mostly on records it saw. Report the never-reviewed part.
+        unseen = card.get("unseen_evaluation") or {}
+        row.update(
+            {
+                "generated_run_dir": evidence["run_dir"],
+                "unseen_gold_in_pubmed": unseen.get("gold_in_pubmed"),
+                "unseen_retrieved": unseen.get("retrieved"),
+                "unseen_recall_percent": unseen.get("recall_percent"),
+            }
+        )
     return row
 
 
@@ -166,6 +213,10 @@ def summarize(rows: list[dict]) -> dict:
             "topics_below_80": sum(1 for value in recalls if value < 80.0),
             "zero_recall_topics": [row["id"] for row in subset if row.get("zero_recall")],
         }
+        unseen = [float(row["unseen_recall_percent"]) for row in measured if row.get("unseen_recall_percent") is not None]
+        if unseen:
+            by_source[source]["unseen_topics"] = len(unseen)
+            by_source[source]["mean_unseen_recall_percent"] = round(statistics.fmean(unseen), 2)
     return {
         "topics_total": len(rows),
         "topics_scored": len(scored),
@@ -211,6 +262,12 @@ def compare(current: dict, previous: dict | None) -> dict:
     }
 
 
+def unseen_cell(row: dict) -> str:
+    if row.get("unseen_recall_percent") is None:
+        return "—"
+    return f"{row['unseen_recall_percent']}% ({row.get('unseen_retrieved')}/{row.get('unseen_gold_in_pubmed')})"
+
+
 def render_markdown(scorecard: dict) -> str:
     lines = [
         "# Eval suite results",
@@ -230,18 +287,21 @@ def render_markdown(scorecard: dict) -> str:
         "| `baseline` | strategy hand-authored for the fixture |",
         "| `naive` | compiled from the fixture's protocol term families: no MeSH, no expansion, no critic loop. A floor. |",
         "",
-        "| topic | suite | source | gold (in PubMed) | retrieved | recall | hits | NNR | bottleneck block |",
-        "|---|---|---|---:|---:|---:|---:|---:|---|",
+        "`never-reviewed` is recall over gold the build did not screen during its own candidate "
+        "discovery. It is shown for `generated` rows, where it is the measurement to read first.",
+        "",
+        "| topic | suite | source | gold (in PubMed) | retrieved | recall | never-reviewed | hits | NNR | bottleneck block |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in scorecard["topics"]:
         if not row.get("ok"):
-            lines.append(f"| {row['id']} | {row.get('suite') or ''} | — | — | — | **failed** | — | — | {row.get('error', '')[:60]} |")
+            lines.append(f"| {row['id']} | {row.get('suite') or ''} | — | — | — | **failed** | — | — | — | {row.get('error', '')[:60]} |")
             continue
         sd = f" ±{row['recall_sd']}" if row.get("runs", 1) > 1 else ""
         lines.append(
             f"| {row['id']} | {row.get('suite') or ''} | `{row['strategy_source']}` | "
             f"{row['gold_in_pubmed']} | {row['retrieved']} | {row['recall_reachable_percent']}%{sd} | "
-            f"{row['strategy_total_hits']:,} | {row['nnr_proxy'] or '—'} | {row.get('bottleneck_block') or '—'} |"
+            f"{unseen_cell(row)} | {row['strategy_total_hits']:,} | {row['nnr_proxy'] or '—'} | {row.get('bottleneck_block') or '—'} |"
         )
     lines.append("")
     lines.append("## By strategy source")
@@ -278,6 +338,7 @@ def render_text(scorecard: dict) -> str:
             f"  {row['id'][:44]:46s} {row['strategy_source']:>10s}  "
             f"{row['recall_reachable_percent']:>5}%{sd}  ({row['retrieved']}/{row['gold_in_pubmed']})  "
             f"hits={row['strategy_total_hits']:,}"
+            + (f"  never-reviewed {unseen_cell(row)}" if row.get("unseen_recall_percent") is not None else "")
         )
     lines.append("")
     for source, stats in scorecard["summary"]["by_strategy_source"].items():
@@ -285,6 +346,7 @@ def render_text(scorecard: dict) -> str:
             f"  {source:>10s}: {stats['topics']} topics, mean {stats['mean_recall_percent']}%, "
             f"median {stats['median_recall_percent']}%, min {stats['min_recall_percent']}%, "
             f"{stats['topics_below_80']} below 80%"
+            + (f", never-reviewed mean {stats['mean_unseen_recall_percent']}%" if "mean_unseen_recall_percent" in stats else "")
         )
     regression = scorecard.get("regression") or {}
     if regression.get("available"):
@@ -312,6 +374,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-cache", action="store_true", help="Take every NCBI request live.")
     parser.add_argument("--json", action="store_true", help="Print the scorecard JSON instead of the table.")
     args = parser.parse_args(argv)
+    if args.runs > 1 and not args.no_cache:
+        # Cached responses make every repeat identical, so an SD of 0 would pass for stability.
+        raise SystemExit(
+            "--runs > 1 needs --no-cache. Scoring a fixed strategy varies only with PubMed itself; "
+            "variance of the skill needs repeated generate.py runs, one per --run-dir."
+        )
 
     tool = Path(args.pubmed_tool).resolve()
     if not tool.is_file():

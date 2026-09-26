@@ -49,20 +49,19 @@ Changed test expectation: `test_auto_prefers_a_generated_strategy` now writes a 
 - **Isolation:** the packaged runtime excludes `evals/`, `tests/`, fixtures, and prior results, and
   the run directory name is opaque.
 
-## Not fixed (not demonstrated in this audit; worth knowing)
+## Follow-up status
 
-- **Scored file vs gated strategy.** The gate checks `final_strategy.txt` only when that file is
-  the recorded input to the final search. In the E2E run it was, and the gate caught a
-  post-search edit (`input artifact hash no longer matches: final_strategy.txt`). If an agent
-  searches a different file (for example `strategy_v3.txt`) and writes `final_strategy.txt`
-  separately, nothing checks that they have the same content. Suggested fix: compare
-  `final_strategy.txt` with the text of the last final-topic-search input before scoring.
-- **Transient-failure relaunch reuses the dirty workspace.** A relaunched attempt starts with the
-  partial artifacts of the failed one.
-- **Filesystem isolation depends on the Codex sandbox.** The transcript shows the agent can
-  traverse outside the skill directory (`..\..\..\..\..\scripts`). Gold is safe only because the
-  repository path is never disclosed.
-- **`--runs N` is not variance.** With the cache on, repeats return identical responses.
+The gaps listed at audit time were addressed in the remediation work (see
+[EVAL_REMEDIATION_PLAN.md](EVAL_REMEDIATION_PLAN.md), Phase 2):
+
+- **Scored file vs gated strategy:** `generate.py` requires `final_strategy.txt` to match the text of
+  the last final topic-only search's strategy input (exit 3 otherwise).
+- **Relaunch reusing a dirty workspace:** the driver clears everything but the staged prompt and
+  protocol before relaunching.
+- **Filesystem isolation:** still depends on the Codex sandbox, but every scored run now carries an
+  automated `leakage_scan` of its transcript (exit 5 on a hit). The scan found attempt 3 clean
+  across 160 actions.
+- **`--runs N`:** now refused without `--no-cache`.
 
 ## Environment notes
 

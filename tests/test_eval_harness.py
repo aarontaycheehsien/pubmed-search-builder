@@ -51,6 +51,21 @@ def write_critic_round(run_dir: Path, *, reviewed: str, absolute: bool = False) 
     )
 
 
+def record_final_search(run_dir: Path, searched: str) -> None:
+    """Add the final topic-only search entry the completion gate binds, unless one is recorded."""
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    entries = manifest.setdefault("entries", [])
+    if any(generate.manifest_tool.looks_like_final_topic_search(entry) for entry in entries):
+        return
+    digest = hashlib.sha256((run_dir / searched).read_bytes()).hexdigest()
+    entries.append(
+        {"seq": len(entries) + 1, "kind": "search", "label": "Final topic-only strategy", "count": 10,
+         "command": f"pubmed_tool.py search --query-file {searched}", "input_sha256": {searched: digest}}
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
 class EvalHarnessTests(unittest.TestCase):
     def test_bundled_fixtures_use_structured_review_protocol(self):
         for path in sorted((ROOT / "evals" / "datasets").glob("**/*.json")):
@@ -262,8 +277,13 @@ class EvalHarnessTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        def fake_run_skill(prompt, *, run_dir, **_kwargs):
+        def fake_run_skill(prompt, *, run_dir, **kwargs):
+            self.run_skill_kwargs = kwargs
             agent_files(run_dir)
+            if not (run_dir / "events.jsonl").exists():
+                (run_dir / "events.jsonl").write_text("", encoding="utf-8")
+            if (run_dir / "final_strategy.txt").exists():
+                record_final_search(run_dir, "final_strategy.txt")
             return {"returncode": 0, "last_message": "", "stderr": ""}
 
         scored: list[str] = []
@@ -389,6 +409,121 @@ class EvalHarnessTests(unittest.TestCase):
             acl = subprocess.run(["icacls", str(root)], capture_output=True, text=True).stdout
             self.assertIn(f"\\{user}:".casefold(), acl.casefold())
         self.assertFalse(root.exists())
+
+    def test_a_final_strategy_file_other_than_the_gated_search_is_not_scored(self):
+        """The gate binds the searched strategy; the harness scores final_strategy.txt. They must agree."""
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td) / "run"
+
+            def agent_files(agent_dir: Path) -> None:
+                (agent_dir / "strategy_v3.txt").write_text("revised[tiab]", encoding="utf-8")
+                record_final_search(agent_dir, "strategy_v3.txt")
+                (agent_dir / "final_strategy.txt").write_text("earlier[tiab]", encoding="utf-8")
+
+            code, scored = self._generate(run_dir, agent_files)
+            self.assertEqual(code, 3)
+            self.assertEqual(scored, [])
+
+    def test_the_same_strategy_saved_under_another_name_is_scored(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td) / "run"
+
+            def agent_files(agent_dir: Path) -> None:
+                (agent_dir / "strategy_v3.txt").write_text("revised[tiab]\n", encoding="utf-8")
+                record_final_search(agent_dir, "strategy_v3.txt")
+                (agent_dir / "final_strategy.txt").write_text("revised[tiab]", encoding="utf-8")
+
+            code, scored = self._generate(run_dir, agent_files)
+            self.assertEqual(code, 0)
+            self.assertEqual(scored, ["revised[tiab]"])
+
+    def _transcript(self, path: Path, items: list[dict]) -> Path:
+        path.write_text(
+            "\n".join(json.dumps({"type": "item.completed", "item": item}) for item in items), encoding="utf-8"
+        )
+        return path
+
+    def test_leakage_scan_flags_reaching_the_answer_key(self):
+        fixture = {"id": "CD000001", "evaluation_gold_pmids": [12345678, 23456789], "development_pmids_given_to_skill": [23456789]}
+        with tempfile.TemporaryDirectory() as td:
+            events = self._transcript(
+                Path(td) / "events.jsonl",
+                [
+                    {"type": "command_execution", "command": "Get-Content ..\\evals\\datasets\\x\\CD000001.json", "aggregated_output": ""},
+                    {"type": "command_execution", "command": "pubmed_tool.py fetch --pmids 12345678", "aggregated_output": ""},
+                    {"type": "command_execution", "command": "pubmed_tool.py fetch --pmids 23456789", "aggregated_output": ""},
+                ],
+            )
+            scan = generate.leakage_scan(events, fixture, Path(td) / "CD000001.json")
+        self.assertFalse(scan["clean"])
+        self.assertTrue(any("evals\\datasets" in ref for ref in scan["repository_references"]))
+        # A PMID given to the skill is not leakage; an unseen gold PMID typed from nowhere is.
+        self.assertEqual([item["pmid"] for item in scan["gold_used_before_discovery"]], ["12345678"])
+
+    def test_leakage_scan_accepts_gold_the_agent_discovered(self):
+        fixture = {"id": "CD000001", "evaluation_gold_pmids": [12345678]}
+        with tempfile.TemporaryDirectory() as td:
+            events = self._transcript(
+                Path(td) / "events.jsonl",
+                [
+                    {"type": "command_execution", "command": "pubmed_tool.py search --query-file q.txt", "aggregated_output": '{"pmids": ["112345678", "12345678"]}'},
+                    {"type": "command_execution", "command": "pubmed_tool.py fetch --pmids 12345678", "aggregated_output": ""},
+                ],
+            )
+            scan = generate.leakage_scan(events, fixture, Path(td) / "CD000001.json")
+        self.assertTrue(scan["clean"], scan)
+        self.assertEqual(scan["actions_scanned"], 2)
+
+    def test_a_leaking_run_writes_its_scorecard_but_is_not_a_measurement(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td) / "run"
+
+            def agent_files(agent_dir: Path) -> None:
+                (agent_dir / "final_strategy.txt").write_text("x[tiab]", encoding="utf-8")
+                self._transcript(
+                    agent_dir / "events.jsonl",
+                    [{"type": "command_execution", "command": "type evals/datasets/fixture.json", "aggregated_output": ""}],
+                )
+
+            code, _scored = self._generate(run_dir, agent_files)
+            self.assertEqual(code, 5)
+            card = json.loads((run_dir / "scorecard.json").read_text(encoding="utf-8"))
+            self.assertFalse(card["leakage_scan"]["clean"])
+
+    def test_a_relaunch_starts_from_the_staged_files_only(self):
+        """A transient failure late in a build leaves a partial manifest; attempt 2 must not inherit it."""
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            (run_dir / "prompt.txt").write_text("p", encoding="utf-8")
+            seen_on_relaunch = {}
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if len(calls) == 1:
+                    (run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+                    (run_dir / "protocol_v1").mkdir()
+                    (run_dir / "protocol_v1" / "compiled.json").write_text("{}", encoding="utf-8")
+                    return subprocess.CompletedProcess(cmd, 1, stdout=None, stderr="windows sandbox: timed out connecting runner pipe-in")
+                seen_on_relaunch["files"] = sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*"))
+                return subprocess.CompletedProcess(cmd, 0, stdout=None, stderr="")
+
+            with mock.patch.object(generate.codex.subprocess, "run", side_effect=fake_run):
+                result = generate.codex.run_skill("p", skill_dir=run_dir, run_dir=run_dir, codex_bin="codex")
+            self.assertEqual(result["attempts"], 2)
+            self.assertEqual(result["returncode"], 0)
+            self.assertEqual(seen_on_relaunch["files"], ["events.jsonl", "prompt.txt"])
+
+    def test_generation_defaults_to_a_two_hour_budget_and_records_elapsed_time(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td) / "run"
+            code, _scored = self._generate(
+                run_dir, lambda agent_dir: (agent_dir / "final_strategy.txt").write_text("x[tiab]", encoding="utf-8")
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(self.run_skill_kwargs["timeout"], 7200)
+            card = json.loads((run_dir / "scorecard.json").read_text(encoding="utf-8"))
+            self.assertIsInstance(card["elapsed_seconds"], int)
 
     def _score(self, base: Path, retrieved: list[str], strategy_text: str = "x[tiab]") -> dict:
         fixture = base / "fixture.json"

@@ -100,7 +100,7 @@ class EvalGUI(tk.Tk):
         self.effort.grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(self.p2, text="Timeout (s)").grid(row=0, column=2, sticky="w", padx=(16, 0))
         self.timeout = ttk.Entry(self.p2, width=8)
-        self.timeout.insert(0, "1800")
+        self.timeout.insert(0, "7200")
         self.timeout.grid(row=0, column=3, sticky="w", padx=6)
         ttk.Label(self.p2, text="Model (optional)").grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.model = ttk.Entry(self.p2, width=20)
@@ -273,7 +273,7 @@ class EvalGUI(tk.Tk):
             return
         if self.mode.get() == "generate":
             cmd = [sys.executable, "-u", str(HERE / "generate.py"), topic,
-                   "--effort", self.effort.get(), "--timeout", self.timeout.get().strip() or "1800"]
+                   "--effort", self.effort.get(), "--timeout", self.timeout.get().strip() or "7200"]
             if self.model.get().strip():
                 cmd += ["--model", self.model.get().strip()]
         else:

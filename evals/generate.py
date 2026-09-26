@@ -10,7 +10,7 @@ One generation run for one fixture:
 
 Usage:
   python evals/generate.py datasets/clef-tar-2018/CD011926.json
-  python evals/generate.py <fixture.json> --effort medium --timeout 1800 --model gpt-5.5
+  python evals/generate.py <fixture.json> --effort medium --timeout 7200 --model gpt-5.5
 
 A full build is an agentic run (minutes, real tokens). Run it in the background
 if your shell caps command time. Re-scoring the harvested strategy afterward is
@@ -23,10 +23,12 @@ import contextlib
 import copy
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import warnings
 from datetime import datetime, timezone
@@ -37,7 +39,9 @@ HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(SKILL_DIR))
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
 
+import manifest_tool  # noqa: E402
 import run_eval  # noqa: E402
 from drivers import codex  # noqa: E402
 from pubmed_search_builder.core.workspace import resolve_within  # noqa: E402
@@ -225,6 +229,105 @@ def critic_bundle_strategy_sha256(run_dir: Path, critic_path: Path, critic: dict
     return None
 
 
+def final_strategy_binding_issue(run_dir: Path) -> str | None:
+    """Return why ``final_strategy.txt`` is not the strategy the completion gate passed, or None.
+
+    The gate binds the audit's final strategy to the inputs of the last final topic-only search.
+    The harness scores ``final_strategy.txt``, which nothing in the gate ties to that search, so an
+    agent that searched ``strategy_v3.txt`` and wrote ``final_strategy.txt`` separately could have
+    a different strategy scored than the one that passed.
+    """
+    scored = run_dir / "final_strategy.txt"
+    if not scored.is_file():
+        return "final_strategy.txt was not written"
+    try:
+        manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return "run_manifest.json is unreadable"
+    entries = [entry for entry in manifest.get("entries") or [] if isinstance(entry, dict)]
+    finals = sorted(
+        (entry for entry in entries if manifest_tool.looks_like_final_topic_search(entry)),
+        key=lambda entry: int(entry.get("seq") or 0),
+    )
+    if not finals:
+        return "the manifest records no final topic-only search"
+    searched: set[str] = set()
+    for value in (finals[-1].get("input_sha256") or {}):
+        path = resolve_within(run_dir, str(value), search=False)
+        if path is not None and path.is_file() and path.suffix.casefold() not in {".json", ".csv"}:
+            searched.add(path.read_text(encoding="utf-8-sig").strip())
+    if not searched:
+        return "the final topic-only search records no readable strategy input"
+    if scored.read_text(encoding="utf-8-sig").strip() not in searched:
+        return f"final_strategy.txt differs from the strategy input of the final search (seq {finals[-1].get('seq')})"
+    return None
+
+
+PMID_PATTERN = r"(?<!\d){pmid}(?!\d)"
+
+
+def leakage_scan(events_path: Path, fixture: dict, fixture_path: Path) -> dict:
+    """Scan the agent transcript for evidence that it reached the answer key.
+
+    Two signals: a command or file edit that names the repository, fixture files, or qrels; and a
+    gold PMID the agent used before any tool output showed it (PMIDs the fixture gives the skill
+    are exempt). Output is anything a command printed, so a PMID the agent discovered in PubMed
+    results is not a finding.
+    """
+    gold_field = "evaluation_gold_pmids" if fixture.get("evaluation_gold_pmids") else "gold_relevant_pmids"
+    gold = {str(pmid) for pmid in fixture.get(gold_field) or []} - run_eval.given_to_skill_pmids(fixture)
+    patterns = {pmid: re.compile(PMID_PATTERN.format(pmid=pmid)) for pmid in gold}
+    forbidden = {
+        str(SKILL_DIR).casefold(),
+        SKILL_DIR.as_posix().casefold(),
+        "evals/datasets",
+        "evals\\datasets",
+        "qrel",
+        fixture_path.name.casefold(),
+    }
+    if len(str(fixture.get("id") or "")) >= 4:
+        forbidden.add(str(fixture["id"]).casefold())
+    repository_references: list[str] = []
+    undiscovered_gold: list[dict] = []
+    shown: set[str] = set()
+    actions = 0
+    try:
+        lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {"clean": False, "error": f"transcript unreadable: {events_path}"}
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") if isinstance(event, dict) else None
+        if event.get("type") != "item.completed" or not isinstance(item, dict):
+            continue
+        if item.get("type") == "command_execution":
+            action = str(item.get("command") or "")
+            output = str(item.get("aggregated_output") or "")
+        elif item.get("type") == "file_change":
+            action, output = json.dumps(item.get("changes") or item), ""
+        else:
+            continue
+        actions += 1
+        lowered = action.casefold()
+        for marker in sorted(forbidden):
+            if marker and marker in lowered:
+                repository_references.append(f"{marker}: {action[:200]}")
+        for pmid, pattern in patterns.items():
+            if pmid not in shown and pattern.search(action):
+                undiscovered_gold.append({"pmid": pmid, "action": action[:200]})
+                shown.add(pmid)
+        shown.update(pmid for pmid, pattern in patterns.items() if pattern.search(output))
+    return {
+        "clean": not repository_references and not undiscovered_gold,
+        "actions_scanned": actions,
+        "repository_references": repository_references,
+        "gold_used_before_discovery": undiscovered_gold,
+    }
+
+
 def resolve_fixture(arg: str) -> Path:
     """Resolve a fixture argument to a path. Accepts a full/relative path OR a
     bare topic id (e.g. ``CD011431``), which is matched against
@@ -392,7 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", help="Run directory (default: results/<id>/run-<UTC timestamp>).")
     parser.add_argument("--model", default=None, help="Model override (default: codex config).")
     parser.add_argument("--effort", default="medium", help="model_reasoning_effort (default: medium).")
-    parser.add_argument("--timeout", type=int, default=1800, help="Driver timeout seconds (default: 1800).")
+    # A CD011926 build took ~50 min, and over 60 min on another attempt; 1800 s cut builds off mid-discovery.
+    parser.add_argument("--timeout", type=int, default=7200, help="Driver timeout seconds (default: 7200).")
     parser.add_argument("--pubmed-tool", default=str(DEFAULT_TOOL))
     parser.add_argument(
         "--allow-zero-recall",
@@ -420,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[generate] fixture={fixture['id']} run_dir={run_dir}")
         print(f"[generate] driving isolated skill (effort={args.effort}, timeout={args.timeout}s)...")
 
+        started = time.monotonic()
         result = codex.run_skill(
             prompt,
             skill_dir=isolated_skill,
@@ -428,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             reasoning_effort=args.effort,
             timeout=args.timeout,
         )
+        elapsed_seconds = round(time.monotonic() - started)
         if result.get("attempts", 1) > 1:
             print(f"[generate] relaunched after transient sandbox failure (attempts={result['attempts']})")
         print(f"[generate] codex exit={result['returncode']}  last_message:\n{result['last_message'][:600]}")
@@ -444,7 +550,9 @@ def main(argv: list[str] | None = None) -> int:
         reviewed_pmids: set[str] = set()
         mined_pmids: set[str] = set()
         pre_critic: Path | None = None
+        binding_issue: str | None = None
         if gate_ok:
+            binding_issue = final_strategy_binding_issue(agent_run_dir)
             reviewed_pmids, mined_pmids = candidate_evidence_pmids(agent_run_dir)
             live_pre_critic = first_critic_strategy(agent_run_dir)
             if live_pre_critic is not None:
@@ -468,6 +576,9 @@ def main(argv: list[str] | None = None) -> int:
             f"elsewhere. Inspect {run_dir} and {run_dir / 'events.jsonl'}."
         )
         return 2
+    if binding_issue:
+        print(f"\n[generate] FAILED: the scored file is not the gated strategy: {binding_issue}.")
+        return 3
 
     blocks_file = run_dir / "final_blocks.json"
     blocks_override = str(blocks_file) if blocks_file.exists() else None
@@ -483,8 +594,10 @@ def main(argv: list[str] | None = None) -> int:
     card["generated"] = True
     card["model"] = args.model
     card["effort"] = args.effort
+    card["elapsed_seconds"] = elapsed_seconds
     card["run_dir"] = str(run_dir)
     card["completion_gate"] = gate_payload
+    card["leakage_scan"] = leakage_scan(run_dir / "events.jsonl", fixture, fixture_path)
     if pre_critic and pre_critic.resolve() != strategy_file.resolve():
         before = run_eval.score(
             fixture_path,
@@ -521,6 +634,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nscorecard JSON: {run_dir / 'scorecard.json'}")
     print(f"generated strategy: {strategy_file}")
 
+    if not card["leakage_scan"].get("clean"):
+        print(
+            "\n[generate] LEAKAGE: the transcript shows the agent reaching the answer key; this run is\n"
+            "not a measurement. See leakage_scan in scorecard.json.",
+            file=sys.stderr,
+        )
+        return 5
     if card["sanity"]["zero_recall"] and not args.allow_zero_recall:
         # The scorecard is still written -- it is this run's record and the fastest way to
         # diagnose the cause -- but the run does not report success on a number this shape.
