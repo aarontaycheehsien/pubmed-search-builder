@@ -37,6 +37,14 @@ The default `auto` uses `PUBMED_ISOLATED_RUNNER` when set, otherwise Claude Code
 
 Use `--model` and `--reasoning-effort` when a run needs an explicit model configuration; the default reasoning effort is `high`. Use `--runner-bin` (or `CODEX_BIN` / `CLAUDE_BIN`) when the executable is not on `PATH`. Use `--scope-version` only when the bundle lacks a protocol-bound critic packet. If no runner is installed and signed in, or the child run fails, stop and report that the independent critic is incomplete. Do not substitute a same-context hand-authored JSON round: the completion gate rejects it.
 
+### Runner preflight and troubleshooting
+
+Run `python scripts/isolated_runner.py preflight` at intake, before any candidate-record work. The critic and the independent re-screen (`screening_tool.py replicate`) both need a child that can start from where the build runs. The preflight checks that the child CLI is signed in for the current account, then makes one trivial schema-constrained call. It exits non-zero with an `error` and a `hint` when a child cannot run. When it fails, stop and report that the independent runner is unavailable here. Do not start a build whose completion gate cannot pass.
+
+- **`not signed in` inside a Codex sandbox.** Sandboxed commands run as a separate sandbox user (`whoami` shows it). That user's profile has no CLI login, so a nested `codex exec` waits without output. Pointing `CODEX_HOME` at the host user's `.codex` does not help, because the child also needs write access there. The child must run outside the sandbox or with credentials provisioned for the sandbox user.
+- **A child timeout.** The runner kills the child's whole process tree and reports the child's last output. A timeout with no output at all usually means the child is waiting for a login.
+- **Claude Code `401` / expired token.** Sign the CLI in again, or choose the other runner with `--runner`.
+
 ## Required review domains
 
 Review the six PRESS 2015 elements:

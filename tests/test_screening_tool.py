@@ -610,7 +610,7 @@ class IndependentReplicateTests(unittest.TestCase):
             envelope = {"type": "result", "subtype": "success", "is_error": False, "result": "", "structured_output": draft}
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(envelope), stderr="")
 
-        with mock.patch.object(screening.isolated_runner.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(screening.isolated_runner, "run_child", side_effect=fake_run):
             return screening.run_replicate(
                 self.worksheet, self.sample, self.rubric, self.records,
                 records_path="records.json", runner="claude-code-cli", runner_bin="claude-test",

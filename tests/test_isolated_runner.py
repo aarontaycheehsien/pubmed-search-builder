@@ -48,7 +48,7 @@ class ClaudeRunnerTests(unittest.TestCase):
             captured["kwargs"] = kwargs
             return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
 
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner.subprocess, "run", side_effect=fake_run):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "run_child", side_effect=fake_run):
             result = runner.run_isolated(
                 runner=runner.CLAUDE_RUNNER,
                 workspace=Path(tmp),
@@ -93,6 +93,121 @@ class ClaudeRunnerTests(unittest.TestCase):
         (_draft, execution), _ = self.run_claude(claude_envelope(structured_output={"answer": 1}))
         execution["allowed_tools"] = ["Read", "Glob", "Grep", "Bash"]
         self.assertTrue(any("allowed_tools" in issue for issue in runner.execution_issues(execution, "execution")))
+
+
+WRAPPED_CHILD = """
+import subprocess, sys, time
+# Like codex.cmd -> node -> codex.exe: a descendant inherits and holds the output pipes.
+grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+open(sys.argv[1], "w").write(str(grandchild.pid))
+sys.stderr.write("child started\\n")
+sys.stderr.flush()
+time.sleep(60)
+"""
+
+
+def pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class TimeoutTests(unittest.TestCase):
+    def test_a_timed_out_child_is_killed_with_its_descendants(self):
+        """Seen in an eval build: the codex.cmd wrapper was killed but codex.exe kept the pipes open,
+        so a --timeout 180 re-screen never returned and its child outlived the build."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "child.py").write_text(WRAPPED_CHILD, encoding="utf-8")
+            pid_file = root / "grandchild.pid"
+            if os.name == "nt":
+                wrapper = root / "fake-claude.cmd"
+                wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{root / "child.py"}" "{pid_file}"\r\n', encoding="utf-8")
+            else:
+                wrapper = root / "fake-claude"
+                wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{root / "child.py"}" "{pid_file}"\n', encoding="utf-8")
+                wrapper.chmod(0o755)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            started = runner.time.monotonic()
+            with self.assertRaisesRegex(runner.IsolatedRunnerError, "timed out after 3 seconds.*child started"):
+                runner.run_isolated(
+                    runner=runner.CLAUDE_RUNNER,
+                    workspace=workspace,
+                    prompt="p",
+                    schema=SCHEMA,
+                    model=None,
+                    reasoning_effort="low",
+                    timeout_seconds=3,
+                    executable=str(wrapper),
+                )
+            self.assertLess(runner.time.monotonic() - started, 30)
+            grandchild = int(pid_file.read_text(encoding="utf-8"))
+            deadline = runner.time.monotonic() + 10
+            while pid_alive(grandchild) and runner.time.monotonic() < deadline:
+                runner.time.sleep(0.2)
+            self.assertFalse(pid_alive(grandchild))
+
+
+class PreflightTests(unittest.TestCase):
+    """Seen in an eval build: inside a Codex sandbox the child runs as a sandbox user with no CLI
+    login, so every critic and re-screen child hung. The build learned this 45 minutes in."""
+
+    def preflight(self, fake_run):
+        with (
+            mock.patch.object(runner, "run_child", side_effect=fake_run),
+            mock.patch.object(runner, "locate_executable", return_value="codex-test"),
+            mock.patch.object(runner, "current_account", return_value="host\\sandboxuser"),
+        ):
+            return runner.preflight(runner=runner.CODEX_RUNNER)
+
+    def test_a_child_cli_without_a_login_fails_fast_with_the_reason(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="Not logged in\n")
+
+        result = self.preflight(fake_run)
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(calls), 1)  # no model call is attempted
+        self.assertEqual(calls[0][1:], ["login", "status"])
+        self.assertIn("sandboxuser", result["error"])
+        self.assertIn("sandbox user", result["hint"])
+
+    def test_a_child_that_answers_passes(self):
+        def fake_run(command, **kwargs):
+            if command[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="Logged in using ChatGPT\n")
+            Path(command[command.index("-o") + 1]).write_text(json.dumps({"answer": "ok"}), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        result = self.preflight(fake_run)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["runner"], runner.CODEX_RUNNER)
+
+    def test_a_silent_hang_is_reported_with_the_hint(self):
+        def fake_run(command, **kwargs):
+            if command[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="Logged in\n")
+            raise runner.ChildTimeout("", "")
+
+        result = self.preflight(fake_run)
+        self.assertFalse(result["ok"])
+        self.assertIn("no output", result["error"])
+        self.assertIn("hint", result)
 
 
 class WorkspaceCleanupTests(unittest.TestCase):
@@ -191,7 +306,7 @@ class CriticOnClaudeCodeTests(unittest.TestCase):
                 seen["files"] = sorted(path.name for path in Path(kwargs["cwd"]).iterdir())
                 return subprocess.CompletedProcess(command, 0, stdout=claude_envelope(structured_output=critic_payload()), stderr="")
 
-            with mock.patch.object(runner.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run):
                 receipt = critic_tool.run_independent_critic(
                     bundle_path=bundle,
                     output_path=output,
@@ -230,7 +345,7 @@ class CriticOnClaudeCodeTests(unittest.TestCase):
                 Path(command[command.index("-o") + 1]).write_text(json.dumps(critic_payload()), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), mock.patch.object(runner.subprocess, "run", side_effect=fake_run):
+            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run):
                 receipt = critic_tool.run_independent_critic(
                     bundle_path=bundle,
                     output_path=root / "critic_round_1.json",

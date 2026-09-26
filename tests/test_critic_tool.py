@@ -187,7 +187,7 @@ class CriticToolTests(unittest.TestCase):
                 response_path.write_text(json.dumps(v2_payload("critic_evidence.json")), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout='{"type":"thread.started"}\n', stderr="")
 
-            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run):
                 receipt = critic_tool.run_independent_critic(
                     bundle_path=bundle_path,
                     output_path=output,
@@ -235,7 +235,7 @@ class CriticToolTests(unittest.TestCase):
                 response_path.write_text(json.dumps(invalid), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run):
                 with self.assertRaises(critic_tool.CriticArtifactError):
                     critic_tool.run_independent_critic(
                         bundle_path=bundle_path,

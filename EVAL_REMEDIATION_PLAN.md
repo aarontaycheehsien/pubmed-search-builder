@@ -21,6 +21,16 @@ run after the audit.
 
 ## Phase 0: unblock the independent child (blocks everything else)
 
+**Status.** 0.1, 0.2, and 0.4 are done. 0.3 is waiting on a decision.
+
+- **Diagnosis (0.2).** Inside a Codex sandbox, commands run as `codexsandboxonline`. That user's
+  profile has no Codex login (`codex login status` → `Not logged in`), so a nested `codex exec`
+  waits with no output. Setting `CODEX_HOME` to the host `.codex` finds the login, but the child
+  then needs write access there and fails with `failed to initialize in-process app-server client:
+  Access is denied`. Network access and reading `auth.json` both work. The host login is ChatGPT
+  OAuth with no API key.
+- **Preflight (0.4).** Run nested, it now fails in 0.2 s with this reason instead of hanging.
+
 **0.1 Kill the whole child process tree on timeout** (`scripts/isolated_runner.py`)
 - Replace `subprocess.run` with `Popen` plus `communicate(timeout=…)`.
   - Windows: start with `CREATE_NEW_PROCESS_GROUP` and kill with `taskkill /T /F /PID`, or a Job
