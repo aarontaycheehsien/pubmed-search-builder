@@ -82,6 +82,16 @@ launching.
 
 ## Phase 1: fail fast on agent recording errors (skill)
 
+**Status.** Done: 1.1–1.4, each with a regression test that fails on the prior code.
+- **1.1** `add` refuses `--kind mesh` for an output that isn't a `mesh_tool` artifact, and names
+  `--kind sample` for `term-diff`.
+- **1.2** The `add` receipt carries `binding_warnings`: the gate's own hash-binding findings, as soon
+  as they arise.
+- **1.3** `audit-scaffold` fills both required limits/filters notes from the locked protocol, or
+  lists them as placeholders up front.
+- **1.4** `mesh_tool` explains shell-split multi-word arguments. The PowerShell guidance warns
+  against `Start-Process -ArgumentList` and points to `--variants-file`.
+
 **1.1 Validate entry kinds at `manifest_tool.py add` time.** Reuse the gate's "recognized
 mesh_tool artifact" check (`scripts/manifest_tool.py` ~L490) inside `cmd_add`, and refuse with a
 hint (for example, `term-diff` output belongs under `--kind search` or `artifact`). Test: adding a

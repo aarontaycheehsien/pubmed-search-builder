@@ -3139,6 +3139,39 @@ def _scaffold_concept_blocks(blocks_raw: object, cli_checks: dict[str, object]) 
     return blocks
 
 
+def filters_and_limits_notes(protocol: dict[str, object]) -> dict[str, str]:
+    """Reporting notes for filters and limits, taken from the locked protocol's decisions."""
+    section = protocol.get("filters_and_limits")
+    decisions = section.get("decisions") if isinstance(section, dict) else None
+    if not isinstance(decisions, list):
+        return {}
+    rows = [item for item in decisions if isinstance(item, dict) and str(item.get("label") or "").strip()]
+    selected = [item for item in rows if item.get("status") == "selected"]
+    rejected = [item for item in rows if item.get("status") == "rejected"]
+
+    def reason(item: dict[str, object]) -> str:
+        return str(item.get("rationale") or "").strip().rstrip(".")
+
+    def describe(item: dict[str, object]) -> str:
+        source = str(item.get("validated_source") or "").strip()
+        provenance = f"validated source: {source}" if source else "no validated source"
+        return f"{item['label']}: {item.get('value')} ({provenance}) - {reason(item)}".strip()
+
+    version = protocol.get("scope_version")
+    origin = f"locked protocol {protocol.get('protocol_id') or ''}{f' scope v{version}' if version else ''}".strip()
+    rejected_text = "; ".join(f"{item['label']} rejected - {reason(item)}".strip() for item in rejected)
+    if selected:
+        used = "; ".join(describe(item) for item in selected)
+        restrictions = "; ".join(f"{item['label']}: {reason(item)}".strip() for item in selected if item.get("type") == "limit")
+    else:
+        used = "None"
+        restrictions = ""
+    return {
+        "limits_filters_validated_filters_used": f"{used}. Rejected: {rejected_text or 'none'}. Source: {origin}.",
+        "restrictions_and_justifications": f"{restrictions or 'None applied'}. Source: {origin}.",
+    }
+
+
 def _scaffold_manifest_artifact(manifest_path: str, output_path: object) -> dict[str, object] | None:
     if not manifest_path or not isinstance(output_path, str) or not output_path:
         return None
@@ -3255,6 +3288,7 @@ def build_audit_scaffold(
     entries = [e for e in (manifest_data or {}).get("entries", []) if isinstance(e, dict)]
     filled: list[str] = []
     placeholders: list[str] = []
+    protocol_limit_notes: dict[str, str] = {}
     audit: dict[str, object] = {}
 
     if audit_outline_data is not None:
@@ -3461,6 +3495,7 @@ def build_audit_scaffold(
             if protocol_payload is not None:
                 audit["review_depth"] = depth_disclosure(protocol_payload)
                 filled.append("review_depth")
+                protocol_limit_notes = filters_and_limits_notes(protocol_payload)
         critic_state = manifest_state.get("critic_rounds")
         if isinstance(critic_state, list) and critic_state:
             critic_rows = []
@@ -3595,6 +3630,19 @@ def build_audit_scaffold(
         "audit_workbook": audit_workbook or "not exported",
         "remaining_caveats": audit_placeholder("remaining caveats and recall-risk reasons"),
     }
+    # Both are required at render. A locked protocol already decided them; otherwise they are
+    # listed as placeholders now rather than surfacing only when the render refuses.
+    if protocol_limit_notes:
+        audit["reporting_notes"].update(protocol_limit_notes)  # type: ignore[union-attr]
+        filled.append("reporting_notes.limits_filters (from locked protocol)")
+    else:
+        audit["reporting_notes"].update(  # type: ignore[union-attr]
+            {
+                "limits_filters_validated_filters_used": audit_placeholder("limits, filters, and validated filters used, or none"),
+                "restrictions_and_justifications": audit_placeholder("restrictions applied and their justification, or none"),
+            }
+        )
+        placeholders.append("reporting_notes.limits_filters (decision)")
     if sources.get("manifest"):
         audit["reporting_notes"]["run_manifest"] = sources["manifest"]  # type: ignore[index]
     placeholders.append("reporting_notes.remaining_caveats")

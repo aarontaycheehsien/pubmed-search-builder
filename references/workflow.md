@@ -6,6 +6,8 @@ Use this workflow to build, resume, or internally review a high-sensitivity PubM
 
 Track the detailed stages in `run_manifest.json`, but show users only four concise markers: `Intake`, `Scope lock`, `Empirical build and critic loop`, and `Handoff`.
 
+Recorded artifacts are hash-bound. When a `manifest_tool.py add` receipt carries `binding_warnings`, an artifact changed after an entry bound it, and the completion gate will reject that entry. Act on it then, not at handoff. Write the revision to a new versioned file, then re-run and re-record the steps that consume it. An entry of the wrong kind is refused at `add` time (for example, a `term-diff` output recorded as `--kind mesh`).
+
 1. `intake` - confirm the plain-language question, build/review mode, and optional seed status.
 2. `scope-lock` - validate, compile, and lock review protocol version 1 before record evidence is mined.
 3. `review-discovery` - conditional on an explicit evidence-synthesis target: compile the report-retrieval profile, retain branch provenance, classify every candidate, and evaluate final retrieval by eligible report type.
