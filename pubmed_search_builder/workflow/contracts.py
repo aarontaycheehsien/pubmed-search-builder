@@ -175,6 +175,7 @@ def artifact_type_for_operation(operation: str) -> str:
         "critic-artifact-validate",
         "critic-bundle-build",
         "critic-independent-run",
+        "isolated-runner-preflight",
         "selftest",
         # Local cache maintenance. It reports on stored responses and makes no retrieval
         # claim, so it is a diagnostic receipt rather than search evidence.

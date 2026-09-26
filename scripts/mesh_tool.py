@@ -3182,7 +3182,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     global CACHE_BYPASS
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, extras = parser.parse_known_args(argv)
+    if extras:
+        # Seen in a build: PowerShell's Start-Process -ArgumentList joins array items without
+        # quoting, so "neonatal sepsis" arrived as two arguments and the sweep never ran.
+        parser.error(
+            f"unrecognized arguments: {' '.join(extras)}. A multi-word --concept/--variant was probably "
+            "split by the shell (Start-Process -ArgumentList does not quote items); quote each value, or "
+            "pass variants one per line with --variants-file. See references/mesh-and-pubmed-tools.md."
+        )
     try:
         configure_env_file(args.env_file)
     except ValueError as exc:

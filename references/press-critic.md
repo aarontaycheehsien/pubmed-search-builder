@@ -37,6 +37,19 @@ The default `auto` uses `PUBMED_ISOLATED_RUNNER` when set, otherwise Claude Code
 
 Use `--model` and `--reasoning-effort` when a run needs an explicit model configuration; the default reasoning effort is `high`. Use `--runner-bin` (or `CODEX_BIN` / `CLAUDE_BIN`) when the executable is not on `PATH`. Use `--scope-version` only when the bundle lacks a protocol-bound critic packet. If no runner is installed and signed in, or the child run fails, stop and report that the independent critic is incomplete. Do not substitute a same-context hand-authored JSON round: the completion gate rejects it.
 
+### Runner preflight and troubleshooting
+
+Run `python scripts/isolated_runner.py preflight` at intake, before any candidate-record work. The critic and the independent re-screen (`screening_tool.py replicate`) both need a child that can start from where the build runs. The preflight checks that the child CLI is signed in for the current account, then makes one trivial schema-constrained call. It exits non-zero with an `error` and a `hint` when a child cannot run. When it fails, stop and report that the independent runner is unavailable here. Do not start a build whose completion gate cannot pass.
+
+- **Inside a Codex sandbox.** Sandboxed commands run as a separate sandbox user (`whoami` shows it). That user's profile has no Codex login and no usable root-certificate store. When `codex login status` fails for the current account, the `codex-cli` runner therefore provisions the child itself:
+  - it copies the host `auth.json` (from `CODEX_HOME` or `~/.codex`) into a private, owner-only home made for that one child, outside the workspace the child reads;
+  - it exports the machine's trusted roots to a CA bundle there, unless `CODEX_CA_CERTIFICATE` / `SSL_CERT_FILE` is already set;
+  - it deletes the copied credentials first, and then the home, when the child exits.
+
+  The execution record's `codex_home` is `host` or `private-copy`. Known risk: if the child refreshes the login token, the host login may need signing in again. The preflight reports `unavailable` when there is no host `auth.json` to copy (for example, credentials kept in the OS keyring). The `claude-code-cli` runner is not provisioned this way.
+- **A child timeout.** The runner kills the child's whole process tree and reports the child's last output. A timeout with no output at all usually means the child is waiting for a login.
+- **Claude Code `401` / expired token.** Sign the CLI in again, or choose the other runner with `--runner`.
+
 ## Required review domains
 
 Review the six PRESS 2015 elements:

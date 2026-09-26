@@ -81,6 +81,23 @@ def is_transient_sandbox_failure(returncode: int, stderr: str) -> bool:
     return any(sig in low for sig in TRANSIENT_SANDBOX_SIGNATURES)
 
 
+def reset_run_dir(run_dir: Path, staged: set[Path]) -> list[str]:
+    """Remove everything a failed attempt added to ``run_dir``; return paths that could not be removed."""
+    leftovers: list[str] = []
+    for path in sorted(run_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        relative = path.relative_to(run_dir)
+        if relative in staged:
+            continue
+        try:
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+        except OSError:
+            leftovers.append(str(relative))
+    return leftovers
+
+
 def run_skill(
     prompt: str,
     *,
@@ -88,7 +105,7 @@ def run_skill(
     run_dir: Path,
     model: str | None = None,
     reasoning_effort: str = "medium",
-    timeout: int = 1800,
+    timeout: int = 7200,
     codex_bin: str | None = None,
     max_attempts: int = 2,
 ) -> dict:
@@ -126,22 +143,39 @@ def run_skill(
     if model:
         cmd[2:2] = ["-m", model]  # insert after "exec"
 
+    # Everything the harness staged before launch (prompt, protocol). A relaunch must start from
+    # exactly this, not from the failed attempt's partial manifest and artifacts.
+    staged = {path.relative_to(run_dir) for path in run_dir.rglob("*")}
     result: dict = {}
     for attempt in range(1, max(1, max_attempts) + 1):
+        if attempt > 1:
+            leftovers = reset_run_dir(run_dir, staged)
+            if leftovers:
+                result["relaunch_blocked"] = f"could not clear the failed attempt's files: {leftovers[:5]}"
+                return result
+        timed_out = False
         with events.open("w", encoding="utf-8") as ev:
-            proc = subprocess.run(
-                cmd,
-                input=prompt,
-                stdout=ev,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-            )
-        stderr = proc.stderr or ""
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    input=prompt,
+                    stdout=ev,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout,
+                )
+                returncode, stderr = proc.returncode, proc.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                # A timeout is a failed run, not a harness crash: the caller must still keep the
+                # partial artifacts and record the failure instead of losing the workspace.
+                timed_out = True
+                partial = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+                returncode, stderr = 124, f"{partial}\ncodex exec timed out after {timeout}s"
         result = {
-            "returncode": proc.returncode,
+            "returncode": returncode,
+            "timed_out": timed_out,
             "events_path": str(events),
             "last_message_path": str(last_message),
             "last_message": last_message.read_text(encoding="utf-8") if last_message.exists() else "",
@@ -149,7 +183,7 @@ def run_skill(
             "attempts": attempt,
         }
         # Success, or a non-transient failure, or out of attempts: stop here.
-        if not is_transient_sandbox_failure(proc.returncode, stderr) or attempt >= max(1, max_attempts):
+        if timed_out or not is_transient_sandbox_failure(returncode, stderr) or attempt >= max(1, max_attempts):
             return result
         # Transient sandbox-startup failure with attempts left: relaunch.
     return result

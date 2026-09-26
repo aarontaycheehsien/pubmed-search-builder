@@ -252,6 +252,7 @@ On Windows, pass the file *path*, not the file contents: use `--query-file query
 - The tool decodes UTF-8, UTF-8-with-BOM, and UTF-16, so query and JSON files written by Notepad, VS Code, `Set-Content`, or `Out-File` all load correctly. Prefer `Set-Content -Encoding utf8` when authoring a file for portability.
 - Do not build a blocks/benchmark JSON file with `ConvertTo-Json` piped from `Get-Item`/`Get-ChildItem` or other objects; that serializes file metadata into the `query` field and is rejected with a clear error. Write plain query text, or hand-write `{"label": "...", "query": "<query text>"}`.
 - If you must read a file into a variable, use `Get-Content -Raw -Encoding utf8 query.txt` or `[System.IO.File]::ReadAllText((Resolve-Path query.txt).Path)` — but passing `--query-file query.txt` is simpler and sidesteps the quoting problem entirely.
+- Run the tools in the foreground. Do not background them with `Start-Process -ArgumentList @(...)`: Windows PowerShell 5.1 joins those items with spaces without quoting them, so `--concept 'neonatal sepsis'` arrives as two arguments. The tool then exits with `unrecognized arguments` into a redirected error file, which looks like a stall. Bound long MeSH sweeps with `--max-seconds` and `--output` (checkpointed) instead, and pass multi-word variants one per line with `--variants-file`.
 
 ### Compact output and record-content commands
 

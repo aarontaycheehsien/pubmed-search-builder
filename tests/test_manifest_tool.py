@@ -37,6 +37,45 @@ class ManifestToolTests(unittest.TestCase):
     def load(self):
         return json.loads(Path(self.manifest).read_text(encoding="utf-8"))
 
+    def test_a_non_mesh_output_recorded_as_kind_mesh_is_refused_at_add_time(self):
+        """Seen in an eval build: term-diff outputs recorded as --kind mesh passed `add` and failed
+        only at the final completion gate."""
+        (self.dir / "diff.json").write_text(
+            json.dumps({"operation": "term-diff", "mesh_only_count": 3, "tiab_only_count": 5}), encoding="utf-8"
+        )
+        rc, _receipt = self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "mesh", "--output", "diff.json",
+             "--command", "pubmed_tool.py term-diff --output diff.json"]
+        )
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(Path(self.manifest).exists())
+        rc, _receipt = self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "sample", "--output", "diff.json",
+             "--command", "pubmed_tool.py term-diff --output diff.json"]
+        )
+        self.assertEqual(rc, 0)
+
+    def test_editing_a_bound_artifact_is_reported_by_the_next_add(self):
+        """Seen in an eval build: final_strategy.txt was edited after the final search bound it, and
+        the gate only said so at handoff."""
+        strategy = self.dir / "final_strategy.txt"
+        strategy.write_text("asthma[tiab]", encoding="utf-8")
+        rc, receipt = self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "search", "--label", "Final topic-only strategy",
+             "--command", "pubmed_tool.py search --query-file final_strategy.txt --retmax 0", "--count", "10",
+             "--input", "final_strategy.txt"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertNotIn("binding_warnings", receipt)
+
+        strategy.write_text("asthma[tiab] OR wheez*[tiab]", encoding="utf-8")
+        rc, receipt = self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "qa", "--command", "hooks_tool.py final-qa"]
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("seq=1" in w and "final_strategy.txt" in w for w in receipt["binding_warnings"]))
+        self.assertIn("new versioned file", receipt["binding_hint"])
+
     def test_add_auto_inits_manifest_with_full_schema(self):
         rc, receipt = self.run_cli(
             ["add", "--manifest", self.manifest, "--kind", "search",

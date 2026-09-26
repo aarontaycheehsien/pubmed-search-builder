@@ -3318,6 +3318,13 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
         if resolved_output.is_file():
             output_sha256 = sha256_file(resolved_output)
             mesh_evidence = derived_mesh_evidence(path, output_path)
+            if args.kind == "mesh" and mesh_evidence is None:
+                # The completion gate rejects this entry at handoff; refuse it now while the fix is cheap.
+                raise ManifestError(
+                    f"--kind mesh requires a mesh_tool.py output; {output_path} is not one. Record a "
+                    "pubmed_tool.py term-diff gap analysis with --kind sample, and other PubMed outputs "
+                    "under their own kind (see references/mesh-and-pubmed-tools.md)."
+                )
     input_sha256: dict[str, str] = {}
     for input_value in args.input or []:
         resolved_input = resolve_artifact_path(input_value, path)
@@ -3366,7 +3373,28 @@ def cmd_add(args: argparse.Namespace) -> dict[str, object]:
         save_manifest(path, data)
         receipt = base_receipt("manifest-add", path, data)
         receipt["added_seq"] = seq
+    drift = binding_drift(data, path)
+    if drift:
+        receipt["binding_warnings"] = drift
+        receipt["binding_hint"] = BINDING_DRIFT_HINT
     return receipt
+
+
+BINDING_DRIFT_HINT = (
+    "A recorded artifact changed after an entry bound its hash, and the completion gate will reject "
+    "that entry. Write revisions to a new versioned file instead of editing in place, then re-run and "
+    "re-record the steps that consume it (for example final search, final QA, audit render)."
+)
+
+
+def binding_drift(data: dict[str, object], manifest_path: Path) -> list[str]:
+    """The gate's own hash-binding findings, reported when they arise instead of at handoff."""
+    markers = ("hash no longer matches", "does not exist")
+    return [
+        issue
+        for issue in validate_manifest(data, check_files=True, manifest_path=manifest_path)
+        if issue.startswith("entry seq=") and any(marker in issue for marker in markers)
+    ]
 
 
 def cmd_show(args: argparse.Namespace) -> dict[str, object]:

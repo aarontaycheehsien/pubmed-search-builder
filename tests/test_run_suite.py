@@ -139,6 +139,14 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary["topics_scored"], 1)
         self.assertEqual(summary["topics_failed"], ["b"])
 
+    def test_undefined_recall_is_not_averaged_in_as_zero(self):
+        rows = [self._row("a", "naive", 90.0), self._row("b", "naive", 0.0, gold_in_pubmed=0, retrieved=0)]
+        stats = run_suite.summarize(rows)["by_strategy_source"]["naive"]
+        self.assertEqual(stats["mean_recall_percent"], 90.0)
+        self.assertEqual(stats["topics"], 1)
+        self.assertEqual(stats["topics_below_80"], 0)
+        self.assertEqual(stats["undefined_recall_topics"], ["b"])
+
     def test_topics_below_the_recall_threshold_are_counted(self):
         rows = [self._row("a", "naive", 79.9), self._row("b", "naive", 80.0)]
         self.assertEqual(run_suite.summarize(rows)["by_strategy_source"]["naive"]["topics_below_80"], 1)
@@ -172,8 +180,28 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(result["compared_topics"], 0)
         self.assertEqual(result["regressions"], [])
 
+    def test_undefined_recall_is_not_compared(self):
+        """No gold resolved in PubMed means recall is undefined, not a drop to 0%."""
+        current = self._card("a", "naive", 0.0)
+        current["topics"][0]["gold_in_pubmed"] = 0
+        previous = self._card("a", "naive", 90.0)
+        previous["topics"][0]["gold_in_pubmed"] = 10
+        result = run_suite.compare(current, previous)
+        self.assertEqual(result["compared_topics"], 0)
+        self.assertEqual(result["regressions"], [])
+
     def test_a_first_run_has_nothing_to_compare(self):
         self.assertFalse(run_suite.compare(self._card("a", "naive", 90.0), None)["available"])
+
+
+def write_passing_run(run_dir, reviewed=("1",), mined=()):
+    """The files generate.py leaves in a run it scored: a passing gate and a clean scorecard."""
+    (run_dir / "completion_gate.json").write_text(json.dumps({"ok": True, "returncode": 0}), encoding="utf-8")
+    (run_dir / "scorecard.json").write_text(
+        json.dumps({"leakage_scan": {"clean": True},
+                    "development_evidence": {"reviewed_pmids": list(reviewed), "mined_pmids": list(mined)}}),
+        encoding="utf-8",
+    )
 
 
 class StrategyResolutionTests(unittest.TestCase):
@@ -190,16 +218,34 @@ class StrategyResolutionTests(unittest.TestCase):
             generated = root / "gen" / "TOPIC"
             generated.mkdir(parents=True)
             (generated / "final_strategy.txt").write_text("asthma[tiab]", encoding="utf-8")
-            source, strategy, _blocks = run_suite.resolve_strategy(path, fixture, "auto", root / "gen")
+            write_passing_run(generated)
+            source, strategy, _blocks, _evidence = run_suite.resolve_strategy(path, fixture, "auto", root / "gen")
             self.assertEqual(source, "generated")
             self.assertEqual(strategy.read_text(encoding="utf-8"), "asthma[tiab]")
+
+    def test_a_generated_run_that_failed_the_completion_gate_is_not_scored(self):
+        """generate.py keeps a failed run's final_strategy.txt; it must not enter the table."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "TOPIC.strategy.txt").write_text("baseline[tiab]", encoding="utf-8")
+            path, fixture = self._fixture(root, strategy_file="TOPIC.strategy.txt")
+            generated = root / "gen" / "TOPIC"
+            generated.mkdir(parents=True)
+            (generated / "final_strategy.txt").write_text("unfinished[tiab]", encoding="utf-8")
+            for gate in (None, {"ok": False, "returncode": 1, "issues": ["no final critic round"]}):
+                with self.subTest(gate=gate):
+                    if gate is not None:
+                        (generated / "completion_gate.json").write_text(json.dumps(gate), encoding="utf-8")
+                    for source in ("auto", "generated"):
+                        with self.assertRaises(run_suite.GeneratedRunError):
+                            run_suite.resolve_strategy(path, fixture, source, root / "gen")
 
     def test_auto_falls_back_to_the_fixture_baseline(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "TOPIC.strategy.txt").write_text("baseline[tiab]", encoding="utf-8")
             path, fixture = self._fixture(root, strategy_file="TOPIC.strategy.txt")
-            source, strategy, _blocks = run_suite.resolve_strategy(path, fixture, "auto", None)
+            source, strategy, _blocks, _evidence = run_suite.resolve_strategy(path, fixture, "auto", None)
             self.assertEqual(source, "baseline")
             self.assertEqual(strategy.read_text(encoding="utf-8"), "baseline[tiab]")
 
@@ -207,7 +253,7 @@ class StrategyResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path, fixture = self._fixture(Path(td))
             with mock.patch.object(run_suite, "DERIVED_DIR", Path(td) / "derived"):
-                source, strategy, blocks = run_suite.resolve_strategy(path, fixture, "auto", None)
+                source, strategy, blocks, _evidence = run_suite.resolve_strategy(path, fixture, "auto", None)
             self.assertEqual(source, "naive")
             self.assertIn("asthma[tiab]", strategy.read_text(encoding="utf-8"))
             self.assertIsNotNone(blocks)
@@ -217,6 +263,89 @@ class StrategyResolutionTests(unittest.TestCase):
             path, fixture = self._fixture(Path(td))
             with self.assertRaises(FileNotFoundError):
                 run_suite.resolve_strategy(path, fixture, "baseline", None)
+
+    def _run(self, topic_dir, name, strategy, passing=True):
+        run = topic_dir / name
+        run.mkdir(parents=True)
+        (run / "final_strategy.txt").write_text(strategy, encoding="utf-8")
+        if passing:
+            write_passing_run(run)
+        else:
+            (run / "completion_gate.json").write_text(json.dumps({"ok": False, "returncode": 1}), encoding="utf-8")
+        return run
+
+    def test_generate_py_run_directories_are_found_and_the_latest_is_used(self):
+        """generate.py writes <root>/<topic>/run-<UTC>/, which --generated-root never found."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path, fixture = self._fixture(root)
+            self._run(root / "results" / "TOPIC", "run-20260901T000000Z", "old[tiab]")
+            latest = self._run(root / "results" / "TOPIC", "run-20260926T000000Z", "new[tiab]")
+            source, strategy, _blocks, evidence = run_suite.resolve_strategy(path, fixture, "auto", root / "results")
+            self.assertEqual(source, "generated")
+            self.assertEqual(strategy.read_text(encoding="utf-8"), "new[tiab]")
+            self.assertEqual(evidence["run_dir"], str(latest))
+            self.assertEqual(evidence["seen_pmids"], {"1"})
+
+    def test_a_failed_latest_run_is_not_hidden_behind_an_older_passing_one(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path, fixture = self._fixture(root)
+            self._run(root / "results" / "TOPIC", "run-20260901T000000Z", "old[tiab]")
+            self._run(root / "results" / "TOPIC", "run-20260926T000000Z", "new[tiab]", passing=False)
+            with self.assertRaises(run_suite.GeneratedRunError):
+                run_suite.resolve_strategy(path, fixture, "auto", root / "results")
+
+    def test_a_generated_run_without_a_clean_scored_record_is_not_scored(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path, fixture = self._fixture(root)
+            run = self._run(root / "results" / "TOPIC", "run-20260926T000000Z", "new[tiab]")
+            for scorecard in (None, {"leakage_scan": {"clean": False}, "development_evidence": {}}):
+                with self.subTest(scorecard=scorecard):
+                    if scorecard is None:
+                        (run / "scorecard.json").unlink()
+                    else:
+                        (run / "scorecard.json").write_text(json.dumps(scorecard), encoding="utf-8")
+                    with self.assertRaises(run_suite.GeneratedRunError):
+                        run_suite.resolve_strategy(path, fixture, "auto", root / "results")
+
+
+class NeverReviewedRecallTests(unittest.TestCase):
+    """Seen in the audit's E2E run: the build had screened 27 of 29 gold records, so its headline
+    recall was mostly on records it saw. The suite reported only the headline."""
+
+    def test_generated_rows_report_recall_over_gold_the_build_never_reviewed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fixture_path = root / "TOPIC.json"
+            fixture_path.write_text(json.dumps({"id": "TOPIC", "suite": "test", "review_protocol": PROTOCOL}), encoding="utf-8")
+            run = root / "results" / "TOPIC" / "run-20260926T000000Z"
+            run.mkdir(parents=True)
+            (run / "final_strategy.txt").write_text("x[tiab]", encoding="utf-8")
+            write_passing_run(run, reviewed=("1", "2"), mined=("1",))
+            card = {"recall_reachable_percent": 100.0, "gold_in_pubmed": 3, "retrieved": 3, "strategy_total_hits": 10,
+                    "unseen_evaluation": {"gold_in_pubmed": 1, "retrieved": 1, "recall_percent": 100.0}}
+            with mock.patch.object(run_suite.run_eval, "score", return_value=card) as score:
+                row = run_suite.score_topic(fixture_path, Path("tool"), "auto", root / "results", 1, True)
+        self.assertEqual(score.call_args.kwargs["seen_pmids"], {"1", "2"})
+        self.assertEqual(score.call_args.kwargs["mined_pmids"], {"1"})
+        self.assertEqual(row["unseen_recall_percent"], 100.0)
+        self.assertEqual(row["generated_run_dir"], str(run))
+        summary = run_suite.summarize([row])
+        self.assertEqual(summary["by_strategy_source"]["generated"]["mean_unseen_recall_percent"], 100.0)
+        markdown = run_suite.render_markdown(
+            {"generated_utc": "t", "topics": [row], "summary": summary, "regression": {}}
+        )
+        self.assertIn("| 100.0% (1/1) |", markdown)
+
+
+class RunsFlagTests(unittest.TestCase):
+    def test_repeats_against_the_cache_are_refused(self):
+        """Cached repeats are identical, so --runs 3 reported an SD of 0 as if it meant stability."""
+        with self.assertRaises(SystemExit) as caught:
+            run_suite.main(["--runs", "3"])
+        self.assertIn("--no-cache", str(caught.exception))
 
 
 class EutilsErrorTests(unittest.TestCase):

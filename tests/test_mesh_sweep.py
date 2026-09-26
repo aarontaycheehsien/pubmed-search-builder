@@ -18,6 +18,18 @@ SPEC.loader.exec_module(mesh_tool)
 PRESSURE_ULCER = "http://id.nlm.nih.gov/mesh/D003668"
 
 
+class SplitArgumentTests(unittest.TestCase):
+    def test_a_multi_word_term_split_by_the_shell_is_explained(self):
+        """Seen in an eval build: Start-Process -ArgumentList split 'neonatal sepsis' into two
+        arguments; the bare argparse error looked like a stalled sweep."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            mesh_tool.main(["sweep", "--concept", "neonatal", "sepsis", "--variant", "newborn", "sepsis"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments: sepsis sepsis", err.getvalue())
+        self.assertIn("--variants-file", err.getvalue())
+
+
 class FakeClock:
     """Deterministic monotonic() for the time-budget test: returns each queued value once, then
     repeats the final value forever (so trailing elapsed() calls stay stable)."""

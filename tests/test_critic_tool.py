@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import json
 import subprocess
@@ -5,6 +6,16 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+
+def host_codex_login(module):
+    """Keep codex-runner tests independent of this machine's real Codex login."""
+
+    @contextlib.contextmanager
+    def signed_in(_executable):
+        yield None, "host"
+
+    return mock.patch.object(module, "codex_child_home", signed_in)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -187,7 +198,7 @@ class CriticToolTests(unittest.TestCase):
                 response_path.write_text(json.dumps(v2_payload("critic_evidence.json")), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout='{"type":"thread.started"}\n', stderr="")
 
-            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run), host_codex_login(critic_tool.isolated_runner):
                 receipt = critic_tool.run_independent_critic(
                     bundle_path=bundle_path,
                     output_path=output,
@@ -235,7 +246,7 @@ class CriticToolTests(unittest.TestCase):
                 response_path.write_text(json.dumps(invalid), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            with mock.patch.object(critic_tool.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run), host_codex_login(critic_tool.isolated_runner):
                 with self.assertRaises(critic_tool.CriticArtifactError):
                     critic_tool.run_independent_critic(
                         bundle_path=bundle_path,

@@ -211,6 +211,39 @@ class BuildScaffoldTests(unittest.TestCase):
         )
         self.assertIn("review_depth", receipt["fields_filled"])
 
+    def test_filter_and_limit_decisions_are_copied_from_the_locked_protocol(self):
+        """Seen in an eval build: the protocol rejected every limit, yet the render refused the audit
+        for want of an explicit limits decision the scaffold never mentioned."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            protocol = {
+                "protocol_id": "eval-x",
+                "scope_version": 1,
+                "review": {"question": "q"},
+                "filters_and_limits": {"decisions": [
+                    {"id": "f", "type": "filter", "label": "Diagnostic-method filter", "status": "rejected",
+                     "value": "none", "validated_source": None, "rationale": "Recall first."},
+                    {"id": "l", "type": "limit", "label": "English language", "status": "selected",
+                     "value": "english[la]", "validated_source": None, "rationale": "No translation budget."},
+                ]},
+            }
+            (root / "review_protocol_v1.json").write_text(json.dumps(protocol), encoding="utf-8")
+            state = {"scope": {"lock_mode": "protocol", "protocol_file": "review_protocol_v1.json", "version": 1}}
+            audit, receipt = self.build(
+                manifest_data=manifest([], build_state=state), sources={"manifest": str(root / "run_manifest.json")}
+            )
+        notes = audit["reporting_notes"]
+        self.assertIn("English language: english[la]", notes["limits_filters_validated_filters_used"])
+        self.assertIn("Diagnostic-method filter rejected - Recall first", notes["limits_filters_validated_filters_used"])
+        self.assertIn("English language: No translation budget.", notes["restrictions_and_justifications"])
+        self.assertIn("eval-x scope v1", notes["restrictions_and_justifications"])
+        self.assertNotIn("reporting_notes.limits_filters (decision)", receipt["placeholder_fields"])
+
+    def test_without_a_protocol_the_limits_decisions_are_listed_as_placeholders(self):
+        audit, receipt = self.build(manifest_data=manifest([]))
+        self.assertIn("reporting_notes.limits_filters (decision)", receipt["placeholder_fields"])
+        self.assertTrue(audit["reporting_notes"]["restrictions_and_justifications"])
+
     def test_a_run_that_never_paused_has_no_run_status_log(self):
         for state in ({}, {"run_status_history": []}):
             with self.subTest(state=state):
