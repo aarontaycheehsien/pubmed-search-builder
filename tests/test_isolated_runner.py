@@ -257,15 +257,50 @@ class SandboxedCodexHomeTests(unittest.TestCase):
         self.assertEqual(execution["codex_home"], "host")
 
     def test_a_sandboxed_child_gets_a_private_login_that_is_removed_afterwards(self):
-        with tempfile.TemporaryDirectory() as host, tempfile.TemporaryDirectory() as workspace:
+        def exported_roots(destination):
+            destination.write_text("-----BEGIN CERTIFICATE-----", encoding="ascii")
+            return destination
+
+        with tempfile.TemporaryDirectory() as host, mock.patch.object(runner, "write_ca_bundle", side_effect=exported_roots):
             (Path(host) / "auth.json").write_text("secret", encoding="utf-8")
             execution, seen = self.run_codex(False, Path(host))
         self.assertEqual(execution["codex_home"], "private-copy")
         self.assertEqual(seen["copied"], "secret")
         self.assertNotEqual(seen["home"], Path(host))
-        self.assertTrue(all(seen["env"].get(name) for name in runner.CA_BUNDLE_ENVS))
+        self.assertTrue(all(seen["env"][name] == str(seen["home"] / "ca-bundle.pem") for name in runner.CA_BUNDLE_ENVS))
         self.assertFalse((seen["home"] / "auth.json").exists())
         self.assertFalse(seen["home"].exists())
+
+    def test_a_configured_ca_bundle_is_never_overridden(self):
+        with tempfile.TemporaryDirectory() as host, mock.patch.object(runner, "write_ca_bundle") as export, mock.patch.dict(
+            os.environ, {"SSL_CERT_FILE": "corporate.pem"}
+        ):
+            (Path(host) / "auth.json").write_text("secret", encoding="utf-8")
+            seen = {}
+
+            def fake_run(command, **kwargs):
+                if command[1:] == ["login", "status"]:
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="Not logged in\n")
+                seen["env"] = kwargs.get("env")
+                Path(command[command.index("-o") + 1]).write_text(json.dumps({"answer": 1}), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "run_child", side_effect=fake_run), mock.patch.object(
+                runner, "host_codex_home", return_value=Path(host)
+            ):
+                runner.run_isolated(
+                    runner=runner.CODEX_RUNNER, workspace=Path(tmp), prompt="p", schema=SCHEMA,
+                    model=None, reasoning_effort="low", timeout_seconds=30, executable="codex-test",
+                )
+        export.assert_not_called()
+        self.assertEqual(seen["env"]["SSL_CERT_FILE"], "corporate.pem")
+
+    @unittest.skipUnless(os.name == "nt", "the sandbox user's missing certificate store is a Windows problem")
+    def test_the_machine_roots_are_exported_on_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = runner.write_ca_bundle(Path(tmp) / "ca-bundle.pem")
+            self.assertIsNotNone(bundle)
+            self.assertGreater(bundle.read_text(encoding="ascii").count("BEGIN CERTIFICATE"), 10)
 
     def test_copied_credentials_are_removed_even_when_the_home_stays_locked(self):
         """A helper the child leaves behind can hold the home open; the token copy must still go."""
