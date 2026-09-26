@@ -21,7 +21,7 @@ run after the audit.
 
 ## Phase 0: unblock the independent child (blocks everything else)
 
-**Status.** 0.1, 0.2, and 0.4 are done. 0.3 is waiting on a decision.
+**Status.** Phase 0 is done: 0.1–0.4. For 0.3, the decision was to copy the ChatGPT login.
 
 - **Diagnosis (0.2).** Inside a Codex sandbox, commands run as `codexsandboxonline`. That user's
   profile has no Codex login (`codex login status` → `Not logged in`), so a nested `codex exec`
@@ -30,6 +30,18 @@ run after the audit.
   Access is denied`. Network access and reading `auth.json` both work. The host login is ChatGPT
   OAuth with no API key.
 - **Preflight (0.4).** Run nested, it now fails in 0.2 s with this reason instead of hanging.
+- **Fix (0.3).** Once the login was provisioned, a second blocker appeared: the sandbox user has no
+  usable root-certificate store, so Codex's TLS failed (`workspace routing discovery failed`).
+  When `codex login status` fails, the `codex-cli` runner now copies `auth.json` into a private,
+  owner-only per-child home, exports the machine's roots to a CA bundle there, and deletes the
+  copied credentials before the home.
+- **Verified live, nested in the eval's sandbox configuration.** Preflight passes in 7.3 s and a
+  critic-shaped call returns in 8 s. Failing and successful children leave no token copy behind.
+- **Leftover.** One token copy from a pre-fix diagnostic run
+  (`%TEMP%\pubmed-codex-home-28l3isfo`) is owned by an expired sandbox session and needs an
+  administrator to delete it.
+- **Not covered.** The `claude-code-cli` runner is not provisioned for the sandbox user, and the
+  full E2E rerun belongs to Phase 3.
 
 **0.1 Kill the whole child process tree on timeout** (`scripts/isolated_runner.py`)
 - Replace `subprocess.run` with `Popen` plus `communicate(timeout=…)`.

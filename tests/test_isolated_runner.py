@@ -1,5 +1,6 @@
 """The isolated runner launches a fresh-context child and records how, for either CLI."""
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -23,6 +24,16 @@ CRITIC_SPEC = importlib.util.spec_from_file_location("critic_tool_runner_test", 
 critic_tool = importlib.util.module_from_spec(CRITIC_SPEC)
 assert CRITIC_SPEC.loader is not None
 CRITIC_SPEC.loader.exec_module(critic_tool)
+
+def host_codex_login(module):
+    """Keep codex-runner tests independent of this machine's real Codex login."""
+
+    @contextlib.contextmanager
+    def signed_in(_executable):
+        yield None, "host"
+
+    return mock.patch.object(module, "codex_child_home", signed_in)
+
 
 SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -173,14 +184,15 @@ class PreflightTests(unittest.TestCase):
         ):
             return runner.preflight(runner=runner.CODEX_RUNNER)
 
-    def test_a_child_cli_without_a_login_fails_fast_with_the_reason(self):
+    def test_a_child_cli_without_any_login_fails_fast_with_the_reason(self):
         calls = []
 
         def fake_run(command, **kwargs):
             calls.append(command)
             return subprocess.CompletedProcess(command, 1, stdout="", stderr="Not logged in\n")
 
-        result = self.preflight(fake_run)
+        with tempfile.TemporaryDirectory() as empty_home, mock.patch.object(runner, "host_codex_home", return_value=Path(empty_home)):
+            result = self.preflight(fake_run)
         self.assertFalse(result["ok"])
         self.assertEqual(len(calls), 1)  # no model call is attempted
         self.assertEqual(calls[0][1:], ["login", "status"])
@@ -208,6 +220,69 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("no output", result["error"])
         self.assertIn("hint", result)
+
+
+class SandboxedCodexHomeTests(unittest.TestCase):
+    """Inside a Codex sandbox the child runs as a sandbox user with no login and no usable root
+    certificate store; outside one, nothing may be copied."""
+
+    def run_codex(self, signed_in: bool, host_home: Path):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            if command[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(command, 0 if signed_in else 1, stdout="", stderr="status\n")
+            env = kwargs.get("env")
+            seen["env"] = env
+            if env:
+                seen["copied"] = Path(env["CODEX_HOME"], "auth.json").read_text(encoding="utf-8")
+                seen["home"] = Path(env["CODEX_HOME"])
+            Path(command[command.index("-o") + 1]).write_text(json.dumps({"answer": 1}), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "run_child", side_effect=fake_run), mock.patch.object(
+            runner, "host_codex_home", return_value=host_home
+        ), mock.patch.dict(os.environ, {name: "" for name in runner.CA_BUNDLE_ENVS}):
+            _draft, execution = runner.run_isolated(
+                runner=runner.CODEX_RUNNER, workspace=Path(tmp), prompt="p", schema=SCHEMA,
+                model=None, reasoning_effort="low", timeout_seconds=30, executable="codex-test",
+            )
+        return execution, seen
+
+    def test_a_signed_in_host_copies_nothing(self):
+        with tempfile.TemporaryDirectory() as host:
+            (Path(host) / "auth.json").write_text("secret", encoding="utf-8")
+            execution, seen = self.run_codex(True, Path(host))
+        self.assertIsNone(seen["env"])
+        self.assertEqual(execution["codex_home"], "host")
+
+    def test_a_sandboxed_child_gets_a_private_login_that_is_removed_afterwards(self):
+        with tempfile.TemporaryDirectory() as host, tempfile.TemporaryDirectory() as workspace:
+            (Path(host) / "auth.json").write_text("secret", encoding="utf-8")
+            execution, seen = self.run_codex(False, Path(host))
+        self.assertEqual(execution["codex_home"], "private-copy")
+        self.assertEqual(seen["copied"], "secret")
+        self.assertNotEqual(seen["home"], Path(host))
+        self.assertTrue(all(seen["env"].get(name) for name in runner.CA_BUNDLE_ENVS))
+        self.assertFalse((seen["home"] / "auth.json").exists())
+        self.assertFalse(seen["home"].exists())
+
+    def test_copied_credentials_are_removed_even_when_the_home_stays_locked(self):
+        """A helper the child leaves behind can hold the home open; the token copy must still go."""
+        real_rmtree = runner.shutil.rmtree
+
+        def locked_home(path, *args, **kwargs):
+            if "pubmed-codex-home-" in str(path):
+                raise PermissionError("in use")
+            return real_rmtree(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as host:
+            (Path(host) / "auth.json").write_text("secret", encoding="utf-8")
+            with mock.patch.object(runner.shutil, "rmtree", side_effect=locked_home), mock.patch.object(runner.time, "sleep"):
+                _execution, seen = self.run_codex(False, Path(host))
+        self.assertTrue(seen["home"].exists())
+        self.assertFalse((seen["home"] / "auth.json").exists())
+        real_rmtree(seen["home"], ignore_errors=True)
 
 
 class WorkspaceCleanupTests(unittest.TestCase):
@@ -345,7 +420,7 @@ class CriticOnClaudeCodeTests(unittest.TestCase):
                 Path(command[command.index("-o") + 1]).write_text(json.dumps(critic_payload()), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run):
+            with mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), mock.patch.object(critic_tool.isolated_runner, "run_child", side_effect=fake_run), host_codex_login(critic_tool.isolated_runner):
                 receipt = critic_tool.run_independent_critic(
                     bundle_path=bundle,
                     output_path=root / "critic_round_1.json",

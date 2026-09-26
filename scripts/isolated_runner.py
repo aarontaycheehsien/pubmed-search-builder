@@ -27,7 +27,9 @@ import os
 import re
 import shutil
 import signal
+import ssl
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Iterator
@@ -321,7 +323,9 @@ def kill_process_tree(process: subprocess.Popen[str]) -> None:
         process.kill()
 
 
-def run_child(command: list[str], *, cwd: Path, input: str, timeout: int) -> subprocess.CompletedProcess[str]:
+def run_child(
+    command: list[str], *, cwd: Path, input: str, timeout: int, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the child in its own process group; on timeout kill the whole tree and raise ChildTimeout."""
 
     group = (
@@ -336,6 +340,7 @@ def run_child(command: list[str], *, cwd: Path, input: str, timeout: int) -> sub
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         **group,
     )
     try:
@@ -348,6 +353,107 @@ def run_child(command: list[str], *, cwd: Path, input: str, timeout: int) -> sub
             stdout, stderr = "", ""
         raise ChildTimeout(stdout or "", stderr or "") from None
     return subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+
+
+LOGIN_CHECK_SECONDS = 30
+CODEX_HOME_ENV = "CODEX_HOME"
+
+
+def host_codex_home() -> Path:
+    configured = os.environ.get(CODEX_HOME_ENV, "").strip()
+    return Path(configured) if configured else Path.home() / ".codex"
+
+
+def codex_login_status(executable: str, env: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Return (signed in, last status line) for the Codex CLI as the current account."""
+
+    with isolated_workspace("pubmed-login-") as scratch:
+        try:
+            done = run_child([executable, "login", "status"], cwd=scratch, input="", timeout=LOGIN_CHECK_SECONDS, env=env)
+        except ChildTimeout:
+            return False, "codex login status did not answer"
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return done.returncode == 0, (lines[-1] if lines else "")
+
+
+@contextlib.contextmanager
+def codex_child_home(executable: str) -> Iterator[tuple[dict[str, str] | None, str]]:
+    """Yield ``(env, mode)`` giving a Codex child a login it can use from this account.
+
+    Inside a Codex sandbox, commands run as a separate sandbox user whose profile has no Codex
+    login, and the host's ``.codex`` is not writable to it, so a nested child cannot start. In that
+    case only, the host ``auth.json`` is copied into a private, owner-only home created for this
+    one child, outside the workspace the child reads, and removed afterwards. Where the CLI is
+    already signed in, nothing is copied.
+    """
+
+    signed_in, _status = codex_login_status(executable)
+    if signed_in:
+        yield None, "host"
+        return
+    source = host_codex_home() / "auth.json"
+    if not source.is_file():
+        yield None, "unavailable"
+        return
+    with isolated_workspace("pubmed-codex-home-") as home:
+        credentials = home / "auth.json"
+        try:
+            shutil.copyfile(source, credentials)
+            env = {**os.environ, CODEX_HOME_ENV: str(home)}
+            # The sandbox user also has no usable root-certificate store, so Codex's TLS to its
+            # backend fails ("workspace routing discovery failed"). Hand it the machine's roots.
+            if not any(env.get(name) for name in CA_BUNDLE_ENVS):
+                bundle = write_ca_bundle(home / "ca-bundle.pem")
+                if bundle is not None:
+                    env.update({name: str(bundle) for name in CA_BUNDLE_ENVS})
+            yield env, "private-copy"
+        finally:
+            remove_credentials(credentials)
+
+
+CREDENTIAL_REMOVAL_DELAYS = (0.2, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+
+def remove_credentials(path: Path) -> None:
+    """Delete a copied credential file before anything else in its home.
+
+    A helper process the child leaves behind can hold the home's log or state files open, so the
+    directory itself may survive cleanup; the credentials must not.
+    """
+
+    for delay in (*CREDENTIAL_REMOVAL_DELAYS, None):
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if delay is None:
+                sys.stderr.write(f"warning: could not remove copied credentials {path}; delete it manually\n")
+                return
+            time.sleep(delay)
+
+
+CA_BUNDLE_ENVS = ("CODEX_CA_CERTIFICATE", "SSL_CERT_FILE")
+
+
+def write_ca_bundle(destination: Path) -> Path | None:
+    """Write the trusted root certificates this process can see to a PEM file."""
+
+    pem: list[str] = []
+    if os.name == "nt":
+        for store in ("ROOT", "CA"):
+            with contextlib.suppress(OSError, PermissionError):
+                for der, encoding, trust in ssl.enum_certificates(store):
+                    if encoding == "x509_asn" and (trust is True or "1.3.6.1.5.5.7.3.1" in trust):
+                        pem.append(ssl.DER_cert_to_PEM_cert(der))
+    if not pem:
+        cafile = ssl.get_default_verify_paths().cafile
+        if cafile and Path(cafile).is_file():
+            return Path(cafile)
+        return None
+    destination.write_text("".join(dict.fromkeys(pem)), encoding="ascii")
+    return destination
 
 
 def run_isolated(
@@ -385,8 +491,17 @@ def run_isolated(
         command = codex_command(resolved, workspace, schema_path, raw_output, model=model, reasoning_effort=reasoning_effort)
     else:
         command = claude_command(resolved, schema, model=model, reasoning_effort=reasoning_effort)
+    home_mode: str | None = None
     try:
-        process = run_child(command, cwd=workspace, input=prompt, timeout=timeout_seconds)
+        if runner == CODEX_RUNNER:
+            with codex_child_home(resolved) as (env, home_mode):
+                if home_mode == "unavailable":
+                    raise IsolatedRunnerError(
+                        "codex is not signed in for this account and no host auth.json was found to provision the child"
+                    )
+                process = run_child(command, cwd=workspace, input=prompt, timeout=timeout_seconds, env=env)
+        else:
+            process = run_child(command, cwd=workspace, input=prompt, timeout=timeout_seconds)
     except ChildTimeout as exc:
         # Codex streams its progress events on stdout, so the last events show where it stalled.
         parts = [f"{label}: {text.strip()[-4000:]}" for label, text in (("stdout", exc.stdout), ("stderr", exc.stderr)) if text.strip()]
@@ -403,6 +518,7 @@ def run_isolated(
         )
     extra: dict[str, Any] = {}
     if runner == CODEX_RUNNER:
+        extra["codex_home"] = home_mode
         if not raw_output.is_file():
             raise IsolatedRunnerError("Codex child completed without a structured output artifact")
         try:
@@ -463,7 +579,6 @@ PREFLIGHT_SCHEMA = {
     "properties": {"answer": {"type": "string"}},
     "required": ["answer"],
 }
-LOGIN_CHECK_SECONDS = 30
 NESTED_LOGIN_HINT = (
     "The child CLI is not signed in for the account this command runs as. Inside a Codex sandbox, "
     "commands run as a separate sandbox user whose profile has no CLI login, so every critic and "
@@ -495,15 +610,12 @@ def preflight(*, runner: str = "auto", executable: str | None = None, timeout_se
         if not resolved:
             raise IsolatedRunnerError(f"{selected} executable was not found")
         if selected == CODEX_RUNNER:
-            with isolated_workspace("pubmed-preflight-") as scratch:
-                try:
-                    login = run_child([resolved, "login", "status"], cwd=scratch, input="", timeout=LOGIN_CHECK_SECONDS)
-                except ChildTimeout as exc:
-                    raise IsolatedRunnerError("codex login status did not answer") from exc
-            result["login_status"] = (login.stdout + login.stderr).strip().splitlines()[-1:] or [""]
-            if login.returncode != 0:
+            signed_in, status = codex_login_status(resolved)
+            result["login_status"] = status
+            if not signed_in and not (host_codex_home() / "auth.json").is_file():
                 result["hint"] = NESTED_LOGIN_HINT
-                raise IsolatedRunnerError(f"codex is not signed in for {result['account']}")
+                raise IsolatedRunnerError(f"codex is not signed in for {result['account']} and no host auth.json was found")
+            result["codex_home"] = "host" if signed_in else "private-copy"
         with isolated_workspace("pubmed-preflight-") as workspace:
             draft, _execution = run_isolated(
                 runner=selected,
