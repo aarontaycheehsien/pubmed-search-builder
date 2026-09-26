@@ -342,15 +342,15 @@ def implied_decision(assessments: dict[str, str], criteria: list[dict[str, Any]]
     for criterion in criteria:
         if criterion["role"] == DECISIVE_EXCLUSION and assessments.get(criterion["id"]) == AFFIRMATIVE:
             return "exclude"
-    for criterion in criteria:
-        if criterion["role"] != REQUIRED_INCLUSION:
-            continue
-        verdict = assessments.get(criterion["id"])
-        if verdict == "no":
-            return "exclude"
-        if verdict != AFFIRMATIVE:
-            # unclear / not_reported / missing: the record does not settle a required criterion.
-            return "uncertain"
+    required = [criterion for criterion in criteria if criterion["role"] == REQUIRED_INCLUSION]
+    # A decisive failure on any required criterion excludes, whatever the order of the criteria;
+    # checking in order and stopping at the first unsettled one would turn a clear failure on a
+    # later criterion into "uncertain".
+    if any(assessments.get(criterion["id"]) == "no" for criterion in required):
+        return "exclude"
+    if any(assessments.get(criterion["id"]) != AFFIRMATIVE for criterion in required):
+        # unclear / not_reported / missing: the record does not settle a required criterion.
+        return "uncertain"
     return "include"
 
 

@@ -308,6 +308,19 @@ class DecisionRuleTests(unittest.TestCase):
         issues, _summary = validate(worksheet)
         self.assertTrue(any("entail 'uncertain'" in issue for issue in issues))
 
+    def test_a_later_decisive_failure_excludes_even_after_an_unsettled_criterion(self):
+        # Found in the CD010657 pilot: the first required criterion unclear, a later one clearly
+        # failed. The rubric's rule is that any evidenced failure excludes, whatever the order.
+        worksheet = worksheet_for()
+        set_row(
+            worksheet["records"][0],
+            {"inc_population": "unclear", "inc_intervention": "no", "exc_design": "no"},
+            {"inc_intervention": ABSTRACT_QUOTE},
+            "exclude",
+        )
+        issues, _summary = validate(worksheet)
+        self.assertEqual(issues, [])
+
     def test_a_decision_contradicting_its_verdicts_is_rejected(self):
         worksheet = worksheet_for()
         set_row(worksheet["records"][0], INCLUDE_VERDICTS, INCLUDE_EVIDENCE, "exclude")
