@@ -525,6 +525,38 @@ class EvalHarnessTests(unittest.TestCase):
             card = json.loads((run_dir / "scorecard.json").read_text(encoding="utf-8"))
             self.assertIsInstance(card["elapsed_seconds"], int)
 
+    def test_a_codex_failure_records_the_reason_codex_gave(self):
+        """Seen in the Phase 3 build: codex exec exited 1 with no final message and empty stderr; the
+        reason (a usage limit) was only in the event stream."""
+        limit = "You've hit your usage limit. Try again at 4:58 AM."
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td) / "run"
+            fixture = Path(td) / "fixture.json"
+            fixture.write_text(json.dumps({"id": "opaque", "question": "Q", "review_protocol": {"dsl_version": 1}}), encoding="utf-8")
+
+            def failed_run(prompt, *, run_dir, **_kwargs):
+                self._transcript(
+                    run_dir / "events.jsonl",
+                    [{"type": "command_execution", "command": "python scripts/critic_tool.py --run-independent", "aggregated_output": ""}],
+                )
+                with (run_dir / "events.jsonl").open("a", encoding="utf-8") as events:
+                    events.write("\n" + json.dumps({"type": "error", "message": "Reconnecting... 1/5"}))
+                    events.write("\n" + json.dumps({"type": "turn.failed", "error": {"message": limit}}))
+                return {"returncode": 1, "last_message": "", "stderr": ""}
+
+            out = io.StringIO()
+            with (
+                mock.patch.object(generate.codex, "run_skill", side_effect=failed_run),
+                mock.patch.object(generate.run_eval, "score") as score,
+                contextlib.redirect_stdout(out),
+            ):
+                code = generate.main([str(fixture), "--run-dir", str(run_dir)])
+            self.assertEqual(code, 2)
+            score.assert_not_called()
+            failure = json.loads((run_dir / "failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["codex_error"], limit)
+            self.assertIn(limit, out.getvalue())
+
     def _score(self, base: Path, retrieved: list[str], strategy_text: str = "x[tiab]") -> dict:
         fixture = base / "fixture.json"
         fixture.write_text(
