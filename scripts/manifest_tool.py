@@ -415,6 +415,16 @@ def output_path_exists(value: str, *, manifest_path: Path | None, data: dict[str
     return any(candidate.exists() for candidate in candidates)
 
 
+# Artifacts written blank and then completed in place: screening worksheets (including the blank
+# worksheet for a human second screener) and provenance-blinded orthogonal-pilot screening rounds.
+FILL_IN_PLACE_OPERATIONS = frozenset({"screening-worksheet", "orthogonal-pilot-screening"})
+
+
+def is_fill_in_place_artifact(manifest_path: Path, output_path: str) -> bool:
+    payload = read_manifest_output_json(manifest_path, output_path)
+    return bool(payload) and str(payload.get("operation") or "") in FILL_IN_PLACE_OPERATIONS
+
+
 def validate_manifest(
     data: dict[str, object],
     *,
@@ -433,6 +443,25 @@ def validate_manifest(
 
     seen_seq: set[object] = set()
     output_paths: set[str] = set()
+    # Worksheets and blinded round files are created blank and then filled in place. A later
+    # `add --output P --supersedes P` re-binds P to its filled content, so earlier entries for P
+    # are no longer expected to match the file on disk. Only those fill-in-place artifacts may be
+    # re-bound: honouring it for any path would let an edited QA, search, validation, critic, or
+    # audit output be laundered past its recorded hash.
+    base_path = manifest_path or Path("run_manifest.json")
+
+    def artifact_key(value: str) -> str:
+        return str(resolve_artifact_path(value, base_path).resolve()).casefold()
+
+    rebound_at: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        out_value, sup_value, seq_value = entry.get("output_path"), entry.get("supersedes"), entry.get("seq")
+        if isinstance(out_value, str) and out_value and isinstance(sup_value, str) and isinstance(seq_value, int):
+            if artifact_key(out_value) == artifact_key(sup_value) and is_fill_in_place_artifact(base_path, out_value):
+                key = artifact_key(out_value)
+                rebound_at[key] = max(rebound_at.get(key, 0), seq_value)
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             issues.append(f"entry {index} is not a JSON object")
@@ -456,7 +485,8 @@ def validate_manifest(
             if check_files and not output_path_exists(out, manifest_path=manifest_path, data=data):
                 issues.append(f"entry seq={seq} output_path does not exist: {out}")
             recorded_hash = entry.get("output_sha256")
-            if check_files and recorded_hash:
+            rebound = bool(rebound_at) and isinstance(seq, int) and seq < rebound_at.get(artifact_key(out), 0)
+            if check_files and recorded_hash and not rebound:
                 resolved = resolve_artifact_path(out, manifest_path or Path("run_manifest.json"))
                 if not resolved.is_file() or sha256_file(resolved) != recorded_hash:
                     issues.append(f"entry seq={seq} output artifact hash no longer matches: {out}")

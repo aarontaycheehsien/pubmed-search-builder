@@ -76,6 +76,41 @@ class ManifestToolTests(unittest.TestCase):
         self.assertTrue(any("seq=1" in w and "final_strategy.txt" in w for w in receipt["binding_warnings"]))
         self.assertIn("new versioned file", receipt["binding_hint"])
 
+    def _rebind_scenario(self, name, blank, filled, kind="artifact"):
+        """Record ``name`` blank, fill it in place, re-bind it to itself; return the hash findings."""
+        path = self.dir / name
+        path.write_text(json.dumps(blank), encoding="utf-8")
+        self.run_cli(["add", "--manifest", self.manifest, "--kind", kind, "--command", "create", "--output", name])
+        path.write_text(json.dumps(filled), encoding="utf-8")
+        self.run_cli(
+            ["add", "--manifest", self.manifest, "--kind", "artifact", "--command", "filled in place",
+             "--output", name, "--supersedes", name]
+        )
+        issues = manifest_tool.validate_manifest(self.load(), check_files=True, manifest_path=Path(self.manifest))
+        return [issue for issue in issues if "hash no longer matches" in issue]
+
+    def test_a_worksheet_filled_in_place_can_be_re_bound(self):
+        """Seen in the CD010657 pilot: blank worksheets filled in place tripped the gate's hash check."""
+        worksheet = {"operation": "screening-worksheet", "records": [{"pmid": "1", "decision": ""}]}
+        filled = {"operation": "screening-worksheet", "records": [{"pmid": "1", "decision": "include"}]}
+        self.assertEqual(self._rebind_scenario("screening_worksheet_1.json", worksheet, filled), [])
+        # An edit after the re-binding is caught again.
+        (self.dir / "screening_worksheet_1.json").write_text(json.dumps({**filled, "records": []}), encoding="utf-8")
+        issues = manifest_tool.validate_manifest(self.load(), check_files=True, manifest_path=Path(self.manifest))
+        self.assertTrue(any("seq=2 output artifact hash no longer matches" in issue for issue in issues), issues)
+
+    def test_a_blinded_round_file_filled_in_place_can_be_re_bound(self):
+        blank = {"operation": "orthogonal-pilot-screening", "provenance_blinded": True, "records": [{"pmid": "1", "decision": ""}]}
+        filled = {**blank, "records": [{"pmid": "1", "decision": "exclude"}]}
+        self.assertEqual(self._rebind_scenario("screening_round_1.json", blank, filled), [])
+
+    def test_re_binding_cannot_launder_an_edited_gate_artifact(self):
+        """A failing final QA edited to pass and re-bound to itself must still be reported."""
+        failing = {"hook": "pre_final_strategy_qa", "ok": False, "issues": ["unbalanced parentheses"]}
+        passing = {"hook": "pre_final_strategy_qa", "ok": True, "issues": []}
+        findings = self._rebind_scenario("final_qa.json", failing, passing, kind="qa")
+        self.assertTrue(any("seq=1 output artifact hash no longer matches: final_qa.json" in f for f in findings), findings)
+
     def test_add_auto_inits_manifest_with_full_schema(self):
         rc, receipt = self.run_cli(
             ["add", "--manifest", self.manifest, "--kind", "search",
