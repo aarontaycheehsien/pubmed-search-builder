@@ -19,7 +19,9 @@ free (run_eval.py).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import hashlib
 import json
 import shutil
 import subprocess
@@ -29,6 +31,7 @@ import uuid
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
@@ -56,6 +59,23 @@ def isolated_run_workspace(source: Path, root: Path) -> tuple[Path, Path]:
     run_dir = skill_dir / ".eval-output" / uuid.uuid4().hex
     run_dir.mkdir(parents=True)
     return skill_dir, run_dir
+
+
+@contextlib.contextmanager
+def agent_temp_root() -> Iterator[Path]:
+    """Temporary root for the agent workspace that the harness can still read afterwards.
+
+    ``tempfile.mkdtemp`` on Windows (Python 3.13+) gives the directory an owner-only ACL. The Codex
+    sandbox runs commands as a separate sandbox user, so every file the agent creates is owned by
+    that user and becomes unreadable to the harness: the completion gate cannot open the manifest
+    and the artifacts cannot be copied out. A plain mkdir inherits the parent's ACL instead.
+    """
+    root = Path(tempfile.gettempdir()) / f"pubmed-skill-eval-{uuid.uuid4().hex[:12]}"
+    root.mkdir()
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def completion_gate(skill_dir: Path, run_dir: Path) -> tuple[bool, dict]:
@@ -177,7 +197,32 @@ def first_critic_strategy(run_dir: Path) -> Path | None:
     strategy = resolve_within(run_dir, strategy_value)
     if strategy is None or not strategy.is_file():
         return None
+    # The critic reviewed the strategy's content at bundle time. A strategy revised in place
+    # after the critic no longer is the pre-critic strategy, so it must match the bundle hash.
+    reviewed_sha256 = critic_bundle_strategy_sha256(run_dir, artifact, critic)
+    if reviewed_sha256 is not None and hashlib.sha256(strategy.read_bytes()).hexdigest() != reviewed_sha256:
+        return None
     return strategy if strategy.read_text(encoding="utf-8").strip() else None
+
+
+def critic_bundle_strategy_sha256(run_dir: Path, critic_path: Path, critic: dict) -> str | None:
+    """Return the strategy hash frozen in the critic's evidence bundle, when one is recorded."""
+    bundle_value = critic.get("evidence_bundle")
+    if not bundle_value:
+        return None
+    bundle_path = resolve_within(critic_path.parent, str(bundle_value), search=False) or resolve_within(
+        run_dir, str(bundle_value)
+    )
+    if bundle_path is None:
+        return None
+    try:
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for item in bundle.get("artifacts") or [] if isinstance(bundle, dict) else []:
+        if isinstance(item, dict) and item.get("role") == "strategy" and item.get("sha256"):
+            return str(item["sha256"])
+    return None
 
 
 def resolve_fixture(arg: str) -> Path:
@@ -362,10 +407,14 @@ def main(argv: list[str] | None = None) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = Path(args.run_dir) if args.run_dir else HERE / "results" / fixture["id"] / f"run-{stamp}"
     run_dir = run_dir.resolve()
+    if run_dir.exists() and any(run_dir.iterdir()):
+        # Artifacts are merged into run_dir, so a leftover final_strategy.txt or scorecard.json
+        # from an earlier run would be scored or reported as this run's result.
+        raise SystemExit(f"run directory is not empty; refusing to mix runs: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="pubmed-skill-eval-") as temp_root:
-        isolated_skill, agent_run_dir = isolated_run_workspace(SKILL_DIR, Path(temp_root))
+    with agent_temp_root() as temp_root:
+        isolated_skill, agent_run_dir = isolated_run_workspace(SKILL_DIR, temp_root)
         prompt = build_prompt(fixture, agent_run_dir)
         (agent_run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
         print(f"[generate] fixture={fixture['id']} run_dir={run_dir}")
@@ -390,9 +439,20 @@ def main(argv: list[str] | None = None) -> int:
         if result["returncode"] == 0:
             gate_ok, gate_payload = completion_gate(isolated_skill, agent_run_dir)
         shutil.copytree(agent_run_dir, run_dir, dirs_exist_ok=True)
+        # Resolve evidence against the live agent workspace: the manifest's absolute paths point
+        # into it, and it is deleted when this block exits.
+        reviewed_pmids: set[str] = set()
+        mined_pmids: set[str] = set()
+        pre_critic: Path | None = None
+        if gate_ok:
+            reviewed_pmids, mined_pmids = candidate_evidence_pmids(agent_run_dir)
+            live_pre_critic = first_critic_strategy(agent_run_dir)
+            if live_pre_critic is not None:
+                pre_critic = run_dir / live_pre_critic.relative_to(agent_run_dir.resolve())
 
     if result["returncode"] != 0:
-        print("\n[generate] FAILED: Codex returned a non-zero exit code; generated files are not scored.")
+        reason = f"timed out after {args.timeout}s" if result.get("timed_out") else "returned a non-zero exit code"
+        print(f"\n[generate] FAILED: Codex {reason}; generated files are not scored.")
         return 2
     if not gate_ok:
         print("\n[generate] FAILED: generated artifacts did not pass the complete-loop gate.")
@@ -411,7 +471,6 @@ def main(argv: list[str] | None = None) -> int:
 
     blocks_file = run_dir / "final_blocks.json"
     blocks_override = str(blocks_file) if blocks_file.exists() else None
-    reviewed_pmids, mined_pmids = candidate_evidence_pmids(run_dir)
 
     card = run_eval.score(
         fixture_path,
@@ -426,7 +485,6 @@ def main(argv: list[str] | None = None) -> int:
     card["effort"] = args.effort
     card["run_dir"] = str(run_dir)
     card["completion_gate"] = gate_payload
-    pre_critic = first_critic_strategy(run_dir)
     if pre_critic and pre_critic.resolve() != strategy_file.resolve():
         before = run_eval.score(
             fixture_path,
@@ -435,15 +493,20 @@ def main(argv: list[str] | None = None) -> int:
             seen_pmids=reviewed_pmids,
             mined_pmids=mined_pmids,
         )
-        before_unseen = before.get("unseen_evaluation", {})
-        after_unseen = card.get("unseen_evaluation", {})
+        before_recall = before.get("unseen_evaluation", {}).get("recall_percent")
+        after_recall = card.get("unseen_evaluation", {}).get("recall_percent")
         card["critic_ablation"] = {
             "available": True,
             "before_strategy": str(pre_critic),
             "after_strategy": str(strategy_file),
-            "before_unseen_recall": before_unseen.get("recall_percent"),
-            "after_unseen_recall": after_unseen.get("recall_percent"),
-            "unseen_recall_delta": round(float(after_unseen.get("recall_percent") or 0) - float(before_unseen.get("recall_percent") or 0), 4),
+            "before_unseen_recall": before_recall,
+            "after_unseen_recall": after_recall,
+            # Undefined when every gold record was reviewed: a 0.0 delta would read as "no effect".
+            "unseen_recall_delta": (
+                round(float(after_recall) - float(before_recall), 4)
+                if before_recall is not None and after_recall is not None
+                else None
+            ),
             "before_total_hits": before.get("strategy_total_hits"),
             "after_total_hits": card.get("strategy_total_hits"),
         }

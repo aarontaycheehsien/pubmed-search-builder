@@ -139,6 +139,14 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary["topics_scored"], 1)
         self.assertEqual(summary["topics_failed"], ["b"])
 
+    def test_undefined_recall_is_not_averaged_in_as_zero(self):
+        rows = [self._row("a", "naive", 90.0), self._row("b", "naive", 0.0, gold_in_pubmed=0, retrieved=0)]
+        stats = run_suite.summarize(rows)["by_strategy_source"]["naive"]
+        self.assertEqual(stats["mean_recall_percent"], 90.0)
+        self.assertEqual(stats["topics"], 1)
+        self.assertEqual(stats["topics_below_80"], 0)
+        self.assertEqual(stats["undefined_recall_topics"], ["b"])
+
     def test_topics_below_the_recall_threshold_are_counted(self):
         rows = [self._row("a", "naive", 79.9), self._row("b", "naive", 80.0)]
         self.assertEqual(run_suite.summarize(rows)["by_strategy_source"]["naive"]["topics_below_80"], 1)
@@ -172,6 +180,16 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(result["compared_topics"], 0)
         self.assertEqual(result["regressions"], [])
 
+    def test_undefined_recall_is_not_compared(self):
+        """No gold resolved in PubMed means recall is undefined, not a drop to 0%."""
+        current = self._card("a", "naive", 0.0)
+        current["topics"][0]["gold_in_pubmed"] = 0
+        previous = self._card("a", "naive", 90.0)
+        previous["topics"][0]["gold_in_pubmed"] = 10
+        result = run_suite.compare(current, previous)
+        self.assertEqual(result["compared_topics"], 0)
+        self.assertEqual(result["regressions"], [])
+
     def test_a_first_run_has_nothing_to_compare(self):
         self.assertFalse(run_suite.compare(self._card("a", "naive", 90.0), None)["available"])
 
@@ -190,9 +208,27 @@ class StrategyResolutionTests(unittest.TestCase):
             generated = root / "gen" / "TOPIC"
             generated.mkdir(parents=True)
             (generated / "final_strategy.txt").write_text("asthma[tiab]", encoding="utf-8")
+            (generated / "completion_gate.json").write_text(json.dumps({"ok": True, "returncode": 0}), encoding="utf-8")
             source, strategy, _blocks = run_suite.resolve_strategy(path, fixture, "auto", root / "gen")
             self.assertEqual(source, "generated")
             self.assertEqual(strategy.read_text(encoding="utf-8"), "asthma[tiab]")
+
+    def test_a_generated_run_that_failed_the_completion_gate_is_not_scored(self):
+        """generate.py keeps a failed run's final_strategy.txt; it must not enter the table."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "TOPIC.strategy.txt").write_text("baseline[tiab]", encoding="utf-8")
+            path, fixture = self._fixture(root, strategy_file="TOPIC.strategy.txt")
+            generated = root / "gen" / "TOPIC"
+            generated.mkdir(parents=True)
+            (generated / "final_strategy.txt").write_text("unfinished[tiab]", encoding="utf-8")
+            for gate in (None, {"ok": False, "returncode": 1, "issues": ["no final critic round"]}):
+                with self.subTest(gate=gate):
+                    if gate is not None:
+                        (generated / "completion_gate.json").write_text(json.dumps(gate), encoding="utf-8")
+                    for source in ("auto", "generated"):
+                        with self.assertRaises(run_suite.GeneratedRunError):
+                            run_suite.resolve_strategy(path, fixture, source, root / "gen")
 
     def test_auto_falls_back_to_the_fixture_baseline(self):
         with tempfile.TemporaryDirectory() as td:

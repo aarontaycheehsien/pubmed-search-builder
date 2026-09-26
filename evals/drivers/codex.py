@@ -128,20 +128,29 @@ def run_skill(
 
     result: dict = {}
     for attempt in range(1, max(1, max_attempts) + 1):
+        timed_out = False
         with events.open("w", encoding="utf-8") as ev:
-            proc = subprocess.run(
-                cmd,
-                input=prompt,
-                stdout=ev,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-            )
-        stderr = proc.stderr or ""
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    input=prompt,
+                    stdout=ev,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout,
+                )
+                returncode, stderr = proc.returncode, proc.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                # A timeout is a failed run, not a harness crash: the caller must still keep the
+                # partial artifacts and record the failure instead of losing the workspace.
+                timed_out = True
+                partial = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+                returncode, stderr = 124, f"{partial}\ncodex exec timed out after {timeout}s"
         result = {
-            "returncode": proc.returncode,
+            "returncode": returncode,
+            "timed_out": timed_out,
             "events_path": str(events),
             "last_message_path": str(last_message),
             "last_message": last_message.read_text(encoding="utf-8") if last_message.exists() else "",
@@ -149,7 +158,7 @@ def run_skill(
             "attempts": attempt,
         }
         # Success, or a non-transient failure, or out of attempts: stop here.
-        if not is_transient_sandbox_failure(proc.returncode, stderr) or attempt >= max(1, max_attempts):
+        if timed_out or not is_transient_sandbox_failure(returncode, stderr) or attempt >= max(1, max_attempts):
             return result
         # Transient sandbox-startup failure with attempts left: relaunch.
     return result

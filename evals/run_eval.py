@@ -145,6 +145,22 @@ def run_recall(tool: Path, strategy_file: Path, gold: list[str], blocks_file: Pa
     return json.loads(Path(out).read_text(encoding="utf-8"))
 
 
+def given_to_skill_pmids(fixture: dict) -> set[str]:
+    """PMIDs the fixture exposes to the skill: development/seed lists and protocol seed records."""
+    given = {
+        str(pmid)
+        for field in ("development_pmids_given_to_skill", "seed_pmids_given_to_skill")
+        for pmid in (fixture.get(field) or [])
+    }
+    protocol = fixture.get("review_protocol")
+    seeds = protocol.get("seeds") if isinstance(protocol, dict) else None
+    records = seeds.get("records") if isinstance(seeds, dict) else None
+    for record in records if isinstance(records, list) else []:
+        if isinstance(record, dict) and str(record.get("pmid") or "").strip():
+            given.add(str(record["pmid"]).strip())
+    return given
+
+
 def score(
     fixture_path: Path,
     tool: Path,
@@ -207,7 +223,9 @@ def score(
 
     total_hits = strategy_total_count(tool, strategy_file, cache_dir)
     nnr_proxy = round(total_hits / retrieved_n) if retrieved_n else None
-    seen_set = {str(pmid) for pmid in (seen_pmids or set())}
+    # PMIDs the fixture hands the skill were seen by construction, whether or not the run
+    # recorded reviewing them, so they can never count toward never-reviewed recall.
+    seen_set = {str(pmid) for pmid in (seen_pmids or set())} | given_to_skill_pmids(fixture)
     mined_set = {str(pmid) for pmid in (mined_pmids or set())}
     retrieved_set = set(retrieved)
     seen_gold = in_pubmed & seen_set

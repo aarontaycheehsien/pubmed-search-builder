@@ -62,12 +62,25 @@ def discover_fixtures() -> list[Path]:
     return found
 
 
+class GeneratedRunError(Exception):
+    """A generated strategy exists but its run did not finish."""
+
+
 def resolve_strategy(fixture_path: Path, fixture: dict, source: str, generated_root: Path | None):
     """Return ``(source, strategy_path, blocks_path)`` for one fixture."""
     topic = str(fixture.get("id"))
     if source in {"auto", "generated"} and generated_root is not None:
         candidate = generated_root / topic / "final_strategy.txt"
         if candidate.is_file() and candidate.read_text(encoding="utf-8").strip():
+            # generate.py keeps the artifacts of a run that failed the complete-loop gate, so a
+            # final_strategy.txt alone does not make a finished build.
+            gate_file = generated_root / topic / "completion_gate.json"
+            try:
+                gate = json.loads(gate_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                gate = None
+            if not isinstance(gate, dict) or gate.get("ok") is not True or gate.get("returncode") != 0:
+                raise GeneratedRunError(f"generated run for {topic} did not pass the completion gate ({gate_file})")
             blocks = generated_root / topic / "final_blocks.json"
             return "generated", candidate, (blocks if blocks.is_file() else None)
         if source == "generated":
@@ -89,7 +102,7 @@ def score_topic(fixture_path: Path, tool: Path, source: str, generated_root: Pat
     row: dict = {"id": topic, "suite": fixture.get("suite"), "question": fixture.get("question")}
     try:
         resolved_source, strategy, blocks = resolve_strategy(fixture_path, fixture, source, generated_root)
-    except (FileNotFoundError, naive_baseline.NaiveBaselineError) as exc:
+    except (FileNotFoundError, GeneratedRunError, naive_baseline.NaiveBaselineError) as exc:
         row.update({"ok": False, "error": str(exc), "strategy_source": None})
         return row
 
@@ -136,11 +149,16 @@ def summarize(rows: list[dict]) -> dict:
     by_source: dict[str, dict] = {}
     for source in sorted({str(row["strategy_source"]) for row in scored}):
         subset = [row for row in scored if row["strategy_source"] == source]
-        recalls = [float(row["recall_reachable_percent"] or 0.0) for row in subset]
+        # Recall is undefined when no gold PMID resolved in PubMed; averaging it in as 0% would
+        # report a failed gold lookup as a failed search.
+        undefined = [row for row in subset if row.get("gold_in_pubmed") == 0]
+        measured = [row for row in subset if row.get("gold_in_pubmed") != 0]
+        recalls = [float(row["recall_reachable_percent"] or 0.0) for row in measured]
         by_source[source] = {
-            "topics": len(subset),
-            "gold_in_pubmed": sum(int(row.get("gold_in_pubmed") or 0) for row in subset),
-            "retrieved": sum(int(row.get("retrieved") or 0) for row in subset),
+            "topics": len(measured),
+            "undefined_recall_topics": [row["id"] for row in undefined],
+            "gold_in_pubmed": sum(int(row.get("gold_in_pubmed") or 0) for row in measured),
+            "retrieved": sum(int(row.get("retrieved") or 0) for row in measured),
             "mean_recall_percent": round(statistics.fmean(recalls), 2) if recalls else None,
             "median_recall_percent": round(statistics.median(recalls), 2) if recalls else None,
             "min_recall_percent": round(min(recalls), 2) if recalls else None,
@@ -170,6 +188,8 @@ def compare(current: dict, previous: dict | None) -> dict:
         prior = before[row["id"]]
         if prior.get("strategy_source") != row.get("strategy_source"):
             continue  # comparing a floor against a generated strategy is not a regression signal
+        if 0 in (prior.get("gold_in_pubmed"), row.get("gold_in_pubmed")):
+            continue  # undefined recall on either side is not a 0% measurement
         change = round(float(row["recall_reachable_percent"] or 0) - float(prior["recall_reachable_percent"] or 0), 2)
         entry = {
             "id": row["id"],
@@ -282,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Score every eval fixture and aggregate the results.")
     parser.add_argument("--topic", action="append", help="Restrict to this topic id (repeatable).")
     parser.add_argument("--source", choices=SOURCES, default="auto", help="Strategy source (default: auto).")
-    parser.add_argument("--generated-root", help="Directory of <topic>/final_strategy.txt from Phase 2 runs.")
+    parser.add_argument("--generated-root", help="Directory of <topic>/ Phase 2 run dirs (final_strategy.txt plus a passing completion_gate.json).")
     parser.add_argument("--runs", type=int, default=1, help="Score each topic N times for variance.")
     parser.add_argument("--pubmed-tool", default=str(DEFAULT_TOOL))
     parser.add_argument("--output", default=str(DEFAULT_SUITE_OUTPUT), help="Suite scorecard JSON path.")
