@@ -525,6 +525,23 @@ class EvalHarnessTests(unittest.TestCase):
             card = json.loads((run_dir / "scorecard.json").read_text(encoding="utf-8"))
             self.assertIsInstance(card["elapsed_seconds"], int)
 
+    def test_the_launchers_agent_markers_do_not_reach_the_agent_under_test(self):
+        """Seen in the Phase 3 build: CLAUDECODE from the launching Claude Code session made the
+        skill's `auto` isolated runner pick Claude Code inside the Codex build."""
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(cmd, 0, stdout=None, stderr="")
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(
+            os.environ, {"CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "NCBI_EMAIL": "kept@example.org"}
+        ), mock.patch.object(generate.codex.subprocess, "run", side_effect=fake_run):
+            generate.codex.run_skill("p", skill_dir=Path(td), run_dir=Path(td), codex_bin="codex")
+        self.assertNotIn("CLAUDECODE", seen["env"])
+        self.assertNotIn("CLAUDE_CODE_ENTRYPOINT", seen["env"])
+        self.assertEqual(seen["env"]["NCBI_EMAIL"], "kept@example.org")
+
     def test_a_codex_failure_records_the_reason_codex_gave(self):
         """Seen in the Phase 3 build: codex exec exited 1 with no final message and empty stderr; the
         reason (a usage limit) was only in the event stream."""

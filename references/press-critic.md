@@ -47,6 +47,7 @@ Run `python scripts/isolated_runner.py preflight` at intake, before any candidat
   - it deletes the copied credentials first, and then the home, when the child exits.
 
   The execution record's `codex_home` is `host` or `private-copy`. Known risk: if the child refreshes the login token, the host login may need signing in again. The preflight reports `unavailable` when there is no host `auth.json` to copy (for example, credentials kept in the OS keyring). The `claude-code-cli` runner is not provisioned this way.
+- **Nested Codex children cannot run commands.** Inside a Codex sandbox, a nested Codex child's shell commands are mostly refused ("blocked by policy"), and shell is its only way to read files. The `codex-cli` runner therefore puts every staged file into the child's prompt verbatim, so the child needs no command. Evidence too large to include in full (over 2 MB) is refused, never truncated.
 - **A child timeout.** The runner kills the child's whole process tree and reports the child's last output. A timeout with no output at all usually means the child is waiting for a login.
 - **Claude Code `401` / expired token.** Sign the CLI in again, or choose the other runner with `--runner`.
 
