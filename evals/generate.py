@@ -263,6 +263,30 @@ def final_strategy_binding_issue(run_dir: Path) -> str | None:
     return None
 
 
+def codex_failure_message(events_path: Path) -> str | None:
+    """The last error Codex itself reported in the transcript (for example a usage limit).
+
+    A failed ``codex exec`` can exit 1 with no final message and an empty stderr; the reason is
+    only in the event stream, as an ``error`` or ``turn.failed`` event.
+    """
+    try:
+        lines = events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+            return str(event["error"].get("message") or "") or None
+        if event.get("type") == "error" and event.get("message"):
+            return str(event["message"])
+    return None
+
+
 PMID_PATTERN = r"(?<!\d){pmid}(?!\d)"
 
 
@@ -560,7 +584,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if result["returncode"] != 0:
         reason = f"timed out after {args.timeout}s" if result.get("timed_out") else "returned a non-zero exit code"
+        detail = codex_failure_message(run_dir / "events.jsonl")
+        (run_dir / "failure.json").write_text(
+            json.dumps(
+                {"stage": "codex", "returncode": result["returncode"], "timed_out": bool(result.get("timed_out")),
+                 "codex_error": detail, "elapsed_seconds": elapsed_seconds},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         print(f"\n[generate] FAILED: Codex {reason}; generated files are not scored.")
+        if detail:
+            print(f"[generate] Codex reported: {detail}")
         return 2
     if not gate_ok:
         print("\n[generate] FAILED: generated artifacts did not pass the complete-loop gate.")

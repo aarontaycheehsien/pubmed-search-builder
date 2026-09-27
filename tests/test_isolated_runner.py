@@ -320,6 +320,43 @@ class SandboxedCodexHomeTests(unittest.TestCase):
         real_rmtree(seen["home"], ignore_errors=True)
 
 
+class InlinedEvidenceTests(unittest.TestCase):
+    """Seen in an eval build: a Codex child nested in a Codex sandbox had its shell commands
+    "blocked by policy", so the critic reported EVIDENCE-ACCESS and a re-screen answered only the
+    records it happened to see."""
+
+    def test_the_codex_child_receives_every_staged_file_in_its_prompt(self):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["prompt"] = kwargs["input"]
+            Path(command[command.index("-o") + 1]).write_text(json.dumps({"answer": 1}), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "critic_evidence.json").write_text('{"roles": ["strategy"]}', encoding="utf-8")
+            (workspace / "evidence").mkdir()
+            (workspace / "evidence" / "strategy.txt").write_text("asthma[tiab]", encoding="utf-8")
+            with mock.patch.object(runner, "run_child", side_effect=fake_run), host_codex_login(runner):
+                _draft, execution = runner.run_isolated(
+                    runner=runner.CODEX_RUNNER, workspace=workspace, prompt="Review the staged bundle.",
+                    schema=SCHEMA, model=None, reasoning_effort="low", timeout_seconds=30, executable="codex-test",
+                )
+        prompt = seen["prompt"]
+        self.assertTrue(prompt.startswith("Review the staged bundle."))
+        self.assertIn('<file path="./critic_evidence.json">\n{"roles": ["strategy"]}\n</file>', prompt)
+        self.assertIn('<file path="./evidence/strategy.txt">\nasthma[tiab]\n</file>', prompt)
+        self.assertNotIn("child_output.schema.json", prompt)  # the runner's own files are not evidence
+        self.assertEqual(execution["prompt_sha256"], runner.sha256_text(prompt))
+
+    def test_evidence_too_large_to_give_in_full_is_refused_not_truncated(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner, "MAX_INLINE_BYTES", 10):
+            (Path(tmp) / "records.json").write_text("x" * 50, encoding="utf-8")
+            with self.assertRaisesRegex(runner.IsolatedRunnerError, "cannot be given to the child in full"):
+                runner.inline_workspace_files(Path(tmp))
+
+
 class WorkspaceCleanupTests(unittest.TestCase):
     def test_a_briefly_locked_workspace_is_retried_and_never_masks_the_result(self):
         real_rmtree = runner.shutil.rmtree

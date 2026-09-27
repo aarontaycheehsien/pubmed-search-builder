@@ -81,6 +81,20 @@ def is_transient_sandbox_failure(returncode: int, stderr: str) -> bool:
     return any(sig in low for sig in TRANSIENT_SANDBOX_SIGNATURES)
 
 
+def agent_environment() -> dict[str, str]:
+    """The environment for the agent under test, without the launcher's own agent markers.
+
+    Seen in an eval build launched from Claude Code: CLAUDECODE leaked into the Codex sandbox, and
+    the skill's `auto` isolated runner therefore chose Claude Code instead of Codex. What the build
+    runs must not depend on which agent launched the harness.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name != "CLAUDECODE" and not name.startswith("CLAUDE_CODE_")
+    }
+
+
 def reset_run_dir(run_dir: Path, staged: set[Path]) -> list[str]:
     """Remove everything a failed attempt added to ``run_dir``; return paths that could not be removed."""
     leftovers: list[str] = []
@@ -165,6 +179,7 @@ def run_skill(
                     encoding="utf-8",
                     errors="replace",
                     timeout=timeout,
+                    env=agent_environment(),
                 )
                 returncode, stderr = proc.returncode, proc.stderr or ""
             except subprocess.TimeoutExpired as exc:
